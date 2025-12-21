@@ -1,0 +1,22 @@
+export enum AuditAction {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LOGIN = 'login',
+  LOGOUT = 'logout',
+  PAYMENT_INITIATED = 'payment_initiated',
+  PAYMENT_CAPTURED = 'payment_captured',
+  PAYMENT_FAILED = 'payment_failed',
+  ORDER_STATUS_CHANGED = 'order_status_changed',
+  ORDER_CREATED = 'order_created',
+  ORDER_CANCELLED = 'order_cancelled',
+  REFUND_INITIATED = 'refund_initiated',
+  REFUND_COMPLETED = 'refund_completed',
+  REFUND_FAILED = 'refund_failed',
+  DISPUTE_CREATED = 'dispute_created',
+  DISPUTE_RESOLVED = 'dispute_resolved',
+  INVOICE_GENERATED = 'invoice_generated',
+  SUBSCRIPTION_CREATED = 'subscription_created',
+  SUBSCRIPTION_CANCELLED = 'subscription_cancelled',
+}
+
