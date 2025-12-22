@@ -257,7 +257,7 @@ async function seedProducts() {
     // Find or create a manufacturer user
     let manufacturerUser;
     try {
-      manufacturerUser = await usersService.findByEmail('muthukoya@pms.com');
+      manufacturerUser = await usersService.findByEmail('manufacturer@ayurlahi.com');
       console.log('✅ Found existing manufacturer user');
     } catch (error) {
       console.log('⚠️  Manufacturer user not found. Please create a manufacturer account first.');
@@ -274,7 +274,7 @@ async function seedProducts() {
       process.exit(1);
     }
 
-    console.log(`📦 Manufacturer: ${manufacturer.companyName} (${manufacturer.id})\n`);
+    console.log(`📦 Manufacturer: ${manufacturer.name} (${manufacturer.id})\n`);
 
     let created = 0;
     let skipped = 0;
@@ -293,9 +293,9 @@ async function seedProducts() {
         }
 
         // Create product
-        // Note: isActive defaults to true in Product entity, so we don't need to set it
         const product = await productsService.create(manufacturerUser.id, {
           ...productData,
+          isActive: true,
         });
 
         console.log(`✅ Created: ${product.name} (${product.sku}) - ₹${product.price}`);
@@ -333,5 +333,6 @@ seedProducts()
     console.error('💥 Fatal error:', error);
     process.exit(1);
   });
+
 
 

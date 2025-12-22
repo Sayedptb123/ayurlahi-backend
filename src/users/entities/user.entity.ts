@@ -1,66 +1,68 @@
 import {
   Entity,
+  PrimaryGeneratedColumn,
   Column,
-  OneToOne,
-  JoinColumn,
-  Index,
+  CreateDateColumn,
+  UpdateDateColumn,
 } from 'typeorm';
-import { BaseEntity } from '../../common/entities/base.entity';
-import { UserRole } from '../../common/enums/role.enum';
-import { Clinic } from '../../clinics/entities/clinic.entity';
-import { Manufacturer } from '../../manufacturers/entities/manufacturer.entity';
+
+export type UserRole = 'clinic' | 'manufacturer' | 'admin' | 'support';
 
 @Entity('users')
-@Index(['email'], { unique: true })
-export class User extends BaseEntity {
-  @Column({ type: 'varchar', length: 255 })
+export class User {
+  @PrimaryGeneratedColumn('uuid')
+  id: string;
+
+  @Column({ unique: true })
   email: string;
 
-  @Column({ type: 'varchar', length: 255, select: false })
-  password: string;
+  @Column({ name: 'password_hash' })
+  passwordHash: string;
 
-  @Column({ type: 'varchar', length: 100 })
+  @Column({ name: 'first_name' })
   firstName: string;
 
-  @Column({ type: 'varchar', length: 100 })
+  @Column({ name: 'last_name' })
   lastName: string;
 
-  @Column({ type: 'varchar', length: 20, nullable: true })
-  phone: string | null;
-
-  @Column({ type: 'enum', enum: UserRole })
+  @Column({
+    type: 'varchar',
+    length: 20,
+    default: 'clinic',
+  })
   role: UserRole;
 
-  @Column({ type: 'boolean', default: true })
+  @Column({ nullable: true })
+  phone: string;
+
+  @Column({ nullable: true })
+  landphone: string;
+
+  @Column('text', { array: true, nullable: true, name: 'mobile_numbers' })
+  mobileNumbers: string[];
+
+  @Column({ nullable: true, name: 'whatsapp_number' })
+  whatsappNumber: string;
+
+  @Column({ default: true, name: 'is_active' })
   isActive: boolean;
 
-  @Column({ type: 'boolean', default: false })
+  @Column({ default: false, name: 'is_email_verified' })
   isEmailVerified: boolean;
 
-  @Column({ type: 'varchar', length: 20, nullable: true })
-  whatsappNumber: string | null;
+  @Column({ type: 'uuid', nullable: true, name: 'clinic_id' })
+  clinicId: string;
 
-  @Column({ type: 'timestamp', nullable: true })
+  @Column({ type: 'uuid', nullable: true, name: 'manufacturer_id' })
+  manufacturerId: string;
+
+  @CreateDateColumn({ name: 'created_at' })
+  createdAt: Date;
+
+  @UpdateDateColumn({ name: 'updated_at' })
+  updatedAt: Date;
+
+  @Column({ nullable: true, name: 'last_login_at' })
   lastLoginAt: Date;
-
-  @Column({ type: 'jsonb', nullable: true })
-  address: {
-    street?: string | null;
-    city?: string | null;
-    state?: string | null;
-    zipCode?: string | null;
-    country?: string | null;
-  } | null;
-
-  // Relations
-  @OneToOne(() => Clinic, (clinic) => clinic.user, { nullable: true })
-  @JoinColumn()
-  clinic?: Clinic;
-
-  @OneToOne(() => Manufacturer, (manufacturer) => manufacturer.user, {
-    nullable: true,
-  })
-  @JoinColumn()
-  manufacturer?: Manufacturer;
 }
 

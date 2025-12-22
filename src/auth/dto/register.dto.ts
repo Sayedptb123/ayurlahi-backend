@@ -4,33 +4,31 @@ import {
   MinLength,
   IsEnum,
   IsOptional,
-  IsPhoneNumber,
 } from 'class-validator';
-import { UserRole } from '../../common/enums/role.enum';
+
+export type UserRole = 'clinic' | 'manufacturer' | 'admin' | 'support';
 
 export class RegisterDto {
   @IsEmail()
   email: string;
 
   @IsString()
-  @MinLength(8)
+  @MinLength(6)
   password: string;
 
   @IsString()
+  @MinLength(2)
   firstName: string;
 
   @IsString()
+  @MinLength(2)
   lastName: string;
 
+  @IsEnum(['clinic', 'manufacturer'])
+  role: 'clinic' | 'manufacturer';
+
   @IsOptional()
-  @IsPhoneNumber('IN')
+  @IsString()
   phone?: string;
-
-  @IsEnum(UserRole)
-  role: UserRole;
 }
-
-
-
-
 

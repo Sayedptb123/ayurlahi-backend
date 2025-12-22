@@ -1,32 +1,28 @@
 import { Injectable, UnauthorizedException } from '@nestjs/common';
-import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
-import { ConfigService } from '@nestjs/config';
-import { UsersService } from '../../users/users.service';
+import { PassportStrategy } from '@nestjs/passport';
+import { JwtPayload } from '../auth.service';
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
-  constructor(
-    private configService: ConfigService,
-    private usersService: UsersService,
-  ) {
-    const secret = configService.get<string>('JWT_SECRET') || 'default-secret-change-in-production';
-    if (!secret || secret === 'default-secret-change-in-production') {
-      console.warn('⚠️  WARNING: Using default JWT_SECRET. Please set JWT_SECRET in .env for production!');
-    }
+  constructor() {
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
       ignoreExpiration: false,
-      secretOrKey: secret,
+      secretOrKey: process.env.JWT_SECRET || 'your-secret-key-change-in-production',
     });
   }
 
-  async validate(payload: any) {
-    const user = await this.usersService.findOne(payload.sub);
-    if (!user || !user.isActive) {
-      throw new UnauthorizedException();
+  async validate(payload: JwtPayload) {
+    if (!payload.sub) {
+      throw new UnauthorizedException('Invalid token');
     }
-    return user;
+
+    return {
+      userId: payload.sub,
+      email: payload.email,
+      role: payload.role,
+    };
   }
 }
 
