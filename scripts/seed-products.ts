@@ -1,8 +1,9 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from '../src/app.module';
 import { ProductsService } from '../src/products/products.service';
-import { ManufacturersService } from '../src/manufacturers/manufacturers.service';
 import { UsersService } from '../src/users/users.service';
+import { getRepositoryToken } from '@nestjs/typeorm';
+import { Manufacturer } from '../src/manufacturers/entities/manufacturer.entity';
 
 /**
  * Seed script to add sample Ayurveda products
@@ -248,8 +249,8 @@ async function seedProducts() {
   const app = await NestFactory.createApplicationContext(AppModule);
   
   const productsService = app.get(ProductsService);
-  const manufacturersService = app.get(ManufacturersService);
   const usersService = app.get(UsersService);
+  const manufacturerRepository = app.get(getRepositoryToken(Manufacturer));
 
   try {
     console.log('🌱 Starting product seeding...\n');
@@ -266,7 +267,17 @@ async function seedProducts() {
     }
 
     // Get the manufacturer associated with this user
-    const manufacturer = await manufacturersService.findByUserId(manufacturerUser.id);
+    // Use TypeORM DataSource directly for seed script
+    const dataSource = app.get('DataSource');
+    const manufacturerRepository = dataSource.getRepository('manufacturers');
+    const manufacturer = await manufacturerRepository.findOne({ 
+      where: { userId: manufacturerUser.id } 
+    });
+    
+    if (!manufacturer) {
+      console.error('❌ Manufacturer not found for user:', manufacturerUser.email);
+      process.exit(1);
+    }
     
     if (manufacturer.approvalStatus !== 'approved') {
       console.log('⚠️  Manufacturer is not approved. Products can only be added for approved manufacturers.');
@@ -274,7 +285,7 @@ async function seedProducts() {
       process.exit(1);
     }
 
-    console.log(`📦 Manufacturer: ${manufacturer.name} (${manufacturer.id})\n`);
+    console.log(`📦 Manufacturer: ${manufacturer.companyName} (${manufacturer.id})\n`);
 
     let created = 0;
     let skipped = 0;
@@ -333,6 +344,9 @@ seedProducts()
     console.error('💥 Fatal error:', error);
     process.exit(1);
   });
+
+
+
 
 
 

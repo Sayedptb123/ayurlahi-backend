@@ -13,56 +13,50 @@ export class User {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column({ unique: true })
+  @Column({ type: 'varchar', unique: true, name: 'email' })
   email: string;
 
-  @Column({ name: 'password_hash' })
-  passwordHash: string;
+  @Column({ type: 'varchar', name: 'password' })
+  password: string;
 
-  @Column({ name: 'first_name' })
+  @Column({ type: 'varchar', name: 'firstName' })
   firstName: string;
 
-  @Column({ name: 'last_name' })
+  @Column({ type: 'varchar', name: 'lastName' })
   lastName: string;
 
   @Column({
     type: 'varchar',
     length: 20,
     default: 'clinic',
+    name: 'role',
   })
   role: UserRole;
 
-  @Column({ nullable: true })
-  phone: string;
+  @Column({ type: 'varchar', nullable: true, name: 'phone' })
+  phone: string | null;
 
-  @Column({ nullable: true })
-  landphone: string;
-
-  @Column('text', { array: true, nullable: true, name: 'mobile_numbers' })
-  mobileNumbers: string[];
-
-  @Column({ nullable: true, name: 'whatsapp_number' })
-  whatsappNumber: string;
-
-  @Column({ default: true, name: 'is_active' })
+  @Column({ type: 'boolean', default: true, name: 'isActive' })
   isActive: boolean;
 
-  @Column({ default: false, name: 'is_email_verified' })
+  @Column({ type: 'boolean', default: false, name: 'isEmailVerified' })
   isEmailVerified: boolean;
 
-  @Column({ type: 'uuid', nullable: true, name: 'clinic_id' })
-  clinicId: string;
+  @Column({ type: 'varchar', nullable: true, name: 'whatsappNumber' })
+  whatsappNumber: string | null;
 
-  @Column({ type: 'uuid', nullable: true, name: 'manufacturer_id' })
-  manufacturerId: string;
+  @Column({ type: 'timestamp', nullable: true, name: 'lastLoginAt' })
+  lastLoginAt: Date | null;
 
-  @CreateDateColumn({ name: 'created_at' })
+  @Column({ type: 'uuid', nullable: true, name: 'clinicId' })
+  clinicId: string | null;
+
+  @Column({ type: 'uuid', nullable: true, name: 'manufacturerId' })
+  manufacturerId: string | null;
+
+  @CreateDateColumn({ name: 'createdAt' })
   createdAt: Date;
 
-  @UpdateDateColumn({ name: 'updated_at' })
+  @UpdateDateColumn({ name: 'updatedAt' })
   updatedAt: Date;
-
-  @Column({ nullable: true, name: 'last_login_at' })
-  lastLoginAt: Date;
 }
-
