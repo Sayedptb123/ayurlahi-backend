@@ -28,43 +28,69 @@ export class AuthService {
   async validateUser(email: string, password: string): Promise<User | null> {
     try {
       // Use raw query with explicit column names matching the database schema
+      // Note: landphone and mobile_numbers are excluded until migration 014-add-missing-users-columns.sql is run
+      // After migration, add 'landphone, mobile_numbers' to the SELECT list
       const result = await this.usersRepository.query(
-        `SELECT id, email, password, "firstName", "lastName", role, phone, "isActive", "isEmailVerified", "whatsappNumber", "lastLoginAt", "clinicId", "manufacturerId", "createdAt", "updatedAt" 
+        `SELECT id, email, password_hash, first_name, last_name, role, phone, is_active, is_email_verified, whatsapp_number, last_login_at, clinic_id, manufacturer_id, created_at, updated_at
          FROM users 
          WHERE email = $1 
          LIMIT 1`,
         [email],
       );
 
-      if (!result || result.length === 0 || !result[0].password) {
+      if (!result || result.length === 0) {
+        console.log('[AuthService] validateUser - User not found:', email);
         return null;
       }
 
-    const userData = result[0];
-    const isPasswordValid = await bcrypt.compare(password, userData.password);
+      const userData = result[0];
+      
+      if (!userData.password_hash) {
+        console.log('[AuthService] validateUser - No password hash found for user:', email);
+        return null;
+      }
 
-    if (!isPasswordValid) {
-      return null;
-    }
+      console.log('[AuthService] validateUser - User found:', {
+        email: userData.email,
+        hasPasswordHash: !!userData.password_hash,
+        passwordHashLength: userData.password_hash?.length,
+        isActive: userData.is_active,
+      });
 
-    // Map to User entity
-    return {
-      id: userData.id,
-      email: userData.email,
-      password: userData.password,
-      firstName: userData.firstName,
-      lastName: userData.lastName,
-      role: userData.role,
-      phone: userData.phone,
-      isActive: userData.isActive,
-      isEmailVerified: userData.isEmailVerified,
-      whatsappNumber: userData.whatsappNumber,
-      lastLoginAt: userData.lastLoginAt,
-      clinicId: userData.clinicId,
-      manufacturerId: userData.manufacturerId,
-      createdAt: userData.createdAt,
-      updatedAt: userData.updatedAt,
-    } as User;
+      const isPasswordValid = await bcrypt.compare(password, userData.password_hash);
+
+      console.log('[AuthService] validateUser - Password comparison result:', {
+        email,
+        isValid: isPasswordValid,
+        providedPasswordLength: password.length,
+      });
+
+      if (!isPasswordValid) {
+        console.log('[AuthService] validateUser - Password mismatch for user:', email);
+        return null;
+      }
+
+    // Map to User entity with all required fields
+    const user = new User();
+    user.id = userData.id;
+    user.email = userData.email;
+    user.passwordHash = userData.password_hash;
+    user.firstName = userData.first_name;
+    user.lastName = userData.last_name;
+    user.role = userData.role;
+    user.phone = userData.phone || null;
+    user.landphone = userData.landphone || null;
+    user.mobileNumbers = userData.mobile_numbers || null;
+    user.whatsappNumber = userData.whatsapp_number || null;
+    user.isActive = userData.is_active;
+    user.isEmailVerified = userData.is_email_verified;
+    user.lastLoginAt = userData.last_login_at || null;
+    user.clinicId = userData.clinic_id || null;
+    user.manufacturerId = userData.manufacturer_id || null;
+    user.createdAt = userData.created_at;
+    user.updatedAt = userData.updated_at;
+    
+    return user;
     } catch (error) {
       console.error('validateUser error:', error);
       throw error;
@@ -154,14 +180,14 @@ export class AuthService {
     // Create user
     const user = this.usersRepository.create({
       email: registerDto.email,
-      password: hashedPassword,
+      passwordHash: hashedPassword,
       firstName: registerDto.firstName,
       lastName: registerDto.lastName,
       role: registerDto.role,
-      phone: registerDto.phone,
+      phone: registerDto.phone ?? null,
       isActive: true,
       isEmailVerified: false,
-    });
+    } as Partial<User>);
 
     const savedUser = await this.usersRepository.save(user);
 

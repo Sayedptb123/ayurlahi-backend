@@ -17,7 +17,17 @@
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
-    "test:e2e": "jest --config ./test/jest-e2e.json"
+    "test:e2e": "jest --config ./test/jest-e2e.json",
+    "migrate:hms": "node scripts/run-hms-migrations.js",
+    "verify:hms": "node scripts/verify-hms-setup.js",
+    "test:hms": "node scripts/test-hms-endpoints.js",
+    "test:hms:create": "node scripts/test-hms-create-operations.js",
+    "test:hms:full": "node scripts/test-hms-with-test-users.js",
+    "health:hms": "node scripts/quick-hms-test.js",
+    "seed:test-users": "node scripts/seed-test-users.js",
+    "fix:passwords": "node scripts/fix-user-passwords.js",
+    "check:schema": "node scripts/check-users-schema.js",
+    "migrate:fix-users": "psql -U postgres -d ayurlahi -f migrations/fix-users-table-schema.sql"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.1",

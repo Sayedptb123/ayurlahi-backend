@@ -1,0 +1,15 @@
+-- Migration: Update AuthService Query (Post-Migration Step)
+-- Description: This is a reminder to update the AuthService query after running migration 014
+-- Date: 2025-12-24
+--
+-- After running migration 014-add-missing-users-columns.sql, update:
+-- src/auth/auth.service.ts line 31-36
+--
+-- Change FROM:
+-- SELECT id, email, password_hash, first_name, last_name, role, phone, is_active, is_email_verified, whatsapp_number, last_login_at, clinic_id, manufacturer_id, created_at, updated_at, mobile_numbers
+--
+-- Change TO:
+-- SELECT id, email, password_hash, first_name, last_name, role, phone, is_active, is_email_verified, whatsapp_number, last_login_at, clinic_id, manufacturer_id, created_at, updated_at, landphone, mobile_numbers
+--
+-- This SQL file is just a reminder - the actual change needs to be made in TypeScript code.
+

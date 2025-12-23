@@ -13,50 +13,56 @@ export class User {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column({ type: 'varchar', unique: true, name: 'email' })
+  @Column({ unique: true })
   email: string;
 
-  @Column({ type: 'varchar', name: 'password' })
-  password: string;
+  @Column({ name: 'password_hash' })
+  passwordHash: string;
 
-  @Column({ type: 'varchar', name: 'firstName' })
+  @Column({ name: 'first_name' })
   firstName: string;
 
-  @Column({ type: 'varchar', name: 'lastName' })
+  @Column({ name: 'last_name' })
   lastName: string;
 
   @Column({
     type: 'varchar',
     length: 20,
     default: 'clinic',
-    name: 'role',
   })
   role: UserRole;
 
-  @Column({ type: 'varchar', nullable: true, name: 'phone' })
+  @Column({ type: 'varchar', nullable: true })
   phone: string | null;
 
-  @Column({ type: 'boolean', default: true, name: 'isActive' })
-  isActive: boolean;
+  @Column({ type: 'varchar', nullable: true })
+  landphone: string | null;
 
-  @Column({ type: 'boolean', default: false, name: 'isEmailVerified' })
-  isEmailVerified: boolean;
+  @Column('text', { array: true, nullable: true, name: 'mobile_numbers' })
+  mobileNumbers: string[] | null;
 
-  @Column({ type: 'varchar', nullable: true, name: 'whatsappNumber' })
+  @Column({ type: 'varchar', nullable: true, name: 'whatsapp_number' })
   whatsappNumber: string | null;
 
-  @Column({ type: 'timestamp', nullable: true, name: 'lastLoginAt' })
-  lastLoginAt: Date | null;
+  @Column({ default: true, name: 'is_active' })
+  isActive: boolean;
 
-  @Column({ type: 'uuid', nullable: true, name: 'clinicId' })
+  @Column({ default: false, name: 'is_email_verified' })
+  isEmailVerified: boolean;
+
+  @Column({ type: 'uuid', nullable: true, name: 'clinic_id' })
   clinicId: string | null;
 
-  @Column({ type: 'uuid', nullable: true, name: 'manufacturerId' })
+  @Column({ type: 'uuid', nullable: true, name: 'manufacturer_id' })
   manufacturerId: string | null;
 
-  @CreateDateColumn({ name: 'createdAt' })
+  @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 
-  @UpdateDateColumn({ name: 'updatedAt' })
+  @UpdateDateColumn({ name: 'updated_at' })
   updatedAt: Date;
+
+  @Column({ type: 'timestamp', nullable: true, name: 'last_login_at' })
+  lastLoginAt: Date | null;
 }
+

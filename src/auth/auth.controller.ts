@@ -11,7 +11,16 @@ export class AuthController {
 
   @Post('login')
   async login(@Body() loginDto: LoginDto) {
-    return this.authService.login(loginDto);
+    try {
+      return await this.authService.login(loginDto);
+    } catch (error) {
+      console.error('[Auth Controller] Login error:', {
+        error: error.message,
+        stack: error.stack,
+        email: loginDto.email,
+      });
+      throw error;
+    }
   }
 
   @Post('register')

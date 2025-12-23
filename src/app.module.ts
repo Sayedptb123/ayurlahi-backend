@@ -14,6 +14,13 @@ import { DisputesModule } from './disputes/disputes.module';
 import { PayoutsModule } from './payouts/payouts.module';
 import { AnalyticsModule } from './analytics/analytics.module';
 import { StaffModule } from './staff/staff.module';
+import { PatientsModule } from './patients/patients.module';
+import { DoctorsModule } from './doctors/doctors.module';
+import { AppointmentsModule } from './appointments/appointments.module';
+import { MedicalRecordsModule } from './medical-records/medical-records.module';
+import { PrescriptionsModule } from './prescriptions/prescriptions.module';
+import { LabReportsModule } from './lab-reports/lab-reports.module';
+import { PatientBillingModule } from './patient-billing/patient-billing.module';
 import { User } from './users/entities/user.entity';
 import { Product } from './products/entities/product.entity';
 import { Order } from './orders/entities/order.entity';
@@ -23,6 +30,16 @@ import { Manufacturer } from './manufacturers/entities/manufacturer.entity';
 import { Invoice } from './invoices/entities/invoice.entity';
 import { Dispute } from './disputes/entities/dispute.entity';
 import { Staff } from './staff/entities/staff.entity';
+import { Patient } from './patients/entities/patient.entity';
+import { Doctor } from './doctors/entities/doctor.entity';
+import { Appointment } from './appointments/entities/appointment.entity';
+import { MedicalRecord } from './medical-records/entities/medical-record.entity';
+import { Prescription } from './prescriptions/entities/prescription.entity';
+import { PrescriptionItem } from './prescriptions/entities/prescription-item.entity';
+import { LabReport } from './lab-reports/entities/lab-report.entity';
+import { LabTest } from './lab-reports/entities/lab-test.entity';
+import { PatientBill } from './patient-billing/entities/patient-bill.entity';
+import { BillItem } from './patient-billing/entities/bill-item.entity';
 import { CustomNamingStrategy } from './common/naming-strategy';
 
 @Module({
@@ -40,7 +57,7 @@ import { CustomNamingStrategy } from './common/naming-strategy';
         username: configService.get<string>('DB_USERNAME', 'postgres'),
         password: configService.get<string>('DB_PASSWORD', ''),
         database: configService.get<string>('DB_NAME', 'ayurlahi'),
-        entities: [User, Product, Order, OrderItem, Clinic, Manufacturer, Invoice, Dispute, Staff],
+        entities: [User, Product, Order, OrderItem, Clinic, Manufacturer, Invoice, Dispute, Staff, Patient, Doctor, Appointment, MedicalRecord, Prescription, PrescriptionItem, LabReport, LabTest, PatientBill, BillItem],
         synchronize: false, // Disabled to prevent schema conflicts with existing data
         logging: configService.get<string>('NODE_ENV') === 'development',
         namingStrategy: new CustomNamingStrategy(),
@@ -58,6 +75,13 @@ import { CustomNamingStrategy } from './common/naming-strategy';
     PayoutsModule,
     AnalyticsModule,
     StaffModule,
+    PatientsModule,
+    DoctorsModule,
+    AppointmentsModule,
+    MedicalRecordsModule,
+    PrescriptionsModule,
+    LabReportsModule,
+    PatientBillingModule,
   ],
   controllers: [AppController],
   providers: [AppService],
