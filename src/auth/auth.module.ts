@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { ConfigModule, ConfigService } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 import { TypeOrmModule } from '@nestjs/typeorm';
@@ -11,9 +12,21 @@ import { User } from '../users/entities/user.entity';
   imports: [
     TypeOrmModule.forFeature([User]),
     PassportModule,
-    JwtModule.register({
-      secret: process.env.JWT_SECRET || 'your-secret-key-change-in-production',
-      signOptions: { expiresIn: '7d' },
+    JwtModule.registerAsync({
+      imports: [ConfigModule],
+      useFactory: (configService: ConfigService) => {
+        const secret = configService.get<string>('JWT_SECRET') || 'your-secret-key-change-in-production';
+        console.log('[JWT Module] Registering with secret:', {
+          hasSecret: !!configService.get<string>('JWT_SECRET'),
+          secretLength: secret.length,
+          secretPreview: secret.substring(0, 10) + '...',
+        });
+        return {
+          secret,
+          signOptions: { expiresIn: '7d' },
+        };
+      },
+      inject: [ConfigService],
     }),
   ],
   controllers: [AuthController],
@@ -21,6 +34,7 @@ import { User } from '../users/entities/user.entity';
   exports: [AuthService],
 })
 export class AuthModule {}
+
 
 
 

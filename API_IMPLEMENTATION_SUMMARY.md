@@ -113,3 +113,6 @@ node test-api-integration.js
 - TypeORM is used for database operations
 - All endpoints are protected with JWT authentication (except registration)
 
+
+
+

@@ -77,3 +77,6 @@ export class Product {
   deletedAt: Date | null;
 }
 
+
+
+

@@ -111,3 +111,6 @@ export class ManufacturersService {
     return this.manufacturersRepository.save(manufacturer);
   }
 }
+
+
+

@@ -98,7 +98,25 @@ export class AuthService {
         role: user.role,
       };
 
+      // Debug: Log JWT secret being used
+      const jwtSecret = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
+      console.log('[Auth Service] Login - JWT Secret check:', {
+        hasSecret: !!process.env.JWT_SECRET,
+        secretLength: jwtSecret.length,
+        secretPreview: jwtSecret.substring(0, 10) + '...',
+      });
+
       const accessToken = this.jwtService.sign(payload);
+      
+      // Debug: Log token details
+      console.log('[Auth Service] Login - Token generated:', {
+        tokenLength: accessToken.length,
+        tokenPreview: accessToken.substring(0, 50) + '...',
+        payload,
+        userId: user.id,
+        email: user.email,
+        role: user.role,
+      });
 
       return {
         accessToken,
@@ -191,6 +209,72 @@ export class AuthService {
       isActive: user.isActive,
       isEmailVerified: user.isEmailVerified,
     };
+  }
+
+  async refreshToken(refreshToken: string) {
+    try {
+      console.log('[Auth Service] Refresh token - Starting verification:', {
+        refreshTokenLength: refreshToken?.length,
+        refreshTokenPreview: refreshToken ? refreshToken.substring(0, 30) + '...' : 'missing',
+        jwtSecret: process.env.JWT_SECRET ? process.env.JWT_SECRET.substring(0, 10) + '...' : 'using default',
+      });
+      
+      // Verify the refresh token (in a real implementation, you'd use a separate refresh token secret)
+      // For now, we'll verify it as a regular JWT token
+      const payload = this.jwtService.verify(refreshToken);
+      
+      console.log('[Auth Service] Refresh token - Verification successful:', {
+        payload,
+        userId: payload.sub,
+        email: payload.email,
+        role: payload.role,
+      });
+      
+      // Get user from database
+      const user = await this.usersRepository.findOne({
+        where: { id: payload.sub },
+      });
+
+      if (!user || !user.isActive) {
+        throw new UnauthorizedException('Invalid or expired refresh token');
+      }
+
+      // Generate new access token
+      const newPayload: JwtPayload = {
+        sub: user.id,
+        email: user.email,
+        role: user.role,
+      };
+
+      const accessToken = this.jwtService.sign(newPayload);
+
+      // Return new tokens (using same refresh token for simplicity)
+      // In production, you might want to rotate refresh tokens
+      return {
+        accessToken,
+        refreshToken: refreshToken, // Return same token or generate new one
+        user: {
+          id: user.id,
+          email: user.email,
+          firstName: user.firstName,
+          lastName: user.lastName,
+          role: user.role,
+          clinicId: user.clinicId,
+          manufacturerId: user.manufacturerId,
+          isActive: user.isActive,
+          isEmailVerified: user.isEmailVerified,
+        },
+      };
+    } catch (error) {
+      console.error('[Auth Service] Refresh token - Verification failed:', {
+        errorMessage: error?.message,
+        errorName: error?.name,
+        errorStack: error?.stack,
+        refreshTokenLength: refreshToken?.length,
+        refreshTokenPreview: refreshToken ? refreshToken.substring(0, 30) + '...' : 'missing',
+      });
+      throw new UnauthorizedException('Invalid or expired refresh token');
+    }
   }
 }
 

@@ -12,6 +12,7 @@ import { ClinicsModule } from './clinics/clinics.module';
 import { InvoicesModule } from './invoices/invoices.module';
 import { DisputesModule } from './disputes/disputes.module';
 import { PayoutsModule } from './payouts/payouts.module';
+import { AnalyticsModule } from './analytics/analytics.module';
 import { User } from './users/entities/user.entity';
 import { Product } from './products/entities/product.entity';
 import { Order } from './orders/entities/order.entity';
@@ -53,6 +54,7 @@ import { CustomNamingStrategy } from './common/naming-strategy';
     InvoicesModule,
     DisputesModule,
     PayoutsModule,
+    AnalyticsModule,
   ],
   controllers: [AppController],
   providers: [AppService],

@@ -50,3 +50,6 @@ export class UpdateClinicDto {
   socialMedia?: Record<string, any>;
 }
 
+
+
+

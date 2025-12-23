@@ -30,10 +30,10 @@ export class Dispute {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column({ type: 'uuid' })
+  @Column({ type: 'uuid', name: 'orderId' })
   orderId: string;
 
-  @Column({ type: 'uuid' })
+  @Column({ type: 'uuid', name: 'clinicId' })
   clinicId: string;
 
   @Column({
@@ -55,16 +55,16 @@ export class Dispute {
   @Column({ type: 'jsonb', nullable: true })
   evidence: Record<string, any> | null;
 
-  @Column({ type: 'uuid', nullable: true })
+  @Column({ type: 'uuid', nullable: true, name: 'assignedTo' })
   assignedTo: string | null;
 
-  @Column({ type: 'text', nullable: true })
+  @Column({ type: 'text', nullable: true, name: 'resolution' })
   resolution: string | null;
 
-  @Column({ type: 'timestamp', nullable: true })
+  @Column({ type: 'timestamp', nullable: true, name: 'resolvedAt' })
   resolvedAt: Date | null;
 
-  @Column({ type: 'uuid', nullable: true })
+  @Column({ type: 'uuid', nullable: true, name: 'resolvedBy' })
   resolvedBy: string | null;
 
   @Column({ type: 'jsonb', nullable: true })
@@ -78,13 +78,16 @@ export class Dispute {
   @JoinColumn({ name: 'clinicId' })
   clinic: Clinic;
 
-  @CreateDateColumn()
+  @CreateDateColumn({ name: 'createdAt' })
   createdAt: Date;
 
-  @UpdateDateColumn()
+  @UpdateDateColumn({ name: 'updatedAt' })
   updatedAt: Date;
 
-  @Column({ type: 'timestamp', nullable: true })
+  @Column({ type: 'timestamp', nullable: true, name: 'deletedAt' })
   deletedAt: Date | null;
 }
+
+
+
 

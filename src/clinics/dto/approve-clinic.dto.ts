@@ -5,3 +5,6 @@ export class RejectClinicDto {
   reason: string;
 }
 
+
+
+
