@@ -13,7 +13,7 @@ export class Product {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column({ type: 'uuid' })
+  @Column({ type: 'uuid', name: 'manufacturerId' })
   manufacturerId: string;
 
   @Column({ type: 'varchar', length: 100, unique: true })
@@ -28,28 +28,28 @@ export class Product {
   @Column({ type: 'varchar', length: 100, nullable: true })
   category: string | null;
 
-  @Column({ type: 'varchar', length: 50, nullable: true })
+  @Column({ type: 'varchar', length: 50, nullable: true, name: 'batchNumber' })
   batchNumber: string | null;
 
-  @Column({ type: 'date', nullable: true })
+  @Column({ type: 'date', nullable: true, name: 'expiryDate' })
   expiryDate: Date | null;
 
-  @Column({ type: 'date', nullable: true })
+  @Column({ type: 'date', nullable: true, name: 'manufacturingDate' })
   manufacturingDate: Date | null;
 
   @Column({ type: 'decimal', precision: 10, scale: 2 })
   price: number;
 
-  @Column({ type: 'decimal', precision: 10, scale: 2, default: 0 })
+  @Column({ type: 'decimal', precision: 10, scale: 2, default: 0, name: 'gstRate' })
   gstRate: number;
 
-  @Column({ type: 'int', default: 0 })
+  @Column({ type: 'int', default: 0, name: 'stockQuantity' })
   stockQuantity: number;
 
-  @Column({ type: 'varchar', length: 50, nullable: true })
+  @Column({ type: 'varchar', length: 50, nullable: true, name: 'unit' })
   unit: string | null;
 
-  @Column({ type: 'int', default: 1 })
+  @Column({ type: 'int', default: 1, name: 'minOrderQuantity' })
   minOrderQuantity: number;
 
   @Column({ type: 'jsonb', nullable: true })
@@ -58,22 +58,22 @@ export class Product {
   @Column({ type: 'jsonb', nullable: true })
   specifications: Record<string, any> | null;
 
-  @Column({ type: 'boolean', default: true })
+  @Column({ type: 'boolean', default: true, name: 'isActive' })
   isActive: boolean;
 
-  @Column({ type: 'boolean', default: false })
+  @Column({ type: 'boolean', default: false, name: 'requiresPrescription' })
   requiresPrescription: boolean;
 
-  @Column({ type: 'varchar', length: 50, nullable: true })
+  @Column({ type: 'varchar', length: 50, nullable: true, name: 'licenseNumber' })
   licenseNumber: string | null;
 
-  @CreateDateColumn()
+  @CreateDateColumn({ name: 'createdAt' })
   createdAt: Date;
 
-  @UpdateDateColumn()
+  @UpdateDateColumn({ name: 'updatedAt' })
   updatedAt: Date;
 
-  @Column({ type: 'timestamp', nullable: true })
+  @Column({ type: 'timestamp', nullable: true, name: 'deletedAt' })
   deletedAt: Date | null;
 }
 
