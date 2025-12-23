@@ -13,6 +13,7 @@ import { InvoicesModule } from './invoices/invoices.module';
 import { DisputesModule } from './disputes/disputes.module';
 import { PayoutsModule } from './payouts/payouts.module';
 import { AnalyticsModule } from './analytics/analytics.module';
+import { StaffModule } from './staff/staff.module';
 import { User } from './users/entities/user.entity';
 import { Product } from './products/entities/product.entity';
 import { Order } from './orders/entities/order.entity';
@@ -21,6 +22,7 @@ import { Clinic } from './clinics/entities/clinic.entity';
 import { Manufacturer } from './manufacturers/entities/manufacturer.entity';
 import { Invoice } from './invoices/entities/invoice.entity';
 import { Dispute } from './disputes/entities/dispute.entity';
+import { Staff } from './staff/entities/staff.entity';
 import { CustomNamingStrategy } from './common/naming-strategy';
 
 @Module({
@@ -38,7 +40,7 @@ import { CustomNamingStrategy } from './common/naming-strategy';
         username: configService.get<string>('DB_USERNAME', 'postgres'),
         password: configService.get<string>('DB_PASSWORD', ''),
         database: configService.get<string>('DB_NAME', 'ayurlahi'),
-        entities: [User, Product, Order, OrderItem, Clinic, Manufacturer, Invoice, Dispute],
+        entities: [User, Product, Order, OrderItem, Clinic, Manufacturer, Invoice, Dispute, Staff],
         synchronize: false, // Disabled to prevent schema conflicts with existing data
         logging: configService.get<string>('NODE_ENV') === 'development',
         namingStrategy: new CustomNamingStrategy(),
@@ -55,6 +57,7 @@ import { CustomNamingStrategy } from './common/naming-strategy';
     DisputesModule,
     PayoutsModule,
     AnalyticsModule,
+    StaffModule,
   ],
   controllers: [AppController],
   providers: [AppService],
