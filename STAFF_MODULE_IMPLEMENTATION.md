@@ -138,3 +138,4 @@ The frontend is already configured to use these endpoints. Once the backend is r
 - All endpoints require JWT authentication via the `JwtAuthGuard`
 - Users can only manage staff from their own organization (unless admin)
 
+

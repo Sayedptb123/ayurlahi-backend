@@ -108,3 +108,4 @@ docker exec -i your-postgres-container psql -U postgres -d ayurlahi < migrations
 
 If your project uses TypeORM migrations, you might want to create a proper migration file instead. However, since `synchronize: false` is set in your app.module.ts, manual SQL execution is appropriate.
 
+

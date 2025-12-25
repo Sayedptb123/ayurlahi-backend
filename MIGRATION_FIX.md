@@ -91,3 +91,4 @@ After fixing the table structure:
 3. ✅ You can now start the backend server
 4. ✅ Test the staff endpoints from the frontend
 
+

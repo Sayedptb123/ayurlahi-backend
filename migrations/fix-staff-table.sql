@@ -65,3 +65,4 @@ COMMENT ON COLUMN staff.position IS 'Staff position (doctor, therapist, producti
 COMMENT ON COLUMN staff.position_custom IS 'Custom position name when position is "other"';
 COMMENT ON COLUMN staff.qualifications IS 'JSON array of qualification strings';
 
+
