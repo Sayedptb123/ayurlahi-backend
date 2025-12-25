@@ -76,3 +76,5 @@ ALTER TABLE "prescription_items"
 COMMENT ON TABLE "prescriptions" IS 'Stores prescription information for HMS';
 COMMENT ON TABLE "prescription_items" IS 'Stores individual medicine items in prescriptions';
 
+
+

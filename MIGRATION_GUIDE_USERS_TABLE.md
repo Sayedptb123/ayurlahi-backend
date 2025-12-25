@@ -200,3 +200,5 @@ ALTER TABLE users RENAME COLUMN last_name TO "lastName";
 
 *Migration Date: December 24, 2025*
 
+
+

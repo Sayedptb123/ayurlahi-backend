@@ -53,3 +53,5 @@ ALTER TABLE "medical_records"
 
 COMMENT ON TABLE "medical_records" IS 'Stores medical records for HMS';
 
+
+

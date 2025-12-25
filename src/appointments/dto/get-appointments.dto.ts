@@ -54,3 +54,5 @@ export class GetAppointmentsDto {
   appointmentType?: AppointmentType;
 }
 
+
+

@@ -79,3 +79,5 @@ ALTER TABLE "bill_items"
 COMMENT ON TABLE "patient_bills" IS 'Stores patient billing information for HMS';
 COMMENT ON TABLE "bill_items" IS 'Stores individual items in patient bills';
 
+
+

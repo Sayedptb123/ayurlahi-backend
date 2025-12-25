@@ -52,3 +52,5 @@ ALTER TABLE "appointments"
 
 COMMENT ON TABLE "appointments" IS 'Stores appointment information for HMS';
 
+
+

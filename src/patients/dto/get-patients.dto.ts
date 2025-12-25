@@ -25,3 +25,5 @@ export class GetPatientsDto {
   bloodGroup?: string;
 }
 
+
+

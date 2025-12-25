@@ -44,3 +44,5 @@ ALTER TABLE "doctors"
 
 COMMENT ON TABLE "doctors" IS 'Stores doctor information for HMS';
 
+
+

@@ -45,3 +45,5 @@ export class GetMedicalRecordsDto {
   endDate?: string; // Filter by date range
 }
 
+
+

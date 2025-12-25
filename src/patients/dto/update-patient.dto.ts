@@ -71,3 +71,5 @@ export class UpdatePatientDto {
   medicalHistory?: string;
 }
 
+
+

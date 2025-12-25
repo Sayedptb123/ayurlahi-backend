@@ -146,3 +146,5 @@ export class PatientBill {
   updatedAt: Date;
 }
 
+
+

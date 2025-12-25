@@ -97,3 +97,5 @@ export class CreateMedicalRecordDto {
   attachments?: string[]; // Array of file URLs
 }
 
+
+

@@ -38,3 +38,5 @@ ALTER TABLE "patients"
 -- Add comment
 COMMENT ON TABLE "patients" IS 'Stores patient information for HMS';
 
+
+

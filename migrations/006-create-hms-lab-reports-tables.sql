@@ -81,3 +81,5 @@ ALTER TABLE "lab_tests"
 COMMENT ON TABLE "lab_reports" IS 'Stores lab report information for HMS';
 COMMENT ON TABLE "lab_tests" IS 'Stores individual test items in lab reports';
 
+
+
