@@ -91,14 +91,80 @@ Create a `.env` file in the project root:
 touch .env
 ```
 
-Add the following to `.env`:
+### Complete .env File Template
+
+Copy and paste this complete `.env` file content:
 
 ```env
-# Database Configuration
+# ============================================================================
+# Database Configuration (Required)
+# ============================================================================
 DB_HOST=localhost
 DB_PORT=5432
 DB_USERNAME=postgres
 DB_PASSWORD=          # Leave empty if no password, or set your PostgreSQL password
+DB_NAME=ayurlahi
+
+# ============================================================================
+# Redis Configuration (Required for Background Jobs)
+# ============================================================================
+REDIS_HOST=localhost
+REDIS_PORT=6379
+
+# ============================================================================
+# JWT Configuration (Required)
+# ============================================================================
+# Generate a secure secret: openssl rand -base64 32
+JWT_SECRET=dev-secret-key-min-32-chars-long-change-in-production-abc123
+JWT_EXPIRES_IN=24h
+
+# ============================================================================
+# Application Configuration (Required)
+# ============================================================================
+PORT=3000
+NODE_ENV=development
+FRONTEND_URL=http://localhost:5173
+
+# ============================================================================
+# Razorpay Configuration (Optional - for Payments)
+# ============================================================================
+# Uncomment and fill when ready to use payments
+# RAZORPAY_KEY_ID=your_razorpay_key_id
+# RAZORPAY_KEY_SECRET=your_razorpay_key_secret
+# RAZORPAY_WEBHOOK_SECRET=your_webhook_secret
+
+# ============================================================================
+# AWS S3 Configuration (Optional - for File Storage)
+# ============================================================================
+# Uncomment and fill when ready to use S3
+# AWS_ACCESS_KEY_ID=your_aws_access_key
+# AWS_SECRET_ACCESS_KEY=your_aws_secret_key
+# AWS_REGION=ap-south-1
+# AWS_S3_BUCKET=your_bucket_name
+
+# ============================================================================
+# WhatsApp Configuration (Optional - for WhatsApp Orders)
+# ============================================================================
+# Uncomment and fill when ready to use WhatsApp
+# WHATSAPP_API_URL=your_whatsapp_api_url
+# WHATSAPP_API_KEY=your_whatsapp_api_key
+# WHATSAPP_SOURCE_NAME=your_source_name
+```
+
+**Generate a secure JWT_SECRET:**
+```bash
+openssl rand -base64 32
+```
+
+**Quick Setup:**
+```bash
+# Create .env file with the template above
+cat > .env << 'EOF'
+# Database Configuration
+DB_HOST=localhost
+DB_PORT=5432
+DB_USERNAME=postgres
+DB_PASSWORD=
 DB_NAME=ayurlahi
 
 # Redis Configuration
@@ -106,18 +172,18 @@ REDIS_HOST=localhost
 REDIS_PORT=6379
 
 # JWT Configuration
-JWT_SECRET=dev-secret-key-min-32-chars-long-change-in-production-abc123
+JWT_SECRET=$(openssl rand -base64 32)
 JWT_EXPIRES_IN=24h
 
 # Application Configuration
 PORT=3000
 NODE_ENV=development
 FRONTEND_URL=http://localhost:5173
-```
+EOF
 
-**Generate a secure JWT_SECRET:**
-```bash
-openssl rand -base64 32
+# Note: The JWT_SECRET in the heredoc above won't expand. 
+# After creating the file, manually update JWT_SECRET with:
+# openssl rand -base64 32
 ```
 
 ---
