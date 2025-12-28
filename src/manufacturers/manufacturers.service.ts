@@ -5,34 +5,41 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, IsNull } from 'typeorm';
-import { Manufacturer, ApprovalStatus } from './entities/manufacturer.entity';
+import { Organisation } from '../organisations/entities/organisation.entity';
 import { RejectManufacturerDto } from './dto/reject-manufacturer.dto';
 import { User } from '../users/entities/user.entity';
+import { RoleUtils } from '../common/utils/role.utils';
+import { OrganisationUser } from '../organisation-users/entities/organisation-user.entity';
 
 @Injectable()
 export class ManufacturersService {
   constructor(
-    @InjectRepository(Manufacturer)
-    private manufacturersRepository: Repository<Manufacturer>,
+    @InjectRepository(Organisation)
+    private organisationsRepository: Repository<Organisation>,
     @InjectRepository(User)
     private usersRepository: Repository<User>,
-  ) {}
+    @InjectRepository(OrganisationUser)
+    private organisationUsersRepository: Repository<OrganisationUser>,
+  ) { }
 
   async findAll(userRole: string) {
     // Only admin and support can see all manufacturers
-    if (!['admin', 'support'].includes(userRole)) {
-      throw new ForbiddenException('You do not have permission to view all manufacturers');
+    if (!RoleUtils.isAdminOrSupport(userRole)) {
+      throw new ForbiddenException(
+        'You do not have permission to view all manufacturers',
+      );
     }
 
-    return this.manufacturersRepository.find({
-      where: { deletedAt: IsNull() },
+    // Query organisations table filtered by type='MANUFACTURER'
+    return this.organisationsRepository.find({
+      where: { type: 'MANUFACTURER', deletedAt: IsNull() },
       order: { createdAt: 'DESC' },
     });
   }
 
   async findOne(id: string, userId: string, userRole: string) {
-    const manufacturer = await this.manufacturersRepository.findOne({
-      where: { id, deletedAt: IsNull() },
+    const manufacturer = await this.organisationsRepository.findOne({
+      where: { id, type: 'MANUFACTURER', deletedAt: IsNull() },
     });
 
     if (!manufacturer) {
@@ -41,9 +48,15 @@ export class ManufacturersService {
 
     // Manufacturer users can only see their own manufacturer
     if (userRole === 'manufacturer') {
-      const user = await this.usersRepository.findOne({ where: { id: userId } });
-      if (!user || user.manufacturerId !== manufacturer.id) {
-        throw new ForbiddenException('You do not have access to this manufacturer');
+      // Check if user belongs to this organisation
+      const orgUser = await this.organisationUsersRepository.findOne({
+        where: { userId, organisationId: id },
+      });
+
+      if (!orgUser) {
+        throw new ForbiddenException(
+          'You do not have access to this manufacturer',
+        );
       }
     }
 
@@ -51,24 +64,23 @@ export class ManufacturersService {
   }
 
   async findMyManufacturer(userId: string) {
-    const user = await this.usersRepository.findOne({ where: { id: userId } });
+    // Find the organisation this user belongs to
+    const orgUser = await this.organisationUsersRepository.findOne({
+      where: { userId },
+      relations: ['organisation'],
+    });
 
-    if (!user) {
-      throw new NotFoundException('User not found');
-    }
-
-    // If user is not a manufacturer user, return null instead of error
-    if (user.role !== 'manufacturer') {
+    if (!orgUser) {
       return null;
     }
 
-    if (!user.manufacturerId) {
-      // Manufacturer user but no manufacturer associated - this is a valid state (pending registration)
+    // Check if it's a manufacturer organisation
+    if (orgUser.organisation.type !== 'MANUFACTURER') {
       return null;
     }
 
-    const manufacturer = await this.manufacturersRepository.findOne({
-      where: { id: user.manufacturerId, deletedAt: IsNull() },
+    const manufacturer = await this.organisationsRepository.findOne({
+      where: { id: orgUser.organisationId, deletedAt: IsNull() },
     });
 
     if (!manufacturer) {
@@ -79,40 +91,39 @@ export class ManufacturersService {
   }
 
   async approve(id: string, approvedBy: string) {
-    const manufacturer = await this.manufacturersRepository.findOne({
-      where: { id, deletedAt: IsNull() },
+    const manufacturer = await this.organisationsRepository.findOne({
+      where: { id, type: 'MANUFACTURER', deletedAt: IsNull() },
     });
 
     if (!manufacturer) {
       throw new NotFoundException(`Manufacturer with ID ${id} not found`);
     }
 
-    manufacturer.approvalStatus = ApprovalStatus.APPROVED;
+    manufacturer.approvalStatus = 'approved';
     manufacturer.approvedAt = new Date();
     manufacturer.approvedBy = approvedBy;
     manufacturer.isVerified = true;
 
-    return this.manufacturersRepository.save(manufacturer);
+    return this.organisationsRepository.save(manufacturer);
   }
 
-  async reject(id: string, rejectDto: RejectManufacturerDto, rejectedBy: string) {
-    const manufacturer = await this.manufacturersRepository.findOne({
-      where: { id, deletedAt: IsNull() },
+  async reject(
+    id: string,
+    rejectDto: RejectManufacturerDto,
+    rejectedBy: string,
+  ) {
+    const manufacturer = await this.organisationsRepository.findOne({
+      where: { id, type: 'MANUFACTURER', deletedAt: IsNull() },
     });
 
     if (!manufacturer) {
       throw new NotFoundException(`Manufacturer with ID ${id} not found`);
     }
 
-    manufacturer.approvalStatus = ApprovalStatus.REJECTED;
+    manufacturer.approvalStatus = 'rejected';
     manufacturer.rejectionReason = rejectDto.reason;
     manufacturer.approvedBy = rejectedBy;
 
-    return this.manufacturersRepository.save(manufacturer);
+    return this.organisationsRepository.save(manufacturer);
   }
 }
-
-
-
-
-

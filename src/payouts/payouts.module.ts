@@ -8,8 +8,3 @@ import { PayoutsService } from './payouts.service';
   exports: [PayoutsService],
 })
 export class PayoutsModule {}
-
-
-
-
-

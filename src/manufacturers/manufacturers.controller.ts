@@ -11,11 +11,12 @@ import {
 import { ManufacturersService } from './manufacturers.service';
 import { RejectManufacturerDto } from './dto/reject-manufacturer.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { RoleUtils } from '../common/utils/role.utils';
 
 @Controller('manufacturers')
 @UseGuards(JwtAuthGuard)
 export class ManufacturersController {
-  constructor(private readonly manufacturersService: ManufacturersService) {}
+  constructor(private readonly manufacturersService: ManufacturersService) { }
 
   @Get()
   async findAll(@Request() req) {
@@ -28,20 +29,18 @@ export class ManufacturersController {
   }
 
   @Get(':id')
-  async findOne(
-    @Param('id', ParseUUIDPipe) id: string,
-    @Request() req,
-  ) {
-    return this.manufacturersService.findOne(id, req.user.userId, req.user.role);
+  async findOne(@Param('id', ParseUUIDPipe) id: string, @Request() req) {
+    return this.manufacturersService.findOne(
+      id,
+      req.user.userId,
+      req.user.role,
+    );
   }
 
   @Post(':id/approve')
-  async approve(
-    @Param('id', ParseUUIDPipe) id: string,
-    @Request() req,
-  ) {
+  async approve(@Param('id', ParseUUIDPipe) id: string, @Request() req) {
     // Only admin and support can approve
-    if (!['admin', 'support'].includes(req.user.role)) {
+    if (!RoleUtils.isAdminOrSupport(req.user.role)) {
       throw new Error('Unauthorized');
     }
     return this.manufacturersService.approve(id, req.user.userId);
@@ -54,14 +53,9 @@ export class ManufacturersController {
     @Body() rejectDto: RejectManufacturerDto,
   ) {
     // Only admin and support can reject
-    if (!['admin', 'support'].includes(req.user.role)) {
+    if (!RoleUtils.isAdminOrSupport(req.user.role)) {
       throw new Error('Unauthorized');
     }
     return this.manufacturersService.reject(id, rejectDto, req.user.userId);
   }
 }
-
-
-
-
-

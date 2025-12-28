@@ -24,7 +24,13 @@ export class Clinic {
   @Column({ type: 'varchar', length: 255, name: 'clinicName' })
   clinicName: string;
 
-  @Column({ type: 'varchar', length: 50, nullable: true, unique: true, name: 'gstin' })
+  @Column({
+    type: 'varchar',
+    length: 50,
+    nullable: true,
+    unique: true,
+    name: 'gstin',
+  })
   gstin: string | null;
 
   @Column({ type: 'varchar', length: 100, unique: true, name: 'licenseNumber' })
@@ -51,7 +57,12 @@ export class Clinic {
   @Column({ type: 'varchar', length: 20, nullable: true })
   phone: string | null;
 
-  @Column({ type: 'varchar', length: 20, nullable: true, name: 'whatsappNumber' })
+  @Column({
+    type: 'varchar',
+    length: 20,
+    nullable: true,
+    name: 'whatsappNumber',
+  })
   whatsappNumber: string | null;
 
   @Column({
@@ -86,8 +97,3 @@ export class Clinic {
   @Column({ type: 'timestamp', nullable: true, name: 'deletedAt' })
   deletedAt: Date | null;
 }
-
-
-
-
-

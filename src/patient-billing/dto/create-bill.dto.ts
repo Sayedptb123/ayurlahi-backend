@@ -71,6 +71,3 @@ export class CreateBillDto {
   @Type(() => BillItemDto)
   items: BillItemDto[];
 }
-
-
-

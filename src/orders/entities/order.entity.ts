@@ -50,22 +50,50 @@ export class Order {
   })
   source: OrderSource;
 
-  @Column({ type: 'varchar', length: 100, nullable: true, name: 'whatsappMessageId' })
+  @Column({
+    type: 'varchar',
+    length: 100,
+    nullable: true,
+    name: 'whatsappMessageId',
+  })
   whatsappMessageId: string | null;
 
-  @Column({ type: 'varchar', length: 100, nullable: true, name: 'razorpayOrderId' })
+  @Column({
+    type: 'varchar',
+    length: 100,
+    nullable: true,
+    name: 'razorpayOrderId',
+  })
   razorpayOrderId: string | null;
 
   @Column({ type: 'decimal', precision: 12, scale: 2, name: 'subtotal' })
   subtotal: number;
 
-  @Column({ type: 'decimal', precision: 12, scale: 2, default: 0, name: 'gstAmount' })
+  @Column({
+    type: 'decimal',
+    precision: 12,
+    scale: 2,
+    default: 0,
+    name: 'gstAmount',
+  })
   gstAmount: number;
 
-  @Column({ type: 'decimal', precision: 12, scale: 2, default: 0, name: 'shippingCharges' })
+  @Column({
+    type: 'decimal',
+    precision: 12,
+    scale: 2,
+    default: 0,
+    name: 'shippingCharges',
+  })
   shippingCharges: number;
 
-  @Column({ type: 'decimal', precision: 12, scale: 2, default: 0, name: 'platformFee' })
+  @Column({
+    type: 'decimal',
+    precision: 12,
+    scale: 2,
+    default: 0,
+    name: 'platformFee',
+  })
   platformFee: number;
 
   @Column({ type: 'decimal', precision: 12, scale: 2, name: 'totalAmount' })
@@ -74,22 +102,52 @@ export class Order {
   @Column({ type: 'text', nullable: true, name: 'shippingAddress' })
   shippingAddress: string | null;
 
-  @Column({ type: 'varchar', length: 100, nullable: true, name: 'shippingCity' })
+  @Column({
+    type: 'varchar',
+    length: 100,
+    nullable: true,
+    name: 'shippingCity',
+  })
   shippingCity: string | null;
 
-  @Column({ type: 'varchar', length: 100, nullable: true, name: 'shippingDistrict' })
+  @Column({
+    type: 'varchar',
+    length: 100,
+    nullable: true,
+    name: 'shippingDistrict',
+  })
   shippingDistrict: string | null;
 
-  @Column({ type: 'varchar', length: 100, nullable: true, name: 'shippingState' })
+  @Column({
+    type: 'varchar',
+    length: 100,
+    nullable: true,
+    name: 'shippingState',
+  })
   shippingState: string | null;
 
-  @Column({ type: 'varchar', length: 10, nullable: true, name: 'shippingPincode' })
+  @Column({
+    type: 'varchar',
+    length: 10,
+    nullable: true,
+    name: 'shippingPincode',
+  })
   shippingPincode: string | null;
 
-  @Column({ type: 'varchar', length: 20, nullable: true, name: 'shippingPhone' })
+  @Column({
+    type: 'varchar',
+    length: 20,
+    nullable: true,
+    name: 'shippingPhone',
+  })
   shippingPhone: string | null;
 
-  @Column({ type: 'varchar', length: 100, nullable: true, name: 'shippingContactName' })
+  @Column({
+    type: 'varchar',
+    length: 100,
+    nullable: true,
+    name: 'shippingContactName',
+  })
   shippingContactName: string | null;
 
   @Column({ type: 'text', nullable: true })
@@ -128,8 +186,3 @@ export class Order {
   @Column({ type: 'timestamp', nullable: true, name: 'deletedAt' })
   deletedAt: Date | null;
 }
-
-
-
-
-

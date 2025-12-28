@@ -5,35 +5,42 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, IsNull } from 'typeorm';
-import { Clinic, ApprovalStatus } from './entities/clinic.entity';
+import { Organisation } from '../organisations/entities/organisation.entity';
 import { UpdateClinicDto } from './dto/update-clinic.dto';
 import { RejectClinicDto } from './dto/approve-clinic.dto';
 import { User } from '../users/entities/user.entity';
+import { RoleUtils } from '../common/utils/role.utils';
+import { OrganisationUser } from '../organisation-users/entities/organisation-user.entity';
 
 @Injectable()
 export class ClinicsService {
   constructor(
-    @InjectRepository(Clinic)
-    private clinicsRepository: Repository<Clinic>,
+    @InjectRepository(Organisation)
+    private organisationsRepository: Repository<Organisation>,
     @InjectRepository(User)
     private usersRepository: Repository<User>,
-  ) {}
+    @InjectRepository(OrganisationUser)
+    private organisationUsersRepository: Repository<OrganisationUser>,
+  ) { }
 
   async findAll(userRole: string) {
     // Only admin and support can see all clinics
-    if (!['admin', 'support'].includes(userRole)) {
-      throw new ForbiddenException('You do not have permission to view all clinics');
+    if (!RoleUtils.isAdminOrSupport(userRole)) {
+      throw new ForbiddenException(
+        'You do not have permission to view all clinics',
+      );
     }
 
-    return this.clinicsRepository.find({
-      where: { deletedAt: IsNull() },
+    // Query organisations table filtered by type='CLINIC'
+    return this.organisationsRepository.find({
+      where: { type: 'CLINIC', deletedAt: IsNull() },
       order: { createdAt: 'DESC' },
     });
   }
 
   async findOne(id: string, userId: string, userRole: string) {
-    const clinic = await this.clinicsRepository.findOne({
-      where: { id, deletedAt: IsNull() },
+    const clinic = await this.organisationsRepository.findOne({
+      where: { id, type: 'CLINIC', deletedAt: IsNull() },
     });
 
     if (!clinic) {
@@ -42,8 +49,12 @@ export class ClinicsService {
 
     // Clinic users can only see their own clinic
     if (userRole === 'clinic') {
-      const user = await this.usersRepository.findOne({ where: { id: userId } });
-      if (!user || user.clinicId !== clinic.id) {
+      // Check if user belongs to this organisation
+      const orgUser = await this.organisationUsersRepository.findOne({
+        where: { userId, organisationId: id },
+      });
+
+      if (!orgUser) {
         throw new ForbiddenException('You do not have access to this clinic');
       }
     }
@@ -52,24 +63,23 @@ export class ClinicsService {
   }
 
   async findMyClinic(userId: string) {
-    const user = await this.usersRepository.findOne({ where: { id: userId } });
+    // Find the organisation this user belongs to
+    const orgUser = await this.organisationUsersRepository.findOne({
+      where: { userId },
+      relations: ['organisation'],
+    });
 
-    if (!user) {
-      throw new NotFoundException('User not found');
-    }
-
-    // If user is not a clinic user, return null instead of error
-    if (user.role !== 'clinic') {
+    if (!orgUser) {
       return null;
     }
 
-    if (!user.clinicId) {
-      // Clinic user but no clinic associated - this is a valid state (pending registration)
+    // Check if it's a clinic organisation
+    if (orgUser.organisation.type !== 'CLINIC') {
       return null;
     }
 
-    const clinic = await this.clinicsRepository.findOne({
-      where: { id: user.clinicId, deletedAt: IsNull() },
+    const clinic = await this.organisationsRepository.findOne({
+      where: { id: orgUser.organisationId, deletedAt: IsNull() },
     });
 
     if (!clinic) {
@@ -79,54 +89,64 @@ export class ClinicsService {
     return clinic;
   }
 
-  async update(id: string, userId: string, userRole: string, updateDto: UpdateClinicDto) {
+  async update(
+    id: string,
+    userId: string,
+    userRole: string,
+    updateDto: UpdateClinicDto,
+  ) {
     const clinic = await this.findOne(id, userId, userRole);
 
     // Only clinic owner or admin can update
     if (userRole === 'clinic') {
-      const user = await this.usersRepository.findOne({ where: { id: userId } });
-      if (!user || user.clinicId !== clinic.id) {
+      // Check if user belongs to this organisation
+      const orgUser = await this.organisationUsersRepository.findOne({
+        where: { userId, organisationId: id },
+      });
+
+      if (!orgUser) {
         throw new ForbiddenException('You can only update your own clinic');
       }
-    } else if (!['admin', 'support'].includes(userRole)) {
-      throw new ForbiddenException('You do not have permission to update clinics');
+    } else if (!RoleUtils.isAdminOrSupport(userRole)) {
+      throw new ForbiddenException(
+        'You do not have permission to update clinics',
+      );
     }
 
     Object.assign(clinic, updateDto);
-    return this.clinicsRepository.save(clinic);
+    return this.organisationsRepository.save(clinic);
   }
 
   async approve(id: string, approvedBy: string) {
-    const clinic = await this.clinicsRepository.findOne({
-      where: { id, deletedAt: IsNull() },
+    const clinic = await this.organisationsRepository.findOne({
+      where: { id, type: 'CLINIC', deletedAt: IsNull() },
     });
 
     if (!clinic) {
       throw new NotFoundException(`Clinic with ID ${id} not found`);
     }
 
-    clinic.approvalStatus = ApprovalStatus.APPROVED;
+    clinic.approvalStatus = 'approved';
     clinic.approvedAt = new Date();
     clinic.approvedBy = approvedBy;
     clinic.isVerified = true;
 
-    return this.clinicsRepository.save(clinic);
+    return this.organisationsRepository.save(clinic);
   }
 
   async reject(id: string, rejectDto: RejectClinicDto, rejectedBy: string) {
-    const clinic = await this.clinicsRepository.findOne({
-      where: { id, deletedAt: IsNull() },
+    const clinic = await this.organisationsRepository.findOne({
+      where: { id, type: 'CLINIC', deletedAt: IsNull() },
     });
 
     if (!clinic) {
       throw new NotFoundException(`Clinic with ID ${id} not found`);
     }
 
-    clinic.approvalStatus = ApprovalStatus.REJECTED;
+    clinic.approvalStatus = 'rejected';
     clinic.rejectionReason = rejectDto.reason;
     clinic.approvedBy = rejectedBy;
 
-    return this.clinicsRepository.save(clinic);
+    return this.organisationsRepository.save(clinic);
   }
 }
-

@@ -83,6 +83,3 @@ export class MedicalRecord {
   @UpdateDateColumn({ name: 'updatedAt' })
   updatedAt: Date;
 }
-
-
-

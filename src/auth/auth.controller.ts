@@ -1,4 +1,11 @@
-import { Controller, Post, Get, Body, UseGuards, Request } from '@nestjs/common';
+import {
+  Controller,
+  Post,
+  Get,
+  Body,
+  UseGuards,
+  Request,
+} from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
@@ -35,12 +42,22 @@ export class AuthController {
       hasUser: !!req.user,
       userId: req.user?.userId,
       email: req.user?.email,
+      organisationId: req.user?.organisationId,
       role: req.user?.role,
-      headers: {
-        authorization: req.headers?.authorization ? req.headers.authorization.substring(0, 30) + '...' : 'missing',
-      },
     });
-    return this.authService.getCurrentUser(req.user.userId);
+    return this.authService.getCurrentUser(
+      req.user.userId,
+      req.user.organisationId,
+    );
+  }
+
+  @Post('switch-organisation')
+  @UseGuards(JwtAuthGuard)
+  async switchOrganisation(
+    @Body('organisationId') organisationId: string,
+    @Request() req,
+  ) {
+    return this.authService.switchOrganisation(req.user.userId, organisationId);
   }
 
   @Post('refresh')
@@ -48,12 +65,10 @@ export class AuthController {
     console.log('[Auth Controller] POST /refresh - Request received:', {
       hasRefreshToken: !!refreshTokenDto.refreshToken,
       refreshTokenLength: refreshTokenDto.refreshToken?.length,
-      refreshTokenPreview: refreshTokenDto.refreshToken ? refreshTokenDto.refreshToken.substring(0, 30) + '...' : 'missing',
+      refreshTokenPreview: refreshTokenDto.refreshToken
+        ? refreshTokenDto.refreshToken.substring(0, 30) + '...'
+        : 'missing',
     });
     return this.authService.refreshToken(refreshTokenDto.refreshToken);
   }
 }
-
-
-
-

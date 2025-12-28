@@ -89,5 +89,3 @@ export class UpdateStaffDto {
   @IsBoolean()
   isActive?: boolean;
 }
-
-

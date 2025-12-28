@@ -44,6 +44,3 @@ export class GetMedicalRecordsDto {
   @IsDateString()
   endDate?: string; // Filter by date range
 }
-
-
-

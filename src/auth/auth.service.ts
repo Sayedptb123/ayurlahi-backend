@@ -2,19 +2,24 @@ import {
   Injectable,
   UnauthorizedException,
   ConflictException,
+  BadRequestException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
 import { User } from '../users/entities/user.entity';
+import { OrganisationUser } from '../organisation-users/entities/organisation-user.entity';
+import { Organisation } from '../organisations/entities/organisation.entity';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
 
 export interface JwtPayload {
-  sub: string;
-  email: string;
-  role: string;
+  sub: string; // userId
+  email: string | null;
+  organisationId?: string; // Current organisation context
+  organisationType?: string; // Type of current organisation (CLINIC, MANUFACTURER, AYURLAHI_TEAM)
+  role?: string; // Role in current organisation
 }
 
 @Injectable()
@@ -22,75 +27,55 @@ export class AuthService {
   constructor(
     @InjectRepository(User)
     private usersRepository: Repository<User>,
+    @InjectRepository(OrganisationUser)
+    private organisationUsersRepository: Repository<OrganisationUser>,
+    @InjectRepository(Organisation)
+    private organisationsRepository: Repository<Organisation>,
     private jwtService: JwtService,
   ) {}
 
   async validateUser(email: string, password: string): Promise<User | null> {
     try {
-      // Use raw query with explicit column names matching the database schema
-      // Note: landphone and mobile_numbers are excluded until migration 014-add-missing-users-columns.sql is run
-      // After migration, add 'landphone, mobile_numbers' to the SELECT list
-      const result = await this.usersRepository.query(
-        `SELECT id, email, password_hash, first_name, last_name, role, phone, is_active, is_email_verified, whatsapp_number, last_login_at, clinic_id, manufacturer_id, created_at, updated_at
-         FROM users 
-         WHERE email = $1 
-         LIMIT 1`,
-        [email],
-      );
+      // Find user by email (email is optional, so also check phone if needed)
+      const user = await this.usersRepository.findOne({
+        where: { email },
+      });
 
-      if (!result || result.length === 0) {
+      if (!user) {
         console.log('[AuthService] validateUser - User not found:', email);
         return null;
       }
 
-      const userData = result[0];
-      
-      if (!userData.password_hash) {
-        console.log('[AuthService] validateUser - No password hash found for user:', email);
+      if (!user.passwordHash) {
+        console.log(
+          '[AuthService] validateUser - No password hash found for user:',
+          email,
+        );
         return null;
       }
 
       console.log('[AuthService] validateUser - User found:', {
-        email: userData.email,
-        hasPasswordHash: !!userData.password_hash,
-        passwordHashLength: userData.password_hash?.length,
-        isActive: userData.is_active,
+        email: user.email,
+        hasPasswordHash: !!user.passwordHash,
+        isActive: user.isActive,
       });
 
-      const isPasswordValid = await bcrypt.compare(password, userData.password_hash);
+      const isPasswordValid = await bcrypt.compare(password, user.passwordHash);
 
       console.log('[AuthService] validateUser - Password comparison result:', {
         email,
         isValid: isPasswordValid,
-        providedPasswordLength: password.length,
       });
 
       if (!isPasswordValid) {
-        console.log('[AuthService] validateUser - Password mismatch for user:', email);
+        console.log(
+          '[AuthService] validateUser - Password mismatch for user:',
+          email,
+        );
         return null;
       }
 
-    // Map to User entity with all required fields
-    const user = new User();
-    user.id = userData.id;
-    user.email = userData.email;
-    user.passwordHash = userData.password_hash;
-    user.firstName = userData.first_name;
-    user.lastName = userData.last_name;
-    user.role = userData.role;
-    user.phone = userData.phone || null;
-    user.landphone = userData.landphone || null;
-    user.mobileNumbers = userData.mobile_numbers || null;
-    user.whatsappNumber = userData.whatsapp_number || null;
-    user.isActive = userData.is_active;
-    user.isEmailVerified = userData.is_email_verified;
-    user.lastLoginAt = userData.last_login_at || null;
-    user.clinicId = userData.clinic_id || null;
-    user.manufacturerId = userData.manufacturer_id || null;
-    user.createdAt = userData.created_at;
-    user.updatedAt = userData.updated_at;
-    
-    return user;
+      return user;
     } catch (error) {
       console.error('validateUser error:', error);
       throw error;
@@ -114,34 +99,45 @@ export class AuthService {
         user.lastLoginAt = new Date();
         await this.usersRepository.save(user);
       } catch (error) {
-        // Log error but don't fail login if lastLoginAt update fails
         console.error('Error updating lastLoginAt:', error);
       }
 
+      // Fetch user's organisations
+      const organisationUsers = await this.organisationUsersRepository.find({
+        where: { userId: user.id },
+        relations: ['organisation'],
+      });
+
+      // Get primary organisation or first organisation
+      const primaryOrg = organisationUsers.find((ou) => ou.isPrimary);
+      const currentOrg = primaryOrg || organisationUsers[0];
+
+      // Build organisations list for response
+      const organisations = organisationUsers.map((ou) => ({
+        id: ou.organisation.id,
+        name: ou.organisation.name,
+        type: ou.organisation.type,
+        role: ou.role,
+        isPrimary: ou.isPrimary,
+      }));
+
+      // JWT payload with current organisation context
       const payload: JwtPayload = {
         sub: user.id,
         email: user.email,
-        role: user.role,
+        organisationId: currentOrg?.organisation.id,
+        organisationType: currentOrg?.organisation.type,
+        role: currentOrg?.role,
       };
 
-      // Debug: Log JWT secret being used
-      const jwtSecret = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
-      console.log('[Auth Service] Login - JWT Secret check:', {
-        hasSecret: !!process.env.JWT_SECRET,
-        secretLength: jwtSecret.length,
-        secretPreview: jwtSecret.substring(0, 10) + '...',
-      });
-
       const accessToken = this.jwtService.sign(payload);
-      
-      // Debug: Log token details
+
       console.log('[Auth Service] Login - Token generated:', {
-        tokenLength: accessToken.length,
-        tokenPreview: accessToken.substring(0, 50) + '...',
-        payload,
         userId: user.id,
         email: user.email,
-        role: user.role,
+        organisationId: payload.organisationId,
+        role: payload.role,
+        organisationsCount: organisations.length,
       });
 
       return {
@@ -151,12 +147,19 @@ export class AuthService {
           email: user.email,
           firstName: user.firstName,
           lastName: user.lastName,
-          role: user.role,
-          clinicId: user.clinicId,
-          manufacturerId: user.manufacturerId,
+          phone: user.phone,
           isActive: user.isActive,
           isEmailVerified: user.isEmailVerified,
         },
+        currentOrganisation: currentOrg
+          ? {
+              id: currentOrg.organisation.id,
+              name: currentOrg.organisation.name,
+              type: currentOrg.organisation.type,
+              role: currentOrg.role,
+            }
+          : null,
+        organisations,
       };
     } catch (error) {
       console.error('Login error:', error);
@@ -165,57 +168,59 @@ export class AuthService {
   }
 
   async register(registerDto: RegisterDto) {
+    // Phone is required in the new structure
+    if (!registerDto.phone) {
+      throw new BadRequestException('Phone number is required');
+    }
+
     // Check if user already exists
     const existingUser = await this.usersRepository.findOne({
-      where: { email: registerDto.email },
+      where: [{ email: registerDto.email }, { phone: registerDto.phone }],
     });
 
     if (existingUser) {
-      throw new ConflictException('User with this email already exists');
+      throw new ConflictException(
+        'User with this email or phone already exists',
+      );
     }
 
     // Hash password
     const hashedPassword = await bcrypt.hash(registerDto.password, 10);
 
-    // Create user
+    // Create user (no role, clinicId, manufacturerId - those are in organisation_users)
     const user = this.usersRepository.create({
-      email: registerDto.email,
+      email: registerDto.email || null,
       passwordHash: hashedPassword,
       firstName: registerDto.firstName,
       lastName: registerDto.lastName,
-      role: registerDto.role,
-      phone: registerDto.phone ?? null,
+      phone: registerDto.phone,
       isActive: true,
       isEmailVerified: false,
-    } as Partial<User>);
+    });
 
     const savedUser = await this.usersRepository.save(user);
 
-    const payload: JwtPayload = {
-      sub: savedUser.id,
-      email: savedUser.email,
-      role: savedUser.role,
-    };
-
-    const accessToken = this.jwtService.sign(payload);
+    // Note: Organisation assignment should be done separately
+    // For clinic/manufacturer registration, they need to create organisation first
+    // Then link user to organisation via organisation_users
 
     return {
-      accessToken,
+      accessToken: null, // No token until organisation is assigned
       user: {
         id: savedUser.id,
         email: savedUser.email,
         firstName: savedUser.firstName,
         lastName: savedUser.lastName,
-        role: savedUser.role,
-        clinicId: savedUser.clinicId,
-        manufacturerId: savedUser.manufacturerId,
+        phone: savedUser.phone,
         isActive: savedUser.isActive,
         isEmailVerified: savedUser.isEmailVerified,
       },
+      message:
+        'User registered successfully. Please complete organisation registration.',
     };
   }
 
-  async getCurrentUser(userId: string) {
+  async getCurrentUser(userId: string, organisationId?: string) {
     const user = await this.usersRepository.findOne({
       where: { id: userId },
     });
@@ -224,38 +229,50 @@ export class AuthService {
       throw new UnauthorizedException('User not found');
     }
 
+    // Fetch user's organisations
+    const organisationUsers = await this.organisationUsersRepository.find({
+      where: { userId },
+      relations: ['organisation'],
+    });
+
+    // Get current organisation context
+    const currentOrgUser = organisationId
+      ? organisationUsers.find((ou) => ou.organisationId === organisationId)
+      : organisationUsers.find((ou) => ou.isPrimary) || organisationUsers[0];
+
+    const organisations = organisationUsers.map((ou) => ({
+      id: ou.organisation.id,
+      name: ou.organisation.name,
+      type: ou.organisation.type,
+      role: ou.role,
+      isPrimary: ou.isPrimary,
+    }));
+
     return {
       id: user.id,
       email: user.email,
       firstName: user.firstName,
       lastName: user.lastName,
-      role: user.role,
-      clinicId: user.clinicId,
-      manufacturerId: user.manufacturerId,
+      phone: user.phone,
       isActive: user.isActive,
       isEmailVerified: user.isEmailVerified,
+      currentOrganisation: currentOrgUser
+        ? {
+            id: currentOrgUser.organisation.id,
+            name: currentOrgUser.organisation.name,
+            type: currentOrgUser.organisation.type,
+            role: currentOrgUser.role,
+          }
+        : null,
+      organisations,
     };
   }
 
   async refreshToken(refreshToken: string) {
     try {
-      console.log('[Auth Service] Refresh token - Starting verification:', {
-        refreshTokenLength: refreshToken?.length,
-        refreshTokenPreview: refreshToken ? refreshToken.substring(0, 30) + '...' : 'missing',
-        jwtSecret: process.env.JWT_SECRET ? process.env.JWT_SECRET.substring(0, 10) + '...' : 'using default',
-      });
-      
-      // Verify the refresh token (in a real implementation, you'd use a separate refresh token secret)
-      // For now, we'll verify it as a regular JWT token
+      // Verify the refresh token
       const payload = this.jwtService.verify(refreshToken);
-      
-      console.log('[Auth Service] Refresh token - Verification successful:', {
-        payload,
-        userId: payload.sub,
-        email: payload.email,
-        role: payload.role,
-      });
-      
+
       // Get user from database
       const user = await this.usersRepository.findOne({
         where: { id: payload.sub },
@@ -265,42 +282,111 @@ export class AuthService {
         throw new UnauthorizedException('Invalid or expired refresh token');
       }
 
+      // Fetch user's organisations
+      const organisationUsers = await this.organisationUsersRepository.find({
+        where: { userId: user.id },
+        relations: ['organisation'],
+      });
+
+      // Use organisation from token or get primary
+      const currentOrg =
+        organisationUsers.find(
+          (ou) => ou.organisationId === payload.organisationId,
+        ) ||
+        organisationUsers.find((ou) => ou.isPrimary) ||
+        organisationUsers[0];
+
       // Generate new access token
       const newPayload: JwtPayload = {
         sub: user.id,
         email: user.email,
-        role: user.role,
+        organisationId: currentOrg?.organisation.id,
+        organisationType: currentOrg?.organisation.type,
+        role: currentOrg?.role,
       };
 
       const accessToken = this.jwtService.sign(newPayload);
 
-      // Return new tokens (using same refresh token for simplicity)
-      // In production, you might want to rotate refresh tokens
+      const organisations = organisationUsers.map((ou) => ({
+        id: ou.organisation.id,
+        name: ou.organisation.name,
+        type: ou.organisation.type,
+        role: ou.role,
+        isPrimary: ou.isPrimary,
+      }));
+
       return {
         accessToken,
-        refreshToken: refreshToken, // Return same token or generate new one
+        refreshToken: refreshToken,
         user: {
           id: user.id,
           email: user.email,
           firstName: user.firstName,
           lastName: user.lastName,
-          role: user.role,
-          clinicId: user.clinicId,
-          manufacturerId: user.manufacturerId,
+          phone: user.phone,
           isActive: user.isActive,
           isEmailVerified: user.isEmailVerified,
         },
+        currentOrganisation: currentOrg
+          ? {
+              id: currentOrg.organisation.id,
+              name: currentOrg.organisation.name,
+              type: currentOrg.organisation.type,
+              role: currentOrg.role,
+            }
+          : null,
+        organisations,
       };
     } catch (error) {
-      console.error('[Auth Service] Refresh token - Verification failed:', {
-        errorMessage: error?.message,
-        errorName: error?.name,
-        errorStack: error?.stack,
-        refreshTokenLength: refreshToken?.length,
-        refreshTokenPreview: refreshToken ? refreshToken.substring(0, 30) + '...' : 'missing',
-      });
+      console.error(
+        '[Auth Service] Refresh token - Verification failed:',
+        error,
+      );
       throw new UnauthorizedException('Invalid or expired refresh token');
     }
   }
-}
 
+  async switchOrganisation(userId: string, organisationId: string) {
+    // Verify user has access to this organisation
+    const orgUser = await this.organisationUsersRepository.findOne({
+      where: { userId, organisationId },
+      relations: ['organisation'],
+    });
+
+    if (!orgUser) {
+      throw new UnauthorizedException(
+        'User does not have access to this organisation',
+      );
+    }
+
+    // Get user
+    const user = await this.usersRepository.findOne({
+      where: { id: userId },
+    });
+
+    if (!user) {
+      throw new UnauthorizedException('User not found');
+    }
+
+    // Generate new token with new organisation context
+    const payload: JwtPayload = {
+      sub: user.id,
+      email: user.email,
+      organisationId: orgUser.organisation.id,
+      organisationType: orgUser.organisation.type,
+      role: orgUser.role,
+    };
+
+    const accessToken = this.jwtService.sign(payload);
+
+    return {
+      accessToken,
+      organisation: {
+        id: orgUser.organisation.id,
+        name: orgUser.organisation.name,
+        type: orgUser.organisation.type,
+        role: orgUser.role,
+      },
+    };
+  }
+}

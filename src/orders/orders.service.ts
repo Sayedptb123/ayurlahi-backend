@@ -39,7 +39,9 @@ export class OrdersService {
     // Role-based filtering
     if (userRole === 'clinic') {
       // Clinic users can only see their own orders
-      const user = await this.usersRepository.findOne({ where: { id: userId } });
+      const user = await this.usersRepository.findOne({
+        where: { id: userId },
+      });
       if (user && user.clinicId) {
         queryBuilder.andWhere('order.clinicId = :clinicId', {
           clinicId: user.clinicId,
@@ -53,7 +55,9 @@ export class OrdersService {
       }
     } else if (userRole === 'manufacturer') {
       // Manufacturer users can only see orders with their products
-      const user = await this.usersRepository.findOne({ where: { id: userId } });
+      const user = await this.usersRepository.findOne({
+        where: { id: userId },
+      });
       if (user && user.manufacturerId) {
         queryBuilder.andWhere('items.manufacturerId = :manufacturerId', {
           manufacturerId: user.manufacturerId,
@@ -104,12 +108,16 @@ export class OrdersService {
 
     // Role-based access control
     if (userRole === 'clinic') {
-      const user = await this.usersRepository.findOne({ where: { id: userId } });
+      const user = await this.usersRepository.findOne({
+        where: { id: userId },
+      });
       if (!user || user.clinicId !== order.clinicId) {
         throw new ForbiddenException('You do not have access to this order');
       }
     } else if (userRole === 'manufacturer') {
-      const user = await this.usersRepository.findOne({ where: { id: userId } });
+      const user = await this.usersRepository.findOne({
+        where: { id: userId },
+      });
       if (!user || !user.manufacturerId) {
         throw new ForbiddenException('You do not have access to this order');
       }
@@ -209,7 +217,8 @@ export class OrdersService {
 
     const shippingCharges = 0; // Can be calculated based on address
     const platformFee = 0; // Can be calculated
-    const totalAmount = subtotal + totalGstAmount + shippingCharges + platformFee;
+    const totalAmount =
+      subtotal + totalGstAmount + shippingCharges + platformFee;
 
     // Generate order number
     const orderNumber = `ORD-${Date.now()}-${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
@@ -225,10 +234,10 @@ export class OrdersService {
       shippingCharges,
       platformFee,
       totalAmount,
-      shippingAddress:
-        createOrderDto.shippingAddress || clinic.address || null,
+      shippingAddress: createOrderDto.shippingAddress || clinic.address || null,
       shippingCity: createOrderDto.shippingCity || clinic.city || null,
-      shippingDistrict: createOrderDto.shippingDistrict || clinic.district || null,
+      shippingDistrict:
+        createOrderDto.shippingDistrict || clinic.district || null,
       shippingState: createOrderDto.shippingState || clinic.state || null,
       shippingPincode: createOrderDto.shippingPincode || clinic.pincode || null,
       shippingPhone: createOrderDto.shippingPhone || clinic.phone || null,
@@ -289,7 +298,9 @@ export class OrdersService {
 
     // Only admin, support, and manufacturer can update status
     if (!['admin', 'support', 'manufacturer'].includes(userRole)) {
-      throw new ForbiddenException('You do not have permission to update order status');
+      throw new ForbiddenException(
+        'You do not have permission to update order status',
+      );
     }
 
     // Update status
@@ -300,9 +311,15 @@ export class OrdersService {
       order.confirmedAt = new Date();
     } else if (updateDto.status === OrderStatus.SHIPPED && !order.shippedAt) {
       order.shippedAt = new Date();
-    } else if (updateDto.status === OrderStatus.DELIVERED && !order.deliveredAt) {
+    } else if (
+      updateDto.status === OrderStatus.DELIVERED &&
+      !order.deliveredAt
+    ) {
       order.deliveredAt = new Date();
-    } else if (updateDto.status === OrderStatus.CANCELLED && !order.cancelledAt) {
+    } else if (
+      updateDto.status === OrderStatus.CANCELLED &&
+      !order.cancelledAt
+    ) {
       order.cancelledAt = new Date();
       order.cancelledBy = userId;
       order.cancellationReason = updateDto.notes || null;
@@ -311,4 +328,3 @@ export class OrdersService {
     return this.ordersRepository.save(order);
   }
 }
-

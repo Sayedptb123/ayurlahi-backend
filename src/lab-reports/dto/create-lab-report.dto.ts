@@ -65,6 +65,3 @@ export class CreateLabReportDto {
   @Type(() => LabTestDto)
   tests: LabTestDto[];
 }
-
-
-

@@ -104,9 +104,8 @@ describe('HMS Integration Tests', () => {
     medicalRecordsService = module.get<MedicalRecordsService>(
       MedicalRecordsService,
     );
-    prescriptionsService = module.get<PrescriptionsService>(
-      PrescriptionsService,
-    );
+    prescriptionsService =
+      module.get<PrescriptionsService>(PrescriptionsService);
     labReportsService = module.get<LabReportsService>(LabReportsService);
     patientBillingService = module.get<PatientBillingService>(
       PatientBillingService,
@@ -180,11 +179,10 @@ describe('HMS Integration Tests', () => {
       });
 
       it('should find all patients', async () => {
-        const result = await patientsService.findAll(
-          testUser.id,
-          'clinic',
-          { page: 1, limit: 10 },
-        );
+        const result = await patientsService.findAll(testUser.id, 'clinic', {
+          page: 1,
+          limit: 10,
+        });
 
         expect(result.data).toBeDefined();
         expect(result.total).toBeGreaterThan(0);
@@ -243,11 +241,10 @@ describe('HMS Integration Tests', () => {
       });
 
       it('should find all doctors', async () => {
-        const result = await doctorsService.findAll(
-          testUser.id,
-          'clinic',
-          { page: 1, limit: 10 },
-        );
+        const result = await doctorsService.findAll(testUser.id, 'clinic', {
+          page: 1,
+          limit: 10,
+        });
 
         expect(result.data).toBeDefined();
         expect(result.total).toBeGreaterThan(0);
@@ -453,11 +450,10 @@ describe('HMS Integration Tests', () => {
       });
 
       it('should find all lab reports', async () => {
-        const result = await labReportsService.findAll(
-          testUser.id,
-          'clinic',
-          { page: 1, limit: 10 },
-        );
+        const result = await labReportsService.findAll(testUser.id, 'clinic', {
+          page: 1,
+          limit: 10,
+        });
 
         expect(result.data).toBeDefined();
         expect(result.total).toBeGreaterThan(0);
@@ -538,6 +534,3 @@ describe('HMS Integration Tests', () => {
     });
   });
 });
-
-
-

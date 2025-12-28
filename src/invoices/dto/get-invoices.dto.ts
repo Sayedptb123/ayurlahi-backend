@@ -25,8 +25,3 @@ export class GetInvoicesDto {
   @IsEnum(InvoiceStatus)
   status?: InvoiceStatus;
 }
-
-
-
-
-

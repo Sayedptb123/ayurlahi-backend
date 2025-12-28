@@ -24,6 +24,3 @@ export class GetPatientsDto {
   @MaxLength(10)
   bloodGroup?: string;
 }
-
-
-

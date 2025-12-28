@@ -70,6 +70,3 @@ export class UpdateBillDto {
   @Type(() => BillItemDto)
   items?: BillItemDto[];
 }
-
-
-

@@ -19,8 +19,3 @@ export class GetDisputesDto {
   @IsEnum(DisputeStatus)
   status?: DisputeStatus;
 }
-
-
-
-
-

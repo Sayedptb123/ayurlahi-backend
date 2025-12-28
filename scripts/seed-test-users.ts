@@ -71,13 +71,12 @@ async function bootstrap() {
         continue;
       }
       
-      // Create user - using raw insert to match database column names
+      // Create user - new structure (no role, clinicId, manufacturerId - those are in organisation_users)
       const user = userRepository.create({
         email: userData.email,
         passwordHash: userData.passwordHash, // Maps to password_hash column
         firstName: userData.firstName, // Maps to first_name column
         lastName: userData.lastName, // Maps to last_name column
-        role: userData.role,
         phone: userData.phone,
         isActive: userData.isActive, // Maps to is_active column
         isEmailVerified: userData.isEmailVerified, // Maps to is_email_verified column
@@ -85,7 +84,7 @@ async function bootstrap() {
       
       const savedUser = await userRepository.save(user);
       
-      console.log(`✅ Created ${userData.role} user: ${userData.email} (ID: ${savedUser.id})`);
+      console.log(`✅ Created user: ${userData.email} (ID: ${savedUser.id})`);
     } catch (error) {
       console.error(`✗ Failed to create user ${userData.email}:`, error.message);
     }

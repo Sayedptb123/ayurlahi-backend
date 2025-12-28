@@ -96,6 +96,3 @@ export class Appointment {
   @UpdateDateColumn({ name: 'updatedAt' })
   updatedAt: Date;
 }
-
-
-

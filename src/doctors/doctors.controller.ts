@@ -27,18 +27,32 @@ export class DoctorsController {
     return this.doctorsService.create(
       req.user.userId,
       req.user.role,
+      req.user.organisationId,
+      req.user.organisationType,
       createDto,
     );
   }
 
   @Get()
   findAll(@Request() req, @Query() query: GetDoctorsDto) {
-    return this.doctorsService.findAll(req.user.userId, req.user.role, query);
+    return this.doctorsService.findAll(
+      req.user.userId,
+      req.user.role,
+      req.user.organisationId,
+      req.user.organisationType,
+      query,
+    );
   }
 
   @Get(':id')
   findOne(@Param('id', ParseUUIDPipe) id: string, @Request() req) {
-    return this.doctorsService.findOne(id, req.user.userId, req.user.role);
+    return this.doctorsService.findOne(
+      id,
+      req.user.userId,
+      req.user.role,
+      req.user.organisationId,
+      req.user.organisationType,
+    );
   }
 
   @Patch(':id')
@@ -51,15 +65,20 @@ export class DoctorsController {
       id,
       req.user.userId,
       req.user.role,
+      req.user.organisationId,
+      req.user.organisationType,
       updateDto,
     );
   }
 
   @Delete(':id')
   remove(@Param('id', ParseUUIDPipe) id: string, @Request() req) {
-    return this.doctorsService.remove(id, req.user.userId, req.user.role);
+    return this.doctorsService.remove(
+      id,
+      req.user.userId,
+      req.user.role,
+      req.user.organisationId,
+      req.user.organisationType,
+    );
   }
 }
-
-
-

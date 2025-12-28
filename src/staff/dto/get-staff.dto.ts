@@ -23,5 +23,3 @@ export class GetStaffDto {
   @IsBoolean()
   isActive?: boolean;
 }
-
-

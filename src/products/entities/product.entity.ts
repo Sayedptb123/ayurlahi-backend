@@ -40,7 +40,24 @@ export class Product {
   @Column({ type: 'decimal', precision: 10, scale: 2 })
   price: number;
 
-  @Column({ type: 'decimal', precision: 10, scale: 2, default: 0, name: 'gstRate' })
+  @Column({
+    type: 'enum',
+    enum: ['INTERNAL', 'DROPSHIP'],
+    default: 'INTERNAL',
+    name: 'fulfillmentType'
+  })
+  fulfillmentType: 'INTERNAL' | 'DROPSHIP';
+
+  @Column({ type: 'uuid', nullable: true, name: 'vendorId' })
+  vendorId: string | null;
+
+  @Column({
+    type: 'decimal',
+    precision: 10,
+    scale: 2,
+    default: 0,
+    name: 'gstRate',
+  })
   gstRate: number;
 
   @Column({ type: 'int', default: 0, name: 'stockQuantity' })
@@ -64,7 +81,12 @@ export class Product {
   @Column({ type: 'boolean', default: false, name: 'requiresPrescription' })
   requiresPrescription: boolean;
 
-  @Column({ type: 'varchar', length: 50, nullable: true, name: 'licenseNumber' })
+  @Column({
+    type: 'varchar',
+    length: 50,
+    nullable: true,
+    name: 'licenseNumber',
+  })
   licenseNumber: string | null;
 
   @CreateDateColumn({ name: 'createdAt' })
@@ -76,8 +98,3 @@ export class Product {
   @Column({ type: 'timestamp', nullable: true, name: 'deletedAt' })
   deletedAt: Date | null;
 }
-
-
-
-
-

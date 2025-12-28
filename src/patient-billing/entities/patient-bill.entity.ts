@@ -145,6 +145,3 @@ export class PatientBill {
   @UpdateDateColumn({ name: 'updatedAt' })
   updatedAt: Date;
 }
-
-
-

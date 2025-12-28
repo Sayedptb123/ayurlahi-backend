@@ -4,18 +4,13 @@ import { AnalyticsController } from './analytics.controller';
 import { AnalyticsService } from './analytics.service';
 import { Order } from '../orders/entities/order.entity';
 import { User } from '../users/entities/user.entity';
-import { Clinic } from '../clinics/entities/clinic.entity';
-import { Manufacturer } from '../manufacturers/entities/manufacturer.entity';
+import { Organisation } from '../organisations/entities/organisation.entity';
+import { Dispute } from '../disputes/entities/dispute.entity';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Order, User, Clinic, Manufacturer])],
+  imports: [TypeOrmModule.forFeature([Order, User, Organisation, Dispute])],
   controllers: [AnalyticsController],
   providers: [AnalyticsService],
   exports: [AnalyticsService],
 })
-export class AnalyticsModule {}
-
-
-
-
-
+export class AnalyticsModule { }

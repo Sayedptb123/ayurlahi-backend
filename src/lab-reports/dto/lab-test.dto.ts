@@ -40,6 +40,3 @@ export class LabTestDto {
   @IsString()
   notes?: string;
 }
-
-
-

@@ -8,7 +8,10 @@ import {
   MaxLength,
 } from 'class-validator';
 import { Type } from 'class-transformer';
-import { AppointmentStatus, AppointmentType } from '../entities/appointment.entity';
+import {
+  AppointmentStatus,
+  AppointmentType,
+} from '../entities/appointment.entity';
 
 export class GetAppointmentsDto {
   @IsOptional()
@@ -53,6 +56,3 @@ export class GetAppointmentsDto {
   @IsEnum(AppointmentType)
   appointmentType?: AppointmentType;
 }
-
-
-

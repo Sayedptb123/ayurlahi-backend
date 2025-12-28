@@ -24,10 +24,7 @@ export class InvoicesController {
   }
 
   @Get(':id')
-  async findOne(
-    @Param('id', ParseUUIDPipe) id: string,
-    @Request() req,
-  ) {
+  async findOne(@Param('id', ParseUUIDPipe) id: string, @Request() req) {
     return this.invoicesService.findOne(id, req.user.userId, req.user.role);
   }
 
@@ -52,4 +49,3 @@ export class InvoicesController {
     throw new Error('Invoice file not found');
   }
 }
-

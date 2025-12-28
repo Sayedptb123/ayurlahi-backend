@@ -9,7 +9,10 @@ import {
   Max,
   MaxLength,
 } from 'class-validator';
-import { AppointmentStatus, AppointmentType } from '../entities/appointment.entity';
+import {
+  AppointmentStatus,
+  AppointmentType,
+} from '../entities/appointment.entity';
 
 export class CreateAppointmentDto {
   @IsNotEmpty()
@@ -53,6 +56,3 @@ export class CreateAppointmentDto {
   @IsString()
   notes?: string;
 }
-
-
-

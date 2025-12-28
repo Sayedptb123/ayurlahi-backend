@@ -43,21 +43,26 @@ export class PatientBillingService {
     return { subtotal, total: subtotal };
   }
 
-  async create(userId: string, userRole: string, createDto: CreateBillDto) {
+  async create(
+    userId: string,
+    userRole: string,
+    organisationId: string | undefined,
+    organisationType: string | undefined,
+    createDto: CreateBillDto,
+  ) {
     // Only clinic users and admin can create bills
-    if (!['clinic', 'admin'].includes(userRole)) {
+    if (
+      organisationType !== 'CLINIC' &&
+      userRole !== 'SUPER_ADMIN' &&
+      userRole !== 'SUPPORT'
+    ) {
       throw new ForbiddenException(
         'You do not have permission to create bills',
       );
     }
 
-    const user = await this.usersRepository.findOne({ where: { id: userId } });
-    if (!user) {
-      throw new NotFoundException('User not found');
-    }
-
-    const clinicId = user.clinicId;
-    if (!clinicId && userRole !== 'admin') {
+    const clinicId = organisationId;
+    if (!clinicId && userRole !== 'SUPER_ADMIN' && userRole !== 'SUPPORT') {
       throw new BadRequestException('Clinic not associated with user');
     }
 
@@ -161,7 +166,13 @@ export class PatientBillingService {
     return this.billsRepository.save(bill);
   }
 
-  async findAll(userId: string, userRole: string, query: GetBillsDto) {
+  async findAll(
+    userId: string,
+    userRole: string,
+    organisationId: string | undefined,
+    organisationType: string | undefined,
+    query: GetBillsDto,
+  ) {
     const {
       page = 1,
       limit = 20,
@@ -174,13 +185,12 @@ export class PatientBillingService {
     const skip = (page - 1) * limit;
 
     // Only clinic users and admin can view bills
-    if (!['clinic', 'admin'].includes(userRole)) {
+    if (
+      organisationType !== 'CLINIC' &&
+      userRole !== 'SUPER_ADMIN' &&
+      userRole !== 'SUPPORT'
+    ) {
       throw new ForbiddenException('You do not have permission to view bills');
-    }
-
-    const user = await this.usersRepository.findOne({ where: { id: userId } });
-    if (!user) {
-      throw new NotFoundException('User not found');
     }
 
     // Build query
@@ -191,8 +201,8 @@ export class PatientBillingService {
       .leftJoinAndSelect('bill.items', 'items');
 
     // Clinic users can only see their clinic's bills
-    if (userRole === 'clinic') {
-      if (!user.clinicId) {
+    if (organisationType === 'CLINIC') {
+      if (!organisationId) {
         return {
           data: [],
           total: 0,
@@ -202,7 +212,7 @@ export class PatientBillingService {
         };
       }
       queryBuilder.where('bill.clinicId = :clinicId', {
-        clinicId: user.clinicId,
+        clinicId: organisationId,
       });
     }
 
@@ -222,10 +232,10 @@ export class PatientBillingService {
     }
 
     if (startDate && endDate) {
-      queryBuilder.andWhere(
-        'bill.billDate BETWEEN :startDate AND :endDate',
-        { startDate, endDate },
-      );
+      queryBuilder.andWhere('bill.billDate BETWEEN :startDate AND :endDate', {
+        startDate,
+        endDate,
+      });
     } else if (startDate) {
       queryBuilder.andWhere('bill.billDate >= :startDate', { startDate });
     } else if (endDate) {
@@ -250,7 +260,13 @@ export class PatientBillingService {
     };
   }
 
-  async findOne(id: string, userId: string, userRole: string) {
+  async findOne(
+    id: string,
+    userId: string,
+    userRole: string,
+    organisationId: string | undefined,
+    organisationType: string | undefined,
+  ) {
     const bill = await this.billsRepository.findOne({
       where: { id },
       relations: ['clinic', 'patient', 'appointment', 'items'],
@@ -261,9 +277,8 @@ export class PatientBillingService {
     }
 
     // Access control
-    if (userRole === 'clinic') {
-      const user = await this.usersRepository.findOne({ where: { id: userId } });
-      if (!user || user.clinicId !== bill.clinicId) {
+    if (organisationType === 'CLINIC') {
+      if (!organisationId || organisationId !== bill.clinicId) {
         throw new ForbiddenException('You do not have access to this bill');
       }
     }
@@ -275,9 +290,17 @@ export class PatientBillingService {
     id: string,
     userId: string,
     userRole: string,
+    organisationId: string | undefined,
+    organisationType: string | undefined,
     updateDto: UpdateBillDto,
   ) {
-    const bill = await this.findOne(id, userId, userRole);
+    const bill = await this.findOne(
+      id,
+      userId,
+      userRole,
+      organisationId,
+      organisationType,
+    );
 
     // Check billNumber uniqueness if being updated
     if (updateDto.billNumber && updateDto.billNumber !== bill.billNumber) {
@@ -336,7 +359,11 @@ export class PatientBillingService {
     }
 
     // Recalculate totals if items or amounts changed
-    if (updateDto.items !== undefined || updateDto.discount !== undefined || updateDto.tax !== undefined) {
+    if (
+      updateDto.items !== undefined ||
+      updateDto.discount !== undefined ||
+      updateDto.tax !== undefined
+    ) {
       const { subtotal } = this.calculateBillTotals(bill.items);
       bill.subtotal = subtotal;
       bill.discount = updateDto.discount ?? bill.discount;
@@ -348,8 +375,7 @@ export class PatientBillingService {
     // Update other fields
     if (updateDto.billNumber !== undefined)
       bill.billNumber = updateDto.billNumber;
-    if (updateDto.patientId !== undefined)
-      bill.patientId = updateDto.patientId;
+    if (updateDto.patientId !== undefined) bill.patientId = updateDto.patientId;
     if (updateDto.appointmentId !== undefined)
       bill.appointmentId = updateDto.appointmentId;
     if (updateDto.billDate !== undefined)
@@ -384,9 +410,17 @@ export class PatientBillingService {
     id: string,
     userId: string,
     userRole: string,
+    organisationId: string | undefined,
+    organisationType: string | undefined,
     paymentDto: PaymentDto,
   ) {
-    const bill = await this.findOne(id, userId, userRole);
+    const bill = await this.findOne(
+      id,
+      userId,
+      userRole,
+      organisationId,
+      organisationType,
+    );
 
     if (bill.status === BillStatus.PAID) {
       throw new BadRequestException('Bill is already fully paid');
@@ -427,12 +461,21 @@ export class PatientBillingService {
     return this.billsRepository.save(bill);
   }
 
-  async remove(id: string, userId: string, userRole: string) {
-    const bill = await this.findOne(id, userId, userRole);
+  async remove(
+    id: string,
+    userId: string,
+    userRole: string,
+    organisationId: string | undefined,
+    organisationType: string | undefined,
+  ) {
+    const bill = await this.findOne(
+      id,
+      userId,
+      userRole,
+      organisationId,
+      organisationType,
+    );
     await this.billsRepository.remove(bill);
     return { message: 'Bill deleted successfully' };
   }
 }
-
-
-

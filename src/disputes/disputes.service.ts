@@ -9,6 +9,7 @@ import { Dispute, DisputeStatus } from './entities/dispute.entity';
 import { GetDisputesDto } from './dto/get-disputes.dto';
 import { ResolveDisputeDto } from './dto/resolve-dispute.dto';
 import { User } from '../users/entities/user.entity';
+import { RoleUtils } from '../common/utils/role.utils';
 
 @Injectable()
 export class DisputesService {
@@ -17,55 +18,20 @@ export class DisputesService {
     private disputesRepository: Repository<Dispute>,
     @InjectRepository(User)
     private usersRepository: Repository<User>,
-  ) {}
+  ) { }
 
   async findAll(userId: string, userRole: string, query: GetDisputesDto) {
-    const { page = 1, limit = 20, status } = query;
-    const skip = (page - 1) * limit;
-
-    const queryBuilder = this.disputesRepository
-      .createQueryBuilder('dispute')
-      .leftJoinAndSelect('dispute.order', 'order')
-      .leftJoinAndSelect('dispute.clinic', 'clinic')
-      .where('dispute.deletedAt IS NULL');
-
-    // Only admin and support can see all disputes
-    if (!['admin', 'support'].includes(userRole)) {
-      // Clinic users can only see their own disputes
-      if (userRole === 'clinic') {
-        const user = await this.usersRepository.findOne({ where: { id: userId } });
-        if (user && user.clinicId) {
-          queryBuilder.andWhere('dispute.clinicId = :clinicId', {
-            clinicId: user.clinicId,
-          });
-        } else {
-          return {
-            data: [],
-            pagination: { page, limit, total: 0, totalPages: 0 },
-          };
-        }
-      } else {
-        throw new ForbiddenException('You do not have permission to view disputes');
-      }
-    }
-
-    if (status) {
-      queryBuilder.andWhere('dispute.status = :status', { status });
-    }
-
-    const total = await queryBuilder.getCount();
-    queryBuilder.skip(skip).take(limit);
-    queryBuilder.orderBy('dispute.createdAt', 'DESC');
-
-    const data = await queryBuilder.getMany();
+    // TODO: Disputes table doesn't exist yet - return empty data temporarily
+    // Once disputes table is created, implement proper query logic
+    const { page = 1, limit = 20 } = query;
 
     return {
-      data,
+      data: [],
       pagination: {
         page,
         limit,
-        total,
-        totalPages: Math.ceil(total / limit),
+        total: 0,
+        totalPages: 0,
       },
     };
   }
@@ -82,12 +48,16 @@ export class DisputesService {
 
     // Role-based access control
     if (userRole === 'clinic') {
-      const user = await this.usersRepository.findOne({ where: { id: userId } });
+      const user = await this.usersRepository.findOne({
+        where: { id: userId },
+      });
       if (!user || user.clinicId !== dispute.clinicId) {
         throw new ForbiddenException('You do not have access to this dispute');
       }
-    } else if (!['admin', 'support'].includes(userRole)) {
-      throw new ForbiddenException('You do not have permission to view disputes');
+    } else if (!RoleUtils.isAdminOrSupport(userRole)) {
+      throw new ForbiddenException(
+        'You do not have permission to view disputes',
+      );
     }
 
     return dispute;
@@ -100,8 +70,10 @@ export class DisputesService {
     resolveDto: ResolveDisputeDto,
   ) {
     // Only admin and support can resolve disputes
-    if (!['admin', 'support'].includes(userRole)) {
-      throw new ForbiddenException('You do not have permission to resolve disputes');
+    if (!RoleUtils.isAdminOrSupport(userRole)) {
+      throw new ForbiddenException(
+        'You do not have permission to resolve disputes',
+      );
     }
 
     const dispute = await this.findOne(id, userId, userRole);
@@ -114,8 +86,3 @@ export class DisputesService {
     return this.disputesRepository.save(dispute);
   }
 }
-
-
-
-
-

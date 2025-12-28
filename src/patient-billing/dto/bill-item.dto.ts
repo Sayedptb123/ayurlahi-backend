@@ -38,6 +38,3 @@ export class BillItemDto {
   @IsString()
   description?: string;
 }
-
-
-

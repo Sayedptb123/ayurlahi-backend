@@ -12,8 +12,3 @@ import { User } from '../users/entities/user.entity';
   exports: [DisputesService],
 })
 export class DisputesModule {}
-
-
-
-
-

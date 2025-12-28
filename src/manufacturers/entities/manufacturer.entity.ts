@@ -48,7 +48,12 @@ export class Manufacturer {
   @Column({ type: 'varchar', length: 20, nullable: true })
   phone: string | null;
 
-  @Column({ type: 'varchar', length: 20, nullable: true, name: 'whatsappNumber' })
+  @Column({
+    type: 'varchar',
+    length: 20,
+    nullable: true,
+    name: 'whatsappNumber',
+  })
   whatsappNumber: string | null;
 
   @Column({
@@ -68,7 +73,13 @@ export class Manufacturer {
   @Column({ type: 'boolean', default: false, name: 'isVerified' })
   isVerified: boolean;
 
-  @Column({ type: 'decimal', precision: 5, scale: 2, default: 0, name: 'commissionRate' })
+  @Column({
+    type: 'decimal',
+    precision: 5,
+    scale: 2,
+    default: 0,
+    name: 'commissionRate',
+  })
   commissionRate: number;
 
   @Column({ type: 'timestamp', nullable: true, name: 'approvedAt' })
@@ -86,8 +97,3 @@ export class Manufacturer {
   @Column({ type: 'timestamp', nullable: true, name: 'deletedAt' })
   deletedAt: Date | null;
 }
-
-
-
-
-

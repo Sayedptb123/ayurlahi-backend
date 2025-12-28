@@ -1,4 +1,11 @@
-import { IsOptional, IsInt, IsString, IsBoolean, IsUUID, Min } from 'class-validator';
+import {
+  IsOptional,
+  IsInt,
+  IsString,
+  IsBoolean,
+  IsUUID,
+  Min,
+} from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class GetProductsDto {
@@ -31,8 +38,3 @@ export class GetProductsDto {
   @IsBoolean()
   isActive?: boolean;
 }
-
-
-
-
-

@@ -22,22 +22,27 @@ export class PatientsService {
     private usersRepository: Repository<User>,
   ) {}
 
-  async create(userId: string, userRole: string, createDto: CreatePatientDto) {
+  async create(
+    userId: string,
+    userRole: string,
+    organisationId: string | undefined,
+    organisationType: string | undefined,
+    createDto: CreatePatientDto,
+  ) {
     // Only clinic users and admin can create patients
-    if (!['clinic', 'admin'].includes(userRole)) {
+    if (
+      organisationType !== 'CLINIC' &&
+      userRole !== 'SUPER_ADMIN' &&
+      userRole !== 'SUPPORT'
+    ) {
       throw new ForbiddenException(
         'You do not have permission to create patients',
       );
     }
 
-    const user = await this.usersRepository.findOne({ where: { id: userId } });
-    if (!user) {
-      throw new NotFoundException('User not found');
-    }
-
-    // Get clinicId - admin can specify, clinic users use their own
-    const clinicId = user.clinicId;
-    if (!clinicId && userRole !== 'admin') {
+    // Get clinicId from organisationId (in new structure, clinic is an organisation)
+    const clinicId = organisationId;
+    if (!clinicId && userRole !== 'SUPER_ADMIN' && userRole !== 'SUPPORT') {
       throw new BadRequestException('Clinic not associated with user');
     }
 
@@ -66,28 +71,33 @@ export class PatientsService {
     return this.patientsRepository.save(patient);
   }
 
-  async findAll(userId: string, userRole: string, query: GetPatientsDto) {
+  async findAll(
+    userId: string,
+    userRole: string,
+    organisationId: string | undefined,
+    organisationType: string | undefined,
+    query: GetPatientsDto,
+  ) {
     const { page = 1, limit = 20, search, bloodGroup } = query;
     const skip = (page - 1) * limit;
 
     // Only clinic users and admin can view patients
-    if (!['clinic', 'admin'].includes(userRole)) {
+    if (
+      organisationType !== 'CLINIC' &&
+      userRole !== 'SUPER_ADMIN' &&
+      userRole !== 'SUPPORT'
+    ) {
       throw new ForbiddenException(
         'You do not have permission to view patients',
       );
-    }
-
-    const user = await this.usersRepository.findOne({ where: { id: userId } });
-    if (!user) {
-      throw new NotFoundException('User not found');
     }
 
     // Build query using query builder for complex search
     const queryBuilder = this.patientsRepository.createQueryBuilder('patient');
 
     // Clinic users can only see their clinic's patients
-    if (userRole === 'clinic') {
-      if (!user.clinicId) {
+    if (organisationType === 'CLINIC') {
+      if (!organisationId) {
         return {
           data: [],
           total: 0,
@@ -97,7 +107,7 @@ export class PatientsService {
         };
       }
       queryBuilder.where('patient.clinicId = :clinicId', {
-        clinicId: user.clinicId,
+        clinicId: organisationId,
       });
     }
 
@@ -117,10 +127,7 @@ export class PatientsService {
     }
 
     // Order and pagination
-    queryBuilder
-      .orderBy('patient.createdAt', 'DESC')
-      .skip(skip)
-      .take(limit);
+    queryBuilder.orderBy('patient.createdAt', 'DESC').skip(skip).take(limit);
 
     const [data, total] = await queryBuilder.getManyAndCount();
 
@@ -133,7 +140,13 @@ export class PatientsService {
     };
   }
 
-  async findOne(id: string, userId: string, userRole: string) {
+  async findOne(
+    id: string,
+    userId: string,
+    userRole: string,
+    organisationId: string | undefined,
+    organisationType: string | undefined,
+  ) {
     const patient = await this.patientsRepository.findOne({
       where: { id },
       relations: ['clinic'],
@@ -144,12 +157,9 @@ export class PatientsService {
     }
 
     // Access control
-    if (userRole === 'clinic') {
-      const user = await this.usersRepository.findOne({ where: { id: userId } });
-      if (!user || user.clinicId !== patient.clinicId) {
-        throw new ForbiddenException(
-          'You do not have access to this patient',
-        );
+    if (organisationType === 'CLINIC') {
+      if (!organisationId || organisationId !== patient.clinicId) {
+        throw new ForbiddenException('You do not have access to this patient');
       }
     }
 
@@ -160,9 +170,17 @@ export class PatientsService {
     id: string,
     userId: string,
     userRole: string,
+    organisationId: string | undefined,
+    organisationType: string | undefined,
     updateDto: UpdatePatientDto,
   ) {
-    const patient = await this.findOne(id, userId, userRole);
+    const patient = await this.findOne(
+      id,
+      userId,
+      userRole,
+      organisationId,
+      organisationType,
+    );
 
     // Check patientId uniqueness if being updated
     if (updateDto.patientId && updateDto.patientId !== patient.patientId) {
@@ -198,17 +216,29 @@ export class PatientsService {
       patient.emergencyContact = updateDto.emergencyContact;
     if (updateDto.bloodGroup !== undefined)
       patient.bloodGroup = updateDto.bloodGroup;
-    if (updateDto.allergies !== undefined) patient.allergies = updateDto.allergies;
+    if (updateDto.allergies !== undefined)
+      patient.allergies = updateDto.allergies;
     if (updateDto.medicalHistory !== undefined)
       patient.medicalHistory = updateDto.medicalHistory;
 
     return this.patientsRepository.save(patient);
   }
 
-  async remove(id: string, userId: string, userRole: string) {
-    const patient = await this.findOne(id, userId, userRole);
+  async remove(
+    id: string,
+    userId: string,
+    userRole: string,
+    organisationId: string | undefined,
+    organisationType: string | undefined,
+  ) {
+    const patient = await this.findOne(
+      id,
+      userId,
+      userRole,
+      organisationId,
+      organisationType,
+    );
     await this.patientsRepository.remove(patient);
     return { message: 'Patient deleted successfully' };
   }
 }
-

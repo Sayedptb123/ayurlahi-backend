@@ -21,14 +21,26 @@ export class DisputesController {
 
   @Get()
   async findAll(@Request() req, @Query() query: GetDisputesDto) {
-    return this.disputesService.findAll(req.user.userId, req.user.role, query);
+    try {
+      return await this.disputesService.findAll(
+        req.user.userId,
+        req.user.role,
+        query,
+      );
+    } catch (error) {
+      console.error('[Disputes Controller] Error in findAll:', {
+        error: error.message,
+        stack: error.stack,
+        userRole: req.user?.role,
+        userId: req.user?.userId,
+        query,
+      });
+      throw error;
+    }
   }
 
   @Get(':id')
-  async findOne(
-    @Param('id', ParseUUIDPipe) id: string,
-    @Request() req,
-  ) {
+  async findOne(@Param('id', ParseUUIDPipe) id: string, @Request() req) {
     return this.disputesService.findOne(id, req.user.userId, req.user.role);
   }
 
@@ -46,8 +58,3 @@ export class DisputesController {
     );
   }
 }
-
-
-
-
-

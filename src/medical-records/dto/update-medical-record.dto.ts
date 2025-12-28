@@ -57,6 +57,3 @@ export class UpdateMedicalRecordDto {
   @IsUrl({}, { each: true })
   attachments?: string[];
 }
-
-
-

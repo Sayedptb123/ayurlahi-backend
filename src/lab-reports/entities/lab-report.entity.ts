@@ -93,6 +93,3 @@ export class LabReport {
   @UpdateDateColumn({ name: 'updatedAt' })
   updatedAt: Date;
 }
-
-
-

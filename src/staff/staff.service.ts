@@ -6,7 +6,11 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { Staff, StaffPosition, OrganizationType } from './entities/staff.entity';
+import {
+  Staff,
+  StaffPosition,
+  OrganizationType,
+} from './entities/staff.entity';
 import { User } from '../users/entities/user.entity';
 import { CreateStaffDto } from './dto/create-staff.dto';
 import { UpdateStaffDto } from './dto/update-staff.dto';
@@ -123,7 +127,9 @@ export class StaffService {
 
     // Verify user belongs to same organization (unless admin)
     if (userRole !== 'admin') {
-      const user = await this.usersRepository.findOne({ where: { id: userId } });
+      const user = await this.usersRepository.findOne({
+        where: { id: userId },
+      });
       if (!user) {
         throw new NotFoundException('User not found');
       }
@@ -168,9 +174,7 @@ export class StaffService {
         : this.manufacturerPositions;
 
     if (!allowedPositions.includes(createDto.position)) {
-      throw new BadRequestException(
-        'Invalid position for organization type',
-      );
+      throw new BadRequestException('Invalid position for organization type');
     }
 
     // Validate positionCustom if position is 'other'
@@ -230,7 +234,9 @@ export class StaffService {
 
     // Verify user belongs to same organization (unless admin)
     if (userRole !== 'admin') {
-      const user = await this.usersRepository.findOne({ where: { id: userId } });
+      const user = await this.usersRepository.findOne({
+        where: { id: userId },
+      });
       if (!user) {
         throw new NotFoundException('User not found');
       }
@@ -254,7 +260,8 @@ export class StaffService {
     }
 
     // Update fields
-    if (updateDto.firstName !== undefined) staff.firstName = updateDto.firstName;
+    if (updateDto.firstName !== undefined)
+      staff.firstName = updateDto.firstName;
     if (updateDto.lastName !== undefined) staff.lastName = updateDto.lastName;
     if (updateDto.position !== undefined) staff.position = updateDto.position;
     if (updateDto.positionCustom !== undefined)
@@ -300,7 +307,9 @@ export class StaffService {
 
     // Verify user belongs to same organization (unless admin)
     if (userRole !== 'admin') {
-      const user = await this.usersRepository.findOne({ where: { id: userId } });
+      const user = await this.usersRepository.findOne({
+        where: { id: userId },
+      });
       if (!user) {
         throw new NotFoundException('User not found');
       }
@@ -326,7 +335,9 @@ export class StaffService {
 
     // Verify user belongs to same organization (unless admin)
     if (userRole !== 'admin') {
-      const user = await this.usersRepository.findOne({ where: { id: userId } });
+      const user = await this.usersRepository.findOne({
+        where: { id: userId },
+      });
       if (!user) {
         throw new NotFoundException('User not found');
       }
@@ -388,5 +399,3 @@ export class StaffService {
     };
   }
 }
-
-

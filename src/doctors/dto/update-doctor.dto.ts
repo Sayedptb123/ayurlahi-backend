@@ -72,6 +72,3 @@ export class UpdateDoctorDto {
   @IsBoolean()
   isActive?: boolean;
 }
-
-
-

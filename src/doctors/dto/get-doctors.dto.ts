@@ -1,4 +1,11 @@
-import { IsOptional, IsString, IsInt, Min, IsBoolean, MaxLength } from 'class-validator';
+import {
+  IsOptional,
+  IsString,
+  IsInt,
+  Min,
+  IsBoolean,
+  MaxLength,
+} from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class GetDoctorsDto {
@@ -29,6 +36,3 @@ export class GetDoctorsDto {
   @IsBoolean()
   isActive?: boolean;
 }
-
-
-

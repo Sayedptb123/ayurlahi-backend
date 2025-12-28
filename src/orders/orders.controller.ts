@@ -27,10 +27,7 @@ export class OrdersController {
   }
 
   @Get(':id')
-  async findOne(
-    @Param('id', ParseUUIDPipe) id: string,
-    @Request() req,
-  ) {
+  async findOne(@Param('id', ParseUUIDPipe) id: string, @Request() req) {
     return this.ordersService.findOne(id, req.user.userId, req.user.role);
   }
 
@@ -40,10 +37,7 @@ export class OrdersController {
   }
 
   @Post(':id/reorder')
-  async reorder(
-    @Param('id', ParseUUIDPipe) id: string,
-    @Request() req,
-  ) {
+  async reorder(@Param('id', ParseUUIDPipe) id: string, @Request() req) {
     return this.ordersService.reorder(id, req.user.userId);
   }
 
@@ -61,8 +55,3 @@ export class OrdersController {
     );
   }
 }
-
-
-
-
-

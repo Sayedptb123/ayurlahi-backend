@@ -124,6 +124,3 @@ export class CreatePatientDto {
   @IsString()
   medicalHistory?: string;
 }
-
-
-

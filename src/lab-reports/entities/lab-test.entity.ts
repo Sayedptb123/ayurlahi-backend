@@ -53,6 +53,3 @@ export class LabTest {
   @JoinColumn({ name: 'labReportId' })
   labReport: LabReport;
 }
-
-
-

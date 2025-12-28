@@ -26,32 +26,17 @@ export class StaffController {
 
   @Get()
   async findAll(@Request() req, @Query() query: GetStaffDto) {
-    return this.staffService.findAll(
-      req.user.userId,
-      req.user.role,
-      query,
-    );
+    return this.staffService.findAll(req.user.userId, req.user.role, query);
   }
 
   @Get(':id')
-  async findOne(
-    @Param('id', ParseUUIDPipe) id: string,
-    @Request() req,
-  ) {
-    return this.staffService.findOne(
-      id,
-      req.user.userId,
-      req.user.role,
-    );
+  async findOne(@Param('id', ParseUUIDPipe) id: string, @Request() req) {
+    return this.staffService.findOne(id, req.user.userId, req.user.role);
   }
 
   @Post()
   async create(@Request() req, @Body() createDto: CreateStaffDto) {
-    return this.staffService.create(
-      req.user.userId,
-      req.user.role,
-      createDto,
-    );
+    return this.staffService.create(req.user.userId, req.user.role, createDto);
   }
 
   @Patch(':id')
@@ -70,28 +55,12 @@ export class StaffController {
 
   @Delete(':id')
   @HttpCode(HttpStatus.OK)
-  async remove(
-    @Param('id', ParseUUIDPipe) id: string,
-    @Request() req,
-  ) {
-    return this.staffService.remove(
-      id,
-      req.user.userId,
-      req.user.role,
-    );
+  async remove(@Param('id', ParseUUIDPipe) id: string, @Request() req) {
+    return this.staffService.remove(id, req.user.userId, req.user.role);
   }
 
   @Patch(':id/status')
-  async toggleStatus(
-    @Param('id', ParseUUIDPipe) id: string,
-    @Request() req,
-  ) {
-    return this.staffService.toggleStatus(
-      id,
-      req.user.userId,
-      req.user.role,
-    );
+  async toggleStatus(@Param('id', ParseUUIDPipe) id: string, @Request() req) {
+    return this.staffService.toggleStatus(id, req.user.userId, req.user.role);
   }
 }
-
-

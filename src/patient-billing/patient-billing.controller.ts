@@ -21,15 +21,15 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 @Controller('patient-billing')
 @UseGuards(JwtAuthGuard)
 export class PatientBillingController {
-  constructor(
-    private readonly patientBillingService: PatientBillingService,
-  ) {}
+  constructor(private readonly patientBillingService: PatientBillingService) {}
 
   @Post()
   create(@Request() req, @Body() createDto: CreateBillDto) {
     return this.patientBillingService.create(
       req.user.userId,
       req.user.role,
+      req.user.organisationId,
+      req.user.organisationType,
       createDto,
     );
   }
@@ -39,6 +39,8 @@ export class PatientBillingController {
     return this.patientBillingService.findAll(
       req.user.userId,
       req.user.role,
+      req.user.organisationId,
+      req.user.organisationType,
       query,
     );
   }
@@ -49,6 +51,8 @@ export class PatientBillingController {
       id,
       req.user.userId,
       req.user.role,
+      req.user.organisationId,
+      req.user.organisationType,
     );
   }
 
@@ -62,6 +66,8 @@ export class PatientBillingController {
       id,
       req.user.userId,
       req.user.role,
+      req.user.organisationId,
+      req.user.organisationType,
       updateDto,
     );
   }
@@ -76,6 +82,8 @@ export class PatientBillingController {
       id,
       req.user.userId,
       req.user.role,
+      req.user.organisationId,
+      req.user.organisationType,
       paymentDto,
     );
   }
@@ -86,9 +94,8 @@ export class PatientBillingController {
       id,
       req.user.userId,
       req.user.role,
+      req.user.organisationId,
+      req.user.organisationType,
     );
   }
 }
-
-
-

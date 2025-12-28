@@ -88,8 +88,3 @@ export class OrderItem {
   @Column({ type: 'timestamp', nullable: true })
   deletedAt: Date | null;
 }
-
-
-
-
-

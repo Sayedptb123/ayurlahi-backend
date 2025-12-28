@@ -70,7 +70,12 @@ export class Staff {
   })
   position: StaffPosition;
 
-  @Column({ type: 'varchar', length: 100, nullable: true, name: 'position_custom' })
+  @Column({
+    type: 'varchar',
+    length: 100,
+    nullable: true,
+    name: 'position_custom',
+  })
   positionCustom: string | null;
 
   @Column({ type: 'varchar', length: 255, nullable: true, name: 'email' })
@@ -79,25 +84,55 @@ export class Staff {
   @Column({ type: 'varchar', length: 20, nullable: true, name: 'phone' })
   phone: string | null;
 
-  @Column({ type: 'varchar', length: 20, nullable: true, name: 'whatsapp_number' })
+  @Column({
+    type: 'varchar',
+    length: 20,
+    nullable: true,
+    name: 'whatsapp_number',
+  })
   whatsappNumber: string | null;
 
   @Column({ type: 'text', nullable: true, name: 'address_street' })
   addressStreet: string | null;
 
-  @Column({ type: 'varchar', length: 100, nullable: true, name: 'address_city' })
+  @Column({
+    type: 'varchar',
+    length: 100,
+    nullable: true,
+    name: 'address_city',
+  })
   addressCity: string | null;
 
-  @Column({ type: 'varchar', length: 100, nullable: true, name: 'address_district' })
+  @Column({
+    type: 'varchar',
+    length: 100,
+    nullable: true,
+    name: 'address_district',
+  })
   addressDistrict: string | null;
 
-  @Column({ type: 'varchar', length: 100, nullable: true, name: 'address_state' })
+  @Column({
+    type: 'varchar',
+    length: 100,
+    nullable: true,
+    name: 'address_state',
+  })
   addressState: string | null;
 
-  @Column({ type: 'varchar', length: 20, nullable: true, name: 'address_zip_code' })
+  @Column({
+    type: 'varchar',
+    length: 20,
+    nullable: true,
+    name: 'address_zip_code',
+  })
   addressZipCode: string | null;
 
-  @Column({ type: 'varchar', length: 100, nullable: true, name: 'address_country' })
+  @Column({
+    type: 'varchar',
+    length: 100,
+    nullable: true,
+    name: 'address_country',
+  })
   addressCountry: string | null;
 
   @Column({ type: 'date', nullable: true, name: 'date_of_birth' })
@@ -106,13 +141,24 @@ export class Staff {
   @Column({ type: 'date', nullable: true, name: 'date_of_joining' })
   dateOfJoining: Date | null;
 
-  @Column({ type: 'decimal', precision: 10, scale: 2, nullable: true, name: 'salary' })
+  @Column({
+    type: 'decimal',
+    precision: 10,
+    scale: 2,
+    nullable: true,
+    name: 'salary',
+  })
   salary: number | null;
 
   @Column({ type: 'jsonb', nullable: true, name: 'qualifications' })
   qualifications: string[] | null;
 
-  @Column({ type: 'varchar', length: 255, nullable: true, name: 'specialization' })
+  @Column({
+    type: 'varchar',
+    length: 255,
+    nullable: true,
+    name: 'specialization',
+  })
   specialization: string | null;
 
   @Column({ type: 'boolean', default: true, name: 'is_active' })
@@ -127,5 +173,3 @@ export class Staff {
   @UpdateDateColumn({ name: 'updated_at' })
   updatedAt: Date;
 }
-
-

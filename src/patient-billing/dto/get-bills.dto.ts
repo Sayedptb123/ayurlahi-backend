@@ -45,6 +45,3 @@ export class GetBillsDto {
   @IsDateString()
   endDate?: string; // Filter by date range
 }
-
-
-

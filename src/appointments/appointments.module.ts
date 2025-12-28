@@ -8,14 +8,9 @@ import { Patient } from '../patients/entities/patient.entity';
 import { Doctor } from '../doctors/entities/doctor.entity';
 
 @Module({
-  imports: [
-    TypeOrmModule.forFeature([Appointment, User, Patient, Doctor]),
-  ],
+  imports: [TypeOrmModule.forFeature([Appointment, User, Patient, Doctor])],
   controllers: [AppointmentsController],
   providers: [AppointmentsService],
   exports: [AppointmentsService],
 })
 export class AppointmentsModule {}
-
-
-

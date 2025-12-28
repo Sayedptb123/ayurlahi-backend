@@ -7,15 +7,17 @@ import { JwtPayload } from '../auth.service';
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
   constructor(private configService: ConfigService) {
-    const jwtSecret = configService.get<string>('JWT_SECRET') || 'your-secret-key-change-in-production';
-    
+    const jwtSecret =
+      configService.get<string>('JWT_SECRET') ||
+      'your-secret-key-change-in-production';
+
     // Debug: Log JWT secret being used for validation
     console.log('[JWT Strategy] Initializing with secret:', {
       hasSecret: !!configService.get<string>('JWT_SECRET'),
       secretLength: jwtSecret.length,
       secretPreview: jwtSecret.substring(0, 10) + '...',
     });
-    
+
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
       ignoreExpiration: false,
@@ -27,6 +29,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     console.log('[JWT Strategy] Validating token payload:', {
       hasSub: !!payload.sub,
       hasEmail: !!payload.email,
+      hasOrganisationId: !!payload.organisationId,
       hasRole: !!payload.role,
       payload,
     });
@@ -39,14 +42,16 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     console.log('[JWT Strategy] Token validated successfully:', {
       userId: payload.sub,
       email: payload.email,
+      organisationId: payload.organisationId,
       role: payload.role,
     });
 
     return {
       userId: payload.sub,
       email: payload.email,
+      organisationId: payload.organisationId,
+      organisationType: payload.organisationType,
       role: payload.role,
     };
   }
 }
-

@@ -70,6 +70,3 @@ export class BillItem {
   @JoinColumn({ name: 'billId' })
   bill: PatientBill;
 }
-
-
-

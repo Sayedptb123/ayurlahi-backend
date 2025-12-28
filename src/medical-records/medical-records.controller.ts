@@ -20,15 +20,15 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 @Controller('medical-records')
 @UseGuards(JwtAuthGuard)
 export class MedicalRecordsController {
-  constructor(
-    private readonly medicalRecordsService: MedicalRecordsService,
-  ) {}
+  constructor(private readonly medicalRecordsService: MedicalRecordsService) {}
 
   @Post()
   create(@Request() req, @Body() createDto: CreateMedicalRecordDto) {
     return this.medicalRecordsService.create(
       req.user.userId,
       req.user.role,
+      req.user.organisationId,
+      req.user.organisationType,
       createDto,
     );
   }
@@ -38,6 +38,8 @@ export class MedicalRecordsController {
     return this.medicalRecordsService.findAll(
       req.user.userId,
       req.user.role,
+      req.user.organisationId,
+      req.user.organisationType,
       query,
     );
   }
@@ -48,6 +50,8 @@ export class MedicalRecordsController {
       id,
       req.user.userId,
       req.user.role,
+      req.user.organisationId,
+      req.user.organisationType,
     );
   }
 
@@ -61,6 +65,8 @@ export class MedicalRecordsController {
       id,
       req.user.userId,
       req.user.role,
+      req.user.organisationId,
+      req.user.organisationType,
       updateDto,
     );
   }
@@ -71,9 +77,8 @@ export class MedicalRecordsController {
       id,
       req.user.userId,
       req.user.role,
+      req.user.organisationId,
+      req.user.organisationType,
     );
   }
 }
-
-
-

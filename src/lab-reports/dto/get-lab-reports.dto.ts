@@ -50,6 +50,3 @@ export class GetLabReportsDto {
   @IsDateString()
   endDate?: string; // Filter by date range
 }
-
-
-

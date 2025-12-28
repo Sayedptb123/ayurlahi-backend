@@ -22,22 +22,27 @@ export class DoctorsService {
     private usersRepository: Repository<User>,
   ) {}
 
-  async create(userId: string, userRole: string, createDto: CreateDoctorDto) {
+  async create(
+    userId: string,
+    userRole: string,
+    organisationId: string | undefined,
+    organisationType: string | undefined,
+    createDto: CreateDoctorDto,
+  ) {
     // Only clinic users and admin can create doctors
-    if (!['clinic', 'admin'].includes(userRole)) {
+    if (
+      organisationType !== 'CLINIC' &&
+      userRole !== 'SUPER_ADMIN' &&
+      userRole !== 'SUPPORT'
+    ) {
       throw new ForbiddenException(
         'You do not have permission to create doctors',
       );
     }
 
-    const user = await this.usersRepository.findOne({ where: { id: userId } });
-    if (!user) {
-      throw new NotFoundException('User not found');
-    }
-
-    // Get clinicId - admin can specify, clinic users use their own
-    const clinicId = user.clinicId;
-    if (!clinicId && userRole !== 'admin') {
+    // Get clinicId from organisationId (in new structure, clinic is an organisation)
+    const clinicId = organisationId;
+    if (!clinicId && userRole !== 'SUPER_ADMIN' && userRole !== 'SUPPORT') {
       throw new BadRequestException('Clinic not associated with user');
     }
 
@@ -55,7 +60,9 @@ export class DoctorsService {
       );
     }
 
-    // If userId is provided, verify it exists and belongs to the clinic
+    // If userId is provided, verify it exists
+    // Note: In new structure, we'd check organisation_users to verify user belongs to same org
+    // For now, just verify user exists
     if (createDto.userId) {
       const linkedUser = await this.usersRepository.findOne({
         where: { id: createDto.userId },
@@ -63,11 +70,7 @@ export class DoctorsService {
       if (!linkedUser) {
         throw new NotFoundException('Linked user not found');
       }
-      if (linkedUser.clinicId !== clinicId) {
-        throw new BadRequestException(
-          'Linked user does not belong to this clinic',
-        );
-      }
+      // TODO: Add organisation_users check to verify user belongs to same organisation
     }
 
     const doctor = this.doctorsRepository.create({
@@ -80,28 +83,33 @@ export class DoctorsService {
     return this.doctorsRepository.save(doctor);
   }
 
-  async findAll(userId: string, userRole: string, query: GetDoctorsDto) {
+  async findAll(
+    userId: string,
+    userRole: string,
+    organisationId: string | undefined,
+    organisationType: string | undefined,
+    query: GetDoctorsDto,
+  ) {
     const { page = 1, limit = 20, search, specialization, isActive } = query;
     const skip = (page - 1) * limit;
 
     // Only clinic users and admin can view doctors
-    if (!['clinic', 'admin'].includes(userRole)) {
+    if (
+      organisationType !== 'CLINIC' &&
+      userRole !== 'SUPER_ADMIN' &&
+      userRole !== 'SUPPORT'
+    ) {
       throw new ForbiddenException(
         'You do not have permission to view doctors',
       );
-    }
-
-    const user = await this.usersRepository.findOne({ where: { id: userId } });
-    if (!user) {
-      throw new NotFoundException('User not found');
     }
 
     // Build query using query builder
     const queryBuilder = this.doctorsRepository.createQueryBuilder('doctor');
 
     // Clinic users can only see their clinic's doctors
-    if (userRole === 'clinic') {
-      if (!user.clinicId) {
+    if (organisationType === 'CLINIC') {
+      if (!organisationId) {
         return {
           data: [],
           total: 0,
@@ -111,7 +119,7 @@ export class DoctorsService {
         };
       }
       queryBuilder.where('doctor.clinicId = :clinicId', {
-        clinicId: user.clinicId,
+        clinicId: organisationId,
       });
     }
 
@@ -136,10 +144,7 @@ export class DoctorsService {
     }
 
     // Order and pagination
-    queryBuilder
-      .orderBy('doctor.createdAt', 'DESC')
-      .skip(skip)
-      .take(limit);
+    queryBuilder.orderBy('doctor.createdAt', 'DESC').skip(skip).take(limit);
 
     const [data, total] = await queryBuilder.getManyAndCount();
 
@@ -152,7 +157,13 @@ export class DoctorsService {
     };
   }
 
-  async findOne(id: string, userId: string, userRole: string) {
+  async findOne(
+    id: string,
+    userId: string,
+    userRole: string,
+    organisationId: string | undefined,
+    organisationType: string | undefined,
+  ) {
     const doctor = await this.doctorsRepository.findOne({
       where: { id },
       relations: ['clinic', 'user'],
@@ -163,9 +174,8 @@ export class DoctorsService {
     }
 
     // Access control
-    if (userRole === 'clinic') {
-      const user = await this.usersRepository.findOne({ where: { id: userId } });
-      if (!user || user.clinicId !== doctor.clinicId) {
+    if (organisationType === 'CLINIC') {
+      if (!organisationId || organisationId !== doctor.clinicId) {
         throw new ForbiddenException('You do not have access to this doctor');
       }
     }
@@ -177,9 +187,17 @@ export class DoctorsService {
     id: string,
     userId: string,
     userRole: string,
+    organisationId: string | undefined,
+    organisationType: string | undefined,
     updateDto: UpdateDoctorDto,
   ) {
-    const doctor = await this.findOne(id, userId, userRole);
+    const doctor = await this.findOne(
+      id,
+      userId,
+      userRole,
+      organisationId,
+      organisationType,
+    );
 
     // Check doctorId uniqueness if being updated
     if (updateDto.doctorId && updateDto.doctorId !== doctor.doctorId) {
@@ -197,7 +215,8 @@ export class DoctorsService {
       }
     }
 
-    // If userId is being updated, verify it
+    // If userId is being updated, verify it exists
+    // Note: In new structure, we'd check organisation_users to verify user belongs to same org
     if (updateDto.userId && updateDto.userId !== doctor.userId) {
       const linkedUser = await this.usersRepository.findOne({
         where: { id: updateDto.userId },
@@ -205,11 +224,7 @@ export class DoctorsService {
       if (!linkedUser) {
         throw new NotFoundException('Linked user not found');
       }
-      if (linkedUser.clinicId !== doctor.clinicId) {
-        throw new BadRequestException(
-          'Linked user does not belong to this clinic',
-        );
-      }
+      // TODO: Add organisation_users check to verify user belongs to same organisation
     }
 
     // Update fields
@@ -218,10 +233,21 @@ export class DoctorsService {
     return this.doctorsRepository.save(doctor);
   }
 
-  async remove(id: string, userId: string, userRole: string) {
-    const doctor = await this.findOne(id, userId, userRole);
+  async remove(
+    id: string,
+    userId: string,
+    userRole: string,
+    organisationId: string | undefined,
+    organisationType: string | undefined,
+  ) {
+    const doctor = await this.findOne(
+      id,
+      userId,
+      userRole,
+      organisationId,
+      organisationType,
+    );
     await this.doctorsRepository.remove(doctor);
     return { message: 'Doctor deleted successfully' };
   }
 }
-

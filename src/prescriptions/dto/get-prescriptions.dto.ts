@@ -50,6 +50,3 @@ export class GetPrescriptionsDto {
   @IsDateString()
   endDate?: string; // Filter by date range
 }
-
-
-

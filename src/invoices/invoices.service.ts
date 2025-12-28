@@ -32,7 +32,9 @@ export class InvoicesService {
 
     // Role-based filtering
     if (userRole === 'clinic') {
-      const user = await this.usersRepository.findOne({ where: { id: userId } });
+      const user = await this.usersRepository.findOne({
+        where: { id: userId },
+      });
       if (user && user.clinicId) {
         queryBuilder.andWhere('order.clinicId = :clinicId', {
           clinicId: user.clinicId,
@@ -84,7 +86,9 @@ export class InvoicesService {
 
     // Role-based access control
     if (userRole === 'clinic') {
-      const user = await this.usersRepository.findOne({ where: { id: userId } });
+      const user = await this.usersRepository.findOne({
+        where: { id: userId },
+      });
       if (!user || user.clinicId !== invoice.order.clinicId) {
         throw new ForbiddenException('You do not have access to this invoice');
       }
@@ -110,8 +114,3 @@ export class InvoicesService {
     return 'pending';
   }
 }
-
-
-
-
-

@@ -123,6 +123,3 @@ export class CreateDoctorDto {
   @IsBoolean()
   isActive?: boolean;
 }
-
-
-

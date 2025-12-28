@@ -27,21 +27,32 @@ export class PatientsController {
     return this.patientsService.create(
       req.user.userId,
       req.user.role,
+      req.user.organisationId,
+      req.user.organisationType,
       createDto,
     );
   }
 
   @Get()
   findAll(@Request() req, @Query() query: GetPatientsDto) {
-    return this.patientsService.findAll(req.user.userId, req.user.role, query);
+    return this.patientsService.findAll(
+      req.user.userId,
+      req.user.role,
+      req.user.organisationId,
+      req.user.organisationType,
+      query,
+    );
   }
 
   @Get(':id')
-  findOne(
-    @Param('id', ParseUUIDPipe) id: string,
-    @Request() req,
-  ) {
-    return this.patientsService.findOne(id, req.user.userId, req.user.role);
+  findOne(@Param('id', ParseUUIDPipe) id: string, @Request() req) {
+    return this.patientsService.findOne(
+      id,
+      req.user.userId,
+      req.user.role,
+      req.user.organisationId,
+      req.user.organisationType,
+    );
   }
 
   @Patch(':id')
@@ -54,15 +65,20 @@ export class PatientsController {
       id,
       req.user.userId,
       req.user.role,
+      req.user.organisationId,
+      req.user.organisationType,
       updateDto,
     );
   }
 
   @Delete(':id')
   remove(@Param('id', ParseUUIDPipe) id: string, @Request() req) {
-    return this.patientsService.remove(id, req.user.userId, req.user.role);
+    return this.patientsService.remove(
+      id,
+      req.user.userId,
+      req.user.role,
+      req.user.organisationId,
+      req.user.organisationType,
+    );
   }
 }
-
-
-

@@ -42,6 +42,3 @@ export class PrescriptionItemDto {
   @Min(0)
   order?: number;
 }
-
-
-

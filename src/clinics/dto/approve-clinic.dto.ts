@@ -4,8 +4,3 @@ export class RejectClinicDto {
   @IsString()
   reason: string;
 }
-
-
-
-
-

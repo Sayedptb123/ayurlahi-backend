@@ -96,6 +96,3 @@ export class CreateMedicalRecordDto {
   @IsUrl({}, { each: true })
   attachments?: string[]; // Array of file URLs
 }
-
-
-

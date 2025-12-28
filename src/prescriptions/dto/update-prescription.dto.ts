@@ -49,6 +49,3 @@ export class UpdatePrescriptionDto {
   @Type(() => PrescriptionItemDto)
   items?: PrescriptionItemDto[];
 }
-
-
-

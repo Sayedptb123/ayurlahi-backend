@@ -116,4 +116,3 @@ export class CreateStaffDto {
   @MaxLength(1000)
   notes?: string;
 }
-

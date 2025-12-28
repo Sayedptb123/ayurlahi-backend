@@ -21,7 +21,33 @@ import { MedicalRecordsModule } from './medical-records/medical-records.module';
 import { PrescriptionsModule } from './prescriptions/prescriptions.module';
 import { LabReportsModule } from './lab-reports/lab-reports.module';
 import { PatientBillingModule } from './patient-billing/patient-billing.module';
+import { OrganisationsModule } from './organisations/organisations.module';
+import { OrganisationUsersModule } from './organisation-users/organisation-users.module';
+import { BranchesModule } from './branches/branches.module';
+import { StaffBranchAssignmentsModule } from './staff-branch-assignments/staff-branch-assignments.module';
+import { DutyTypesModule } from './duty-types/duty-types.module';
+import { DutyAssignmentsModule } from './duty-assignments/duty-assignments.module';
+import { DutyTemplatesModule } from './duty-templates/duty-templates.module';
+import { DocumentsModule } from './documents/documents.module';
+import { SuppliersModule } from './suppliers/suppliers.module';
+import { InventoryModule } from './inventory/inventory.module';
+import { PurchaseOrdersModule } from './purchase-orders/purchase-orders.module';
+import { ExpensesModule } from './expenses/expenses.module';
+import { BudgetsModule } from './budgets/budgets.module';
+import { PayrollModule } from './payroll/payroll.module';
 import { User } from './users/entities/user.entity';
+import { Organisation } from './organisations/entities/organisation.entity';
+import { OrganisationUser } from './organisation-users/entities/organisation-user.entity';
+import { Branch } from './branches/entities/branch.entity';
+import { StaffBranchAssignment } from './staff-branch-assignments/entities/staff-branch-assignment.entity';
+import { DutyType } from './duty-types/entities/duty-type.entity';
+import { DutyAssignment } from './duty-assignments/entities/duty-assignment.entity';
+import { DutyTemplate } from './duty-templates/entities/duty-template.entity';
+import { Document } from './documents/entities/document.entity';
+import { Supplier } from './suppliers/entities/supplier.entity';
+import { InventoryItem } from './inventory/entities/inventory-item.entity';
+import { PurchaseOrder } from './purchase-orders/entities/purchase-order.entity';
+import { PurchaseOrderItem } from './purchase-orders/entities/purchase-order-item.entity';
 import { Product } from './products/entities/product.entity';
 import { Order } from './orders/entities/order.entity';
 import { OrderItem } from './orders/entities/order-item.entity';
@@ -57,7 +83,39 @@ import { CustomNamingStrategy } from './common/naming-strategy';
         username: configService.get<string>('DB_USERNAME', 'postgres'),
         password: configService.get<string>('DB_PASSWORD', ''),
         database: configService.get<string>('DB_NAME', 'ayurlahi'),
-        entities: [User, Product, Order, OrderItem, Clinic, Manufacturer, Invoice, Dispute, Staff, Patient, Doctor, Appointment, MedicalRecord, Prescription, PrescriptionItem, LabReport, LabTest, PatientBill, BillItem],
+        entities: [
+          User,
+          Organisation,
+          OrganisationUser,
+          Branch,
+          StaffBranchAssignment,
+          DutyType,
+          DutyAssignment,
+          DutyTemplate,
+          Document,
+          Supplier,
+          InventoryItem,
+          PurchaseOrder,
+          PurchaseOrderItem,
+          Product,
+          Order,
+          OrderItem,
+          Clinic,
+          Manufacturer,
+          Invoice,
+          Dispute,
+          Staff,
+          Patient,
+          Doctor,
+          Appointment,
+          MedicalRecord,
+          Prescription,
+          PrescriptionItem,
+          LabReport,
+          LabTest,
+          PatientBill,
+          BillItem,
+        ],
         synchronize: false, // Disabled to prevent schema conflicts with existing data
         logging: configService.get<string>('NODE_ENV') === 'development',
         namingStrategy: new CustomNamingStrategy(),
@@ -82,8 +140,22 @@ import { CustomNamingStrategy } from './common/naming-strategy';
     PrescriptionsModule,
     LabReportsModule,
     PatientBillingModule,
+    OrganisationsModule,
+    OrganisationUsersModule,
+    BranchesModule,
+    StaffBranchAssignmentsModule,
+    DutyTypesModule,
+    DutyAssignmentsModule,
+    DutyTemplatesModule,
+    DocumentsModule,
+    SuppliersModule,
+    InventoryModule,
+    PurchaseOrdersModule,
+    ExpensesModule,
+    BudgetsModule,
+    PayrollModule,
   ],
   controllers: [AppController],
   providers: [AppService],
 })
-export class AppModule {}
+export class AppModule { }

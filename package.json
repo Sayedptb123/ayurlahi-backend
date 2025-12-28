@@ -25,15 +25,18 @@
     "test:hms:full": "node scripts/test-hms-with-test-users.js",
     "health:hms": "node scripts/quick-hms-test.js",
     "seed:test-users": "node scripts/seed-test-users.js",
+    "seed:enhanced": "ts-node scripts/seed-enhanced-test-data.ts",
     "fix:passwords": "node scripts/fix-user-passwords.js",
     "check:schema": "node scripts/check-users-schema.js",
-    "migrate:fix-users": "psql -U postgres -d ayurlahi -f migrations/fix-users-table-schema.sql"
+    "migrate:fix-users": "psql -U postgres -d ayurlahi -f migrations/fix-users-table-schema.sql",
+    "migrate:medilink:run": "node scripts/run-medilink-migrations.js"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.1",
     "@nestjs/config": "^4.0.2",
     "@nestjs/core": "^11.0.1",
     "@nestjs/jwt": "^11.0.2",
+    "@nestjs/mapped-types": "^2.1.0",
     "@nestjs/passport": "^10.0.3",
     "@nestjs/platform-express": "^11.0.1",
     "@nestjs/typeorm": "^11.0.0",

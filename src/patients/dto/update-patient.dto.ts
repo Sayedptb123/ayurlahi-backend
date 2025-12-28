@@ -70,6 +70,3 @@ export class UpdatePatientDto {
   @IsString()
   medicalHistory?: string;
 }
-
-
-

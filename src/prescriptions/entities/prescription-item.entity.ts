@@ -42,6 +42,3 @@ export class PrescriptionItem {
   @JoinColumn({ name: 'prescriptionId' })
   prescription: Prescription;
 }
-
-
-

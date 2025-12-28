@@ -1,9 +1,9 @@
 /**
  * HMS End-to-End Integration Tests
- * 
+ *
  * This test suite validates all HMS modules work together correctly.
  * Run with: npm run test:e2e
- * 
+ *
  * Note: Requires a test database to be configured.
  * Set DB_NAME=ayurlahi_test in your .env file
  */
@@ -308,6 +308,3 @@ describe('HMS E2E Tests', () => {
     });
   });
 });
-
-
-

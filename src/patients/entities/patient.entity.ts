@@ -86,6 +86,3 @@ export class Patient {
   @UpdateDateColumn({ name: 'updatedAt' })
   updatedAt: Date;
 }
-
-
-

@@ -13,8 +13,3 @@ import { User } from '../users/entities/user.entity';
   exports: [InvoicesService],
 })
 export class InvoicesModule {}
-
-
-
-
-

@@ -16,7 +16,9 @@ export class CustomNamingStrategy extends DefaultNamingStrategy {
       return customName;
     }
     // Otherwise, convert PascalCase to snake_case
-    return className.replace(/([A-Z])/g, '_$1').toLowerCase().substring(1);
+    return className
+      .replace(/([A-Z])/g, '_$1')
+      .toLowerCase()
+      .substring(1);
   }
 }
-

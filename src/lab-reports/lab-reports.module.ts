@@ -25,6 +25,3 @@ import { Appointment } from '../appointments/entities/appointment.entity';
   exports: [LabReportsService],
 })
 export class LabReportsModule {}
-
-
-

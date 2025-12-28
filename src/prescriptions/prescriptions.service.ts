@@ -6,7 +6,10 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { Prescription, PrescriptionStatus } from './entities/prescription.entity';
+import {
+  Prescription,
+  PrescriptionStatus,
+} from './entities/prescription.entity';
 import { PrescriptionItem } from './entities/prescription-item.entity';
 import { User } from '../users/entities/user.entity';
 import { Patient } from '../patients/entities/patient.entity';
@@ -36,22 +39,23 @@ export class PrescriptionsService {
   async create(
     userId: string,
     userRole: string,
+    organisationId: string | undefined,
+    organisationType: string | undefined,
     createDto: CreatePrescriptionDto,
   ) {
     // Only clinic users and admin can create prescriptions
-    if (!['clinic', 'admin'].includes(userRole)) {
+    if (
+      organisationType !== 'CLINIC' &&
+      userRole !== 'SUPER_ADMIN' &&
+      userRole !== 'SUPPORT'
+    ) {
       throw new ForbiddenException(
         'You do not have permission to create prescriptions',
       );
     }
 
-    const user = await this.usersRepository.findOne({ where: { id: userId } });
-    if (!user) {
-      throw new NotFoundException('User not found');
-    }
-
-    const clinicId = user.clinicId;
-    if (!clinicId && userRole !== 'admin') {
+    const clinicId = organisationId;
+    if (!clinicId && userRole !== 'SUPER_ADMIN' && userRole !== 'SUPPORT') {
       throw new BadRequestException('Clinic not associated with user');
     }
 
@@ -63,9 +67,7 @@ export class PrescriptionsService {
       throw new NotFoundException('Patient not found');
     }
     if (patient.clinicId !== clinicId) {
-      throw new ForbiddenException(
-        'Patient does not belong to this clinic',
-      );
+      throw new ForbiddenException('Patient does not belong to this clinic');
     }
 
     // Verify doctor exists and belongs to clinic
@@ -106,7 +108,7 @@ export class PrescriptionsService {
 
     // Create prescription with items
     const prescription = this.prescriptionsRepository.create({
-      clinicId: clinicId as string,
+      clinicId: clinicId,
       patientId: createDto.patientId,
       appointmentId: createDto.appointmentId || null,
       doctorId: createDto.doctorId,
@@ -133,6 +135,8 @@ export class PrescriptionsService {
   async findAll(
     userId: string,
     userRole: string,
+    organisationId: string | undefined,
+    organisationType: string | undefined,
     query: GetPrescriptionsDto,
   ) {
     const {
@@ -148,15 +152,14 @@ export class PrescriptionsService {
     const skip = (page - 1) * limit;
 
     // Only clinic users and admin can view prescriptions
-    if (!['clinic', 'admin'].includes(userRole)) {
+    if (
+      organisationType !== 'CLINIC' &&
+      userRole !== 'SUPER_ADMIN' &&
+      userRole !== 'SUPPORT'
+    ) {
       throw new ForbiddenException(
         'You do not have permission to view prescriptions',
       );
-    }
-
-    const user = await this.usersRepository.findOne({ where: { id: userId } });
-    if (!user) {
-      throw new NotFoundException('User not found');
     }
 
     // Build query
@@ -168,8 +171,8 @@ export class PrescriptionsService {
       .leftJoinAndSelect('prescription.items', 'items');
 
     // Clinic users can only see their clinic's prescriptions
-    if (userRole === 'clinic') {
-      if (!user.clinicId) {
+    if (organisationType === 'CLINIC') {
+      if (!organisationId) {
         return {
           data: [],
           total: 0,
@@ -179,7 +182,7 @@ export class PrescriptionsService {
         };
       }
       queryBuilder.where('prescription.clinicId = :clinicId', {
-        clinicId: user.clinicId,
+        clinicId: organisationId,
       });
     }
 
@@ -239,7 +242,13 @@ export class PrescriptionsService {
     };
   }
 
-  async findOne(id: string, userId: string, userRole: string) {
+  async findOne(
+    id: string,
+    userId: string,
+    userRole: string,
+    organisationId: string | undefined,
+    organisationType: string | undefined,
+  ) {
     const prescription = await this.prescriptionsRepository.findOne({
       where: { id },
       relations: ['clinic', 'patient', 'doctor', 'appointment', 'items'],
@@ -250,9 +259,8 @@ export class PrescriptionsService {
     }
 
     // Access control
-    if (userRole === 'clinic') {
-      const user = await this.usersRepository.findOne({ where: { id: userId } });
-      if (!user || user.clinicId !== prescription.clinicId) {
+    if (organisationType === 'CLINIC') {
+      if (!organisationId || organisationId !== prescription.clinicId) {
         throw new ForbiddenException(
           'You do not have access to this prescription',
         );
@@ -266,22 +274,25 @@ export class PrescriptionsService {
     id: string,
     userId: string,
     userRole: string,
+    organisationId: string | undefined,
+    organisationType: string | undefined,
     updateDto: UpdatePrescriptionDto,
   ) {
-    const prescription = await this.findOne(id, userId, userRole);
+    const prescription = await this.findOne(
+      id,
+      userId,
+      userRole,
+      organisationId,
+      organisationType,
+    );
 
     // If updating patient, doctor, or appointment, verify they belong to clinic
-    if (
-      updateDto.patientId &&
-      updateDto.patientId !== prescription.patientId
-    ) {
+    if (updateDto.patientId && updateDto.patientId !== prescription.patientId) {
       const patient = await this.patientsRepository.findOne({
         where: { id: updateDto.patientId },
       });
       if (!patient || patient.clinicId !== prescription.clinicId) {
-        throw new ForbiddenException(
-          'Patient does not belong to this clinic',
-        );
+        throw new ForbiddenException('Patient does not belong to this clinic');
       }
     }
 
@@ -347,10 +358,21 @@ export class PrescriptionsService {
     return this.prescriptionsRepository.save(prescription);
   }
 
-  async remove(id: string, userId: string, userRole: string) {
-    const prescription = await this.findOne(id, userId, userRole);
+  async remove(
+    id: string,
+    userId: string,
+    userRole: string,
+    organisationId: string | undefined,
+    organisationType: string | undefined,
+  ) {
+    const prescription = await this.findOne(
+      id,
+      userId,
+      userRole,
+      organisationId,
+      organisationType,
+    );
     await this.prescriptionsRepository.remove(prescription);
     return { message: 'Prescription deleted successfully' };
   }
 }
-

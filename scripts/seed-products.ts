@@ -247,7 +247,7 @@ const AYURVEDA_PRODUCTS = [
 
 async function seedProducts() {
   const app = await NestFactory.createApplicationContext(AppModule);
-  
+
   const productsService = app.get(ProductsService);
   const usersService = app.get(UsersService);
   const manufacturerRepository = app.get(getRepositoryToken(Manufacturer));
@@ -258,7 +258,7 @@ async function seedProducts() {
     // Find or create a manufacturer user
     let manufacturerUser;
     try {
-      manufacturerUser = await usersService.findByEmail('manufacturer@ayurlahi.com');
+      manufacturerUser = await usersService.findByEmail('manufacturer1@test.com');
       console.log('✅ Found existing manufacturer user');
     } catch (error) {
       console.log('⚠️  Manufacturer user not found. Please create a manufacturer account first.');
@@ -267,18 +267,18 @@ async function seedProducts() {
     }
 
     // Get the manufacturer associated with this user
-    // Use TypeORM DataSource directly for seed script
-    const dataSource = app.get('DataSource');
-    const manufacturerRepository = dataSource.getRepository('manufacturers');
-    const manufacturer = await manufacturerRepository.findOne({ 
-      where: { userId: manufacturerUser.id } 
+    // Reuse the repository injected earlier
+    // const manufacturerRepository = app.get(getRepositoryToken(Manufacturer)); // Already defined above
+
+    const manufacturer = await manufacturerRepository.findOne({
+      where: { userId: manufacturerUser.id }
     });
-    
+
     if (!manufacturer) {
       console.error('❌ Manufacturer not found for user:', manufacturerUser.email);
       process.exit(1);
     }
-    
+
     if (manufacturer.approvalStatus !== 'approved') {
       console.log('⚠️  Manufacturer is not approved. Products can only be added for approved manufacturers.');
       console.log(`   Manufacturer status: ${manufacturer.approvalStatus}`);
@@ -294,13 +294,11 @@ async function seedProducts() {
     for (const productData of AYURVEDA_PRODUCTS) {
       try {
         // Check if product with this SKU already exists
-        try {
-          await productsService.findBySku(productData.sku);
+        const existing = await productsService.findBySku(productData.sku);
+        if (existing) {
           console.log(`⏭️  Skipping ${productData.sku} - already exists`);
           skipped++;
           continue;
-        } catch (error) {
-          // Product doesn't exist, proceed with creation
         }
 
         // Create product

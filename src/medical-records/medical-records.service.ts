@@ -33,22 +33,23 @@ export class MedicalRecordsService {
   async create(
     userId: string,
     userRole: string,
+    organisationId: string | undefined,
+    organisationType: string | undefined,
     createDto: CreateMedicalRecordDto,
   ) {
     // Only clinic users and admin can create medical records
-    if (!['clinic', 'admin'].includes(userRole)) {
+    if (
+      organisationType !== 'CLINIC' &&
+      userRole !== 'SUPER_ADMIN' &&
+      userRole !== 'SUPPORT'
+    ) {
       throw new ForbiddenException(
         'You do not have permission to create medical records',
       );
     }
 
-    const user = await this.usersRepository.findOne({ where: { id: userId } });
-    if (!user) {
-      throw new NotFoundException('User not found');
-    }
-
-    const clinicId = user.clinicId;
-    if (!clinicId && userRole !== 'admin') {
+    const clinicId = organisationId;
+    if (!clinicId && userRole !== 'SUPER_ADMIN' && userRole !== 'SUPPORT') {
       throw new BadRequestException('Clinic not associated with user');
     }
 
@@ -60,9 +61,7 @@ export class MedicalRecordsService {
       throw new NotFoundException('Patient not found');
     }
     if (patient.clinicId !== clinicId) {
-      throw new ForbiddenException(
-        'Patient does not belong to this clinic',
-      );
+      throw new ForbiddenException('Patient does not belong to this clinic');
     }
 
     // Verify doctor exists and belongs to clinic
@@ -108,6 +107,8 @@ export class MedicalRecordsService {
   async findAll(
     userId: string,
     userRole: string,
+    organisationId: string | undefined,
+    organisationType: string | undefined,
     query: GetMedicalRecordsDto,
   ) {
     const {
@@ -122,15 +123,14 @@ export class MedicalRecordsService {
     const skip = (page - 1) * limit;
 
     // Only clinic users and admin can view medical records
-    if (!['clinic', 'admin'].includes(userRole)) {
+    if (
+      organisationType !== 'CLINIC' &&
+      userRole !== 'SUPER_ADMIN' &&
+      userRole !== 'SUPPORT'
+    ) {
       throw new ForbiddenException(
         'You do not have permission to view medical records',
       );
-    }
-
-    const user = await this.usersRepository.findOne({ where: { id: userId } });
-    if (!user) {
-      throw new NotFoundException('User not found');
     }
 
     // Build query
@@ -141,8 +141,8 @@ export class MedicalRecordsService {
       .leftJoinAndSelect('medicalRecord.appointment', 'appointment');
 
     // Clinic users can only see their clinic's medical records
-    if (userRole === 'clinic') {
-      if (!user.clinicId) {
+    if (organisationType === 'CLINIC') {
+      if (!organisationId) {
         return {
           data: [],
           total: 0,
@@ -152,7 +152,7 @@ export class MedicalRecordsService {
         };
       }
       queryBuilder.where('medicalRecord.clinicId = :clinicId', {
-        clinicId: user.clinicId,
+        clinicId: organisationId,
       });
     }
 
@@ -208,22 +208,25 @@ export class MedicalRecordsService {
     };
   }
 
-  async findOne(id: string, userId: string, userRole: string) {
+  async findOne(
+    id: string,
+    userId: string,
+    userRole: string,
+    organisationId: string | undefined,
+    organisationType: string | undefined,
+  ) {
     const medicalRecord = await this.medicalRecordsRepository.findOne({
       where: { id },
       relations: ['clinic', 'patient', 'doctor', 'appointment'],
     });
 
     if (!medicalRecord) {
-      throw new NotFoundException(
-        `Medical record with ID ${id} not found`,
-      );
+      throw new NotFoundException(`Medical record with ID ${id} not found`);
     }
 
     // Access control
-    if (userRole === 'clinic') {
-      const user = await this.usersRepository.findOne({ where: { id: userId } });
-      if (!user || user.clinicId !== medicalRecord.clinicId) {
+    if (organisationType === 'CLINIC') {
+      if (!organisationId || organisationId !== medicalRecord.clinicId) {
         throw new ForbiddenException(
           'You do not have access to this medical record',
         );
@@ -237,19 +240,28 @@ export class MedicalRecordsService {
     id: string,
     userId: string,
     userRole: string,
+    organisationId: string | undefined,
+    organisationType: string | undefined,
     updateDto: UpdateMedicalRecordDto,
   ) {
-    const medicalRecord = await this.findOne(id, userId, userRole);
+    const medicalRecord = await this.findOne(
+      id,
+      userId,
+      userRole,
+      organisationId,
+      organisationType,
+    );
 
     // If updating patient, doctor, or appointment, verify they belong to clinic
-    if (updateDto.patientId && updateDto.patientId !== medicalRecord.patientId) {
+    if (
+      updateDto.patientId &&
+      updateDto.patientId !== medicalRecord.patientId
+    ) {
       const patient = await this.patientsRepository.findOne({
         where: { id: updateDto.patientId },
       });
       if (!patient || patient.clinicId !== medicalRecord.clinicId) {
-        throw new ForbiddenException(
-          'Patient does not belong to this clinic',
-        );
+        throw new ForbiddenException('Patient does not belong to this clinic');
       }
     }
 
@@ -291,22 +303,29 @@ export class MedicalRecordsService {
       medicalRecord.diagnosis = updateDto.diagnosis;
     if (updateDto.treatment !== undefined)
       medicalRecord.treatment = updateDto.treatment;
-    if (updateDto.vitals !== undefined)
-      medicalRecord.vitals = updateDto.vitals;
-    if (updateDto.notes !== undefined)
-      medicalRecord.notes = updateDto.notes;
+    if (updateDto.vitals !== undefined) medicalRecord.vitals = updateDto.vitals;
+    if (updateDto.notes !== undefined) medicalRecord.notes = updateDto.notes;
     if (updateDto.attachments !== undefined)
       medicalRecord.attachments = updateDto.attachments;
 
     return this.medicalRecordsRepository.save(medicalRecord);
   }
 
-  async remove(id: string, userId: string, userRole: string) {
-    const medicalRecord = await this.findOne(id, userId, userRole);
+  async remove(
+    id: string,
+    userId: string,
+    userRole: string,
+    organisationId: string | undefined,
+    organisationType: string | undefined,
+  ) {
+    const medicalRecord = await this.findOne(
+      id,
+      userId,
+      userRole,
+      organisationId,
+      organisationType,
+    );
     await this.medicalRecordsRepository.remove(medicalRecord);
     return { message: 'Medical record deleted successfully' };
   }
 }
-
-
-

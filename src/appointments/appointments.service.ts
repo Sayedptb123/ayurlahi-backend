@@ -31,22 +31,24 @@ export class AppointmentsService {
   async create(
     userId: string,
     userRole: string,
+    organisationId: string | undefined,
+    organisationType: string | undefined,
     createDto: CreateAppointmentDto,
   ) {
     // Only clinic users and admin can create appointments
-    if (!['clinic', 'admin'].includes(userRole)) {
+    if (
+      organisationType !== 'CLINIC' &&
+      userRole !== 'SUPER_ADMIN' &&
+      userRole !== 'SUPPORT'
+    ) {
       throw new ForbiddenException(
         'You do not have permission to create appointments',
       );
     }
 
-    const user = await this.usersRepository.findOne({ where: { id: userId } });
-    if (!user) {
-      throw new NotFoundException('User not found');
-    }
-
-    const clinicId = user.clinicId;
-    if (!clinicId && userRole !== 'admin') {
+    // Get clinicId from organisationId (in new structure, clinic is an organisation)
+    const clinicId = organisationId;
+    if (!clinicId && userRole !== 'SUPER_ADMIN' && userRole !== 'SUPPORT') {
       throw new BadRequestException('Clinic not associated with user');
     }
 
@@ -58,9 +60,7 @@ export class AppointmentsService {
       throw new NotFoundException('Patient not found');
     }
     if (patient.clinicId !== clinicId) {
-      throw new ForbiddenException(
-        'Patient does not belong to this clinic',
-      );
+      throw new ForbiddenException('Patient does not belong to this clinic');
     }
 
     // Verify doctor exists and belongs to clinic
@@ -136,7 +136,13 @@ export class AppointmentsService {
     return this.appointmentsRepository.save(appointment);
   }
 
-  async findAll(userId: string, userRole: string, query: GetAppointmentsDto) {
+  async findAll(
+    userId: string,
+    userRole: string,
+    organisationId: string | undefined,
+    organisationType: string | undefined,
+    query: GetAppointmentsDto,
+  ) {
     const {
       page = 1,
       limit = 20,
@@ -151,15 +157,14 @@ export class AppointmentsService {
     const skip = (page - 1) * limit;
 
     // Only clinic users and admin can view appointments
-    if (!['clinic', 'admin'].includes(userRole)) {
+    if (
+      organisationType !== 'CLINIC' &&
+      userRole !== 'SUPER_ADMIN' &&
+      userRole !== 'SUPPORT'
+    ) {
       throw new ForbiddenException(
         'You do not have permission to view appointments',
       );
-    }
-
-    const user = await this.usersRepository.findOne({ where: { id: userId } });
-    if (!user) {
-      throw new NotFoundException('User not found');
     }
 
     // Build query
@@ -169,8 +174,8 @@ export class AppointmentsService {
       .leftJoinAndSelect('appointment.doctor', 'doctor');
 
     // Clinic users can only see their clinic's appointments
-    if (userRole === 'clinic') {
-      if (!user.clinicId) {
+    if (organisationType === 'CLINIC') {
+      if (!organisationId) {
         return {
           data: [],
           total: 0,
@@ -180,7 +185,7 @@ export class AppointmentsService {
         };
       }
       queryBuilder.where('appointment.clinicId = :clinicId', {
-        clinicId: user.clinicId,
+        clinicId: organisationId,
       });
     }
 
@@ -236,7 +241,13 @@ export class AppointmentsService {
     };
   }
 
-  async findOne(id: string, userId: string, userRole: string) {
+  async findOne(
+    id: string,
+    userId: string,
+    userRole: string,
+    organisationId: string | undefined,
+    organisationType: string | undefined,
+  ) {
     const appointment = await this.appointmentsRepository.findOne({
       where: { id },
       relations: ['clinic', 'patient', 'doctor'],
@@ -247,9 +258,8 @@ export class AppointmentsService {
     }
 
     // Access control
-    if (userRole === 'clinic') {
-      const user = await this.usersRepository.findOne({ where: { id: userId } });
-      if (!user || user.clinicId !== appointment.clinicId) {
+    if (organisationType === 'CLINIC') {
+      if (!organisationId || organisationId !== appointment.clinicId) {
         throw new ForbiddenException(
           'You do not have access to this appointment',
         );
@@ -263,9 +273,17 @@ export class AppointmentsService {
     id: string,
     userId: string,
     userRole: string,
+    organisationId: string | undefined,
+    organisationType: string | undefined,
     updateDto: UpdateAppointmentDto,
   ) {
-    const appointment = await this.findOne(id, userId, userRole);
+    const appointment = await this.findOne(
+      id,
+      userId,
+      userRole,
+      organisationId,
+      organisationType,
+    );
 
     // If updating patient or doctor, verify they belong to the clinic
     if (updateDto.patientId && updateDto.patientId !== appointment.patientId) {
@@ -273,9 +291,7 @@ export class AppointmentsService {
         where: { id: updateDto.patientId },
       });
       if (!patient || patient.clinicId !== appointment.clinicId) {
-        throw new ForbiddenException(
-          'Patient does not belong to this clinic',
-        );
+        throw new ForbiddenException('Patient does not belong to this clinic');
       }
     }
 
@@ -318,10 +334,21 @@ export class AppointmentsService {
     return this.appointmentsRepository.save(appointment);
   }
 
-  async remove(id: string, userId: string, userRole: string) {
-    const appointment = await this.findOne(id, userId, userRole);
+  async remove(
+    id: string,
+    userId: string,
+    userRole: string,
+    organisationId: string | undefined,
+    organisationType: string | undefined,
+  ) {
+    const appointment = await this.findOne(
+      id,
+      userId,
+      userRole,
+      organisationId,
+      organisationType,
+    );
     await this.appointmentsRepository.remove(appointment);
     return { message: 'Appointment deleted successfully' };
   }
 }
-

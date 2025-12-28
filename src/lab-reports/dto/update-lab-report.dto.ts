@@ -64,6 +64,3 @@ export class UpdateLabReportDto {
   @Type(() => LabTestDto)
   tests?: LabTestDto[];
 }
-
-
-

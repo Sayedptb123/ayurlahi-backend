@@ -87,8 +87,3 @@ export class Dispute {
   @Column({ type: 'timestamp', nullable: true, name: 'deletedAt' })
   deletedAt: Date | null;
 }
-
-
-
-
-

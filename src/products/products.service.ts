@@ -4,11 +4,14 @@ import { Repository, IsNull } from 'typeorm';
 import { Product } from './entities/product.entity';
 import { GetProductsDto } from './dto/get-products.dto';
 
+import { ManufacturersService } from '../manufacturers/manufacturers.service';
+
 @Injectable()
 export class ProductsService {
   constructor(
     @InjectRepository(Product)
     private productsRepository: Repository<Product>,
+    private manufacturersService: ManufacturersService,
   ) {}
 
   async findAll(query: GetProductsDto) {
@@ -90,15 +93,23 @@ export class ProductsService {
     });
   }
 
-  async create(userId: string, productData: any): Promise<any> {
-    // TODO: Implement product creation
-    throw new Error('Method not implemented.');
+  async create(userId: string, productData: any): Promise<Product> {
+    const manufacturer =
+      await this.manufacturersService.findMyManufacturer(userId);
+
+    if (!manufacturer) {
+      throw new NotFoundException('Manufacturer not found for this user');
+    }
+
+    if (manufacturer.approvalStatus !== 'approved') {
+      throw new Error('Manufacturer is not approved');
+    }
+
+    const product = this.productsRepository.create({
+      ...productData,
+      manufacturerId: manufacturer.id,
+    }) as unknown as Product;
+
+    return await this.productsRepository.save(product);
   }
 }
-
-
-
-
-
-
-

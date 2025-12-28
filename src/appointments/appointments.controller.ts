@@ -27,6 +27,8 @@ export class AppointmentsController {
     return this.appointmentsService.create(
       req.user.userId,
       req.user.role,
+      req.user.organisationId,
+      req.user.organisationType,
       createDto,
     );
   }
@@ -36,6 +38,8 @@ export class AppointmentsController {
     return this.appointmentsService.findAll(
       req.user.userId,
       req.user.role,
+      req.user.organisationId,
+      req.user.organisationType,
       query,
     );
   }
@@ -46,6 +50,8 @@ export class AppointmentsController {
       id,
       req.user.userId,
       req.user.role,
+      req.user.organisationId,
+      req.user.organisationType,
     );
   }
 
@@ -59,6 +65,8 @@ export class AppointmentsController {
       id,
       req.user.userId,
       req.user.role,
+      req.user.organisationId,
+      req.user.organisationType,
       updateDto,
     );
   }
@@ -69,9 +77,8 @@ export class AppointmentsController {
       id,
       req.user.userId,
       req.user.role,
+      req.user.organisationId,
+      req.user.organisationType,
     );
   }
 }
-
-
-

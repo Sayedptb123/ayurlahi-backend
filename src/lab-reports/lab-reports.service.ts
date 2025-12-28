@@ -37,22 +37,23 @@ export class LabReportsService {
   async create(
     userId: string,
     userRole: string,
+    organisationId: string | undefined,
+    organisationType: string | undefined,
     createDto: CreateLabReportDto,
   ) {
     // Only clinic users and admin can create lab reports
-    if (!['clinic', 'admin'].includes(userRole)) {
+    if (
+      organisationType !== 'CLINIC' &&
+      userRole !== 'SUPER_ADMIN' &&
+      userRole !== 'SUPPORT'
+    ) {
       throw new ForbiddenException(
         'You do not have permission to create lab reports',
       );
     }
 
-    const user = await this.usersRepository.findOne({ where: { id: userId } });
-    if (!user) {
-      throw new NotFoundException('User not found');
-    }
-
-    const clinicId = user.clinicId;
-    if (!clinicId && userRole !== 'admin') {
+    const clinicId = organisationId;
+    if (!clinicId && userRole !== 'SUPER_ADMIN' && userRole !== 'SUPPORT') {
       throw new BadRequestException('Clinic not associated with user');
     }
 
@@ -74,9 +75,7 @@ export class LabReportsService {
       throw new NotFoundException('Patient not found');
     }
     if (patient.clinicId !== clinicId) {
-      throw new ForbiddenException(
-        'Patient does not belong to this clinic',
-      );
+      throw new ForbiddenException('Patient does not belong to this clinic');
     }
 
     // Verify doctor exists and belongs to clinic
@@ -149,6 +148,8 @@ export class LabReportsService {
   async findAll(
     userId: string,
     userRole: string,
+    organisationId: string | undefined,
+    organisationType: string | undefined,
     query: GetLabReportsDto,
   ) {
     const {
@@ -164,15 +165,14 @@ export class LabReportsService {
     const skip = (page - 1) * limit;
 
     // Only clinic users and admin can view lab reports
-    if (!['clinic', 'admin'].includes(userRole)) {
+    if (
+      organisationType !== 'CLINIC' &&
+      userRole !== 'SUPER_ADMIN' &&
+      userRole !== 'SUPPORT'
+    ) {
       throw new ForbiddenException(
         'You do not have permission to view lab reports',
       );
-    }
-
-    const user = await this.usersRepository.findOne({ where: { id: userId } });
-    if (!user) {
-      throw new NotFoundException('User not found');
     }
 
     // Build query
@@ -184,8 +184,8 @@ export class LabReportsService {
       .leftJoinAndSelect('labReport.tests', 'tests');
 
     // Clinic users can only see their clinic's lab reports
-    if (userRole === 'clinic') {
-      if (!user.clinicId) {
+    if (organisationType === 'CLINIC') {
+      if (!organisationId) {
         return {
           data: [],
           total: 0,
@@ -195,7 +195,7 @@ export class LabReportsService {
         };
       }
       queryBuilder.where('labReport.clinicId = :clinicId', {
-        clinicId: user.clinicId,
+        clinicId: organisationId,
       });
     }
 
@@ -255,7 +255,13 @@ export class LabReportsService {
     };
   }
 
-  async findOne(id: string, userId: string, userRole: string) {
+  async findOne(
+    id: string,
+    userId: string,
+    userRole: string,
+    organisationId: string | undefined,
+    organisationType: string | undefined,
+  ) {
     const labReport = await this.labReportsRepository.findOne({
       where: { id },
       relations: ['clinic', 'patient', 'doctor', 'appointment', 'tests'],
@@ -266,9 +272,8 @@ export class LabReportsService {
     }
 
     // Access control
-    if (userRole === 'clinic') {
-      const user = await this.usersRepository.findOne({ where: { id: userId } });
-      if (!user || user.clinicId !== labReport.clinicId) {
+    if (organisationType === 'CLINIC') {
+      if (!organisationId || organisationId !== labReport.clinicId) {
         throw new ForbiddenException(
           'You do not have access to this lab report',
         );
@@ -282,9 +287,17 @@ export class LabReportsService {
     id: string,
     userId: string,
     userRole: string,
+    organisationId: string | undefined,
+    organisationType: string | undefined,
     updateDto: UpdateLabReportDto,
   ) {
-    const labReport = await this.findOne(id, userId, userRole);
+    const labReport = await this.findOne(
+      id,
+      userId,
+      userRole,
+      organisationId,
+      organisationType,
+    );
 
     // Check reportNumber uniqueness if being updated
     if (
@@ -307,9 +320,7 @@ export class LabReportsService {
         where: { id: updateDto.patientId },
       });
       if (!patient || patient.clinicId !== labReport.clinicId) {
-        throw new ForbiddenException(
-          'Patient does not belong to this clinic',
-        );
+        throw new ForbiddenException('Patient does not belong to this clinic');
       }
     }
 
@@ -385,10 +396,21 @@ export class LabReportsService {
     return this.labReportsRepository.save(labReport);
   }
 
-  async remove(id: string, userId: string, userRole: string) {
-    const labReport = await this.findOne(id, userId, userRole);
+  async remove(
+    id: string,
+    userId: string,
+    userRole: string,
+    organisationId: string | undefined,
+    organisationType: string | undefined,
+  ) {
+    const labReport = await this.findOne(
+      id,
+      userId,
+      userRole,
+      organisationId,
+      organisationType,
+    );
     await this.labReportsRepository.remove(labReport);
     return { message: 'Lab report deleted successfully' };
   }
 }
-

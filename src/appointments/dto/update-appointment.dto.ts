@@ -8,7 +8,10 @@ import {
   Max,
   MaxLength,
 } from 'class-validator';
-import { AppointmentStatus, AppointmentType } from '../entities/appointment.entity';
+import {
+  AppointmentStatus,
+  AppointmentType,
+} from '../entities/appointment.entity';
 
 export class UpdateAppointmentDto {
   @IsOptional()
@@ -57,6 +60,3 @@ export class UpdateAppointmentDto {
   @MaxLength(500)
   cancellationReason?: string;
 }
-
-
-

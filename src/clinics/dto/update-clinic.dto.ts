@@ -49,8 +49,3 @@ export class UpdateClinicDto {
   @IsObject()
   socialMedia?: Record<string, any>;
 }
-
-
-
-
-

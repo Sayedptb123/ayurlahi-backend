@@ -23,6 +23,3 @@ import { Appointment } from '../appointments/entities/appointment.entity';
   exports: [PatientBillingService],
 })
 export class PatientBillingModule {}
-
-
-
