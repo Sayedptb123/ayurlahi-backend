@@ -81,6 +81,7 @@ import { RetreatModule } from './retreat/retreat.module';
 import { Room } from './retreat/entities/room.entity';
 import { TreatmentPackage } from './retreat/entities/treatment-package.entity';
 import { Admission } from './retreat/entities/admission.entity';
+import { RoomBooking } from './retreat/entities/room-booking.entity';
 
 @Module({
   imports: [
@@ -141,6 +142,7 @@ import { Admission } from './retreat/entities/admission.entity';
           Room,
           TreatmentPackage,
           Admission,
+          RoomBooking,
         ],
         synchronize: false, // Disabled - synchronize causes issues
         logging: configService.get<string>('NODE_ENV') === 'development',
