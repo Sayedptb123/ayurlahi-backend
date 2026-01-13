@@ -11,9 +11,14 @@ export class ExpensesService {
     constructor(
         @InjectRepository(Expense)
         private expenseRepository: Repository<Expense>,
+        @InjectRepository(User)
+        private usersRepository: Repository<User>,
     ) { }
 
-    async create(createExpenseDto: CreateExpenseDto, user: User) {
+    async create(createExpenseDto: CreateExpenseDto, reqUser: User) {
+        const user = await this.usersRepository.findOne({ where: { id: reqUser.id } });
+        if (!user) throw new NotFoundException('User not found');
+
         const orgId = user.clinicId || user.manufacturerId;
         if (!orgId) {
             throw new Error('User must belong to an organization to create expenses');
@@ -27,7 +32,10 @@ export class ExpensesService {
         return this.expenseRepository.save(expense);
     }
 
-    async findAll(user: User) {
+    async findAll(reqUser: User) {
+        const user = await this.usersRepository.findOne({ where: { id: reqUser.id } });
+        if (!user) return [];
+
         const organizationId = user.clinicId || user.manufacturerId;
         if (!organizationId) return [];
 
@@ -37,7 +45,10 @@ export class ExpensesService {
         });
     }
 
-    async findOne(id: string, user: User) {
+    async findOne(id: string, reqUser: User) {
+        const user = await this.usersRepository.findOne({ where: { id: reqUser.id } });
+        if (!user) throw new NotFoundException('User not found');
+
         const organizationId = user.clinicId || user.manufacturerId;
         if (!organizationId) throw new NotFoundException('Organization not found');
 

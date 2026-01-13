@@ -7,10 +7,15 @@ import { OrderItem } from './entities/order-item.entity';
 import { Product } from '../products/entities/product.entity';
 import { User } from '../users/entities/user.entity';
 
+import { InventoryModule } from '../inventory/inventory.module';
+
 @Module({
-  imports: [TypeOrmModule.forFeature([Order, OrderItem, Product, User])],
+  imports: [
+    TypeOrmModule.forFeature([Order, OrderItem, Product, User]),
+    InventoryModule,
+  ],
   controllers: [OrdersController],
   providers: [OrdersService],
   exports: [OrdersService],
 })
-export class OrdersModule {}
+export class OrdersModule { }

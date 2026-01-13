@@ -25,25 +25,25 @@ export class PayrollController {
     constructor(private readonly payrollService: PayrollService) { }
 
     @Post('structure')
-    @Roles(UserRole.OWNER, UserRole.MANAGER, UserRole.ADMIN)
+    @Roles(UserRole.OWNER, UserRole.MANAGER, UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.CLINIC, UserRole.MANUFACTURER)
     createStructure(@Body() dto: CreateSalaryStructureDto) {
         return this.payrollService.createOrUpdateSalaryStructure(dto);
     }
 
     @Get('structure/:staffId')
-    @Roles(UserRole.OWNER, UserRole.MANAGER, UserRole.ADMIN)
+    @Roles(UserRole.OWNER, UserRole.MANAGER, UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.CLINIC, UserRole.MANUFACTURER)
     getStructure(@Param('staffId') staffId: string) {
         return this.payrollService.getSalaryStructure(staffId);
     }
 
     @Post('generate')
-    @Roles(UserRole.OWNER, UserRole.MANAGER, UserRole.ADMIN)
+    @Roles(UserRole.OWNER, UserRole.MANAGER, UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.CLINIC, UserRole.MANUFACTURER)
     generate(@Request() req, @Body() dto: GeneratePayrollDto) {
         return this.payrollService.generatePayroll(req.user as User, dto);
     }
 
     @Get('history')
-    @Roles(UserRole.OWNER, UserRole.MANAGER, UserRole.ADMIN)
+    @Roles(UserRole.OWNER, UserRole.MANAGER, UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.CLINIC, UserRole.MANUFACTURER)
     getHistory(
         @Request() req,
         @Query('month') month?: number,
@@ -53,7 +53,7 @@ export class PayrollController {
     }
 
     @Patch(':id/status')
-    @Roles(UserRole.OWNER, UserRole.MANAGER, UserRole.ADMIN)
+    @Roles(UserRole.OWNER, UserRole.MANAGER, UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.CLINIC, UserRole.MANUFACTURER)
     updateStatus(@Param('id') id: string, @Body() dto: UpdatePayrollStatusDto) {
         return this.payrollService.updatePayrollStatus(id, dto);
     }

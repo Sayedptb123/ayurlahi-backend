@@ -14,7 +14,7 @@ import { JwtAuthGuard } from './guards/jwt-auth.guard';
 
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly authService: AuthService) {}
+  constructor(private readonly authService: AuthService) { }
 
   @Post('login')
   async login(@Body() loginDto: LoginDto) {
@@ -70,5 +70,11 @@ export class AuthController {
         : 'missing',
     });
     return this.authService.refreshToken(refreshTokenDto.refreshToken);
+  }
+  @Post('logout')
+  async logout(@Request() req) {
+    // Since we use stateless JWTs, we don't need to do anything server-side
+    // unless we were checking against a blacklist.
+    return { message: 'Logged out successfully' };
   }
 }

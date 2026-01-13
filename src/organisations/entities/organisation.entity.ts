@@ -6,7 +6,9 @@ import {
   UpdateDateColumn,
   DeleteDateColumn,
   Index,
+  OneToMany,
 } from 'typeorm';
+import { OrganisationUser } from '../../organisation-users/entities/organisation-user.entity';
 
 export type OrganisationType = 'AYURLAHI_TEAM' | 'CLINIC' | 'MANUFACTURER';
 export type OrganisationStatus = 'active' | 'suspended' | 'inactive';
@@ -130,5 +132,8 @@ export class Organisation {
 
   @DeleteDateColumn({ name: 'deleted_at' })
   deletedAt: Date | null;
+
+  @OneToMany(() => OrganisationUser, (orgUser) => orgUser.organisation)
+  users: OrganisationUser[];
 }
 

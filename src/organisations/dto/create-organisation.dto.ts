@@ -17,6 +17,28 @@ import type {
   ApprovalStatus,
 } from '../entities/organisation.entity';
 
+export class CreateOrganisationUserDto {
+  @IsNotEmpty()
+  @IsString()
+  email: string;
+
+  @IsNotEmpty()
+  @IsString()
+  password: string;
+
+  @IsNotEmpty()
+  @IsString()
+  firstName: string;
+
+  @IsNotEmpty()
+  @IsString()
+  lastName: string;
+
+  @IsNotEmpty()
+  @IsString()
+  phone: string;
+}
+
 export class CreateOrganisationDto {
   @IsNotEmpty()
   @IsString()
@@ -95,5 +117,12 @@ export class CreateOrganisationDto {
   @Min(0)
   @Max(100)
   commissionRate?: number;
+
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => CreateOrganisationUserDto)
+  primaryUser?: CreateOrganisationUserDto;
 }
+
+
 

@@ -4,6 +4,7 @@ import { Repository } from 'typeorm';
 import { Budget } from './entities/budget.entity';
 import { CreateBudgetDto } from './dto/create-budget.dto';
 import { UpdateBudgetDto } from './dto/update-budget.dto';
+
 import { User } from '../users/entities/user.entity';
 
 @Injectable()
@@ -11,9 +12,14 @@ export class BudgetsService {
     constructor(
         @InjectRepository(Budget)
         private budgetRepository: Repository<Budget>,
+        @InjectRepository(User)
+        private usersRepository: Repository<User>,
     ) { }
 
-    async create(createBudgetDto: CreateBudgetDto, user: User) {
+    async create(createBudgetDto: CreateBudgetDto, reqUser: User) {
+        const user = await this.usersRepository.findOne({ where: { id: reqUser.id } });
+        if (!user) throw new NotFoundException('User not found');
+
         const orgId = user.clinicId || user.manufacturerId;
         if (!orgId) throw new Error('User missing organization');
 
@@ -24,7 +30,10 @@ export class BudgetsService {
         return this.budgetRepository.save(budget);
     }
 
-    async findAll(user: User) {
+    async findAll(reqUser: User) {
+        const user = await this.usersRepository.findOne({ where: { id: reqUser.id } });
+        if (!user) return [];
+
         const orgId = user.clinicId || user.manufacturerId;
         if (!orgId) return [];
 
@@ -34,7 +43,10 @@ export class BudgetsService {
         });
     }
 
-    async findOne(id: string, user: User) {
+    async findOne(id: string, reqUser: User) {
+        const user = await this.usersRepository.findOne({ where: { id: reqUser.id } });
+        if (!user) throw new NotFoundException('User not found');
+
         const orgId = user.clinicId || user.manufacturerId;
         if (!orgId) throw new NotFoundException('User not associated with an organization');
 

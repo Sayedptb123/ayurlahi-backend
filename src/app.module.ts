@@ -35,6 +35,7 @@ import { PurchaseOrdersModule } from './purchase-orders/purchase-orders.module';
 import { ExpensesModule } from './expenses/expenses.module';
 import { BudgetsModule } from './budgets/budgets.module';
 import { PayrollModule } from './payroll/payroll.module';
+import { ManufacturingModule } from './manufacturing/manufacturing.module';
 import { User } from './users/entities/user.entity';
 import { Organisation } from './organisations/entities/organisation.entity';
 import { OrganisationUser } from './organisation-users/entities/organisation-user.entity';
@@ -66,7 +67,20 @@ import { LabReport } from './lab-reports/entities/lab-report.entity';
 import { LabTest } from './lab-reports/entities/lab-test.entity';
 import { PatientBill } from './patient-billing/entities/patient-bill.entity';
 import { BillItem } from './patient-billing/entities/bill-item.entity';
+import { RawMaterial } from './manufacturing/entities/raw-material.entity';
+import { InventoryTransaction } from './manufacturing/entities/inventory-transaction.entity';
+import { ManufacturingFormula } from './manufacturing/entities/manufacturing-formula.entity';
+import { FormulaItem } from './manufacturing/entities/formula-item.entity';
+import { ProcessStage } from './manufacturing/entities/process-stage.entity';
+import { Equipment } from './manufacturing/entities/equipment.entity';
+import { Batch } from './manufacturing/entities/batch.entity';
+import { BatchStage } from './manufacturing/entities/batch-stage.entity';
+import { WastageLog } from './manufacturing/entities/wastage-log.entity';
 import { CustomNamingStrategy } from './common/naming-strategy';
+import { RetreatModule } from './retreat/retreat.module';
+import { Room } from './retreat/entities/room.entity';
+import { TreatmentPackage } from './retreat/entities/treatment-package.entity';
+import { Admission } from './retreat/entities/admission.entity';
 
 @Module({
   imports: [
@@ -115,8 +129,20 @@ import { CustomNamingStrategy } from './common/naming-strategy';
           LabTest,
           PatientBill,
           BillItem,
+          RawMaterial,
+          InventoryTransaction,
+          ManufacturingFormula,
+          FormulaItem,
+          ProcessStage,
+          Equipment,
+          Batch,
+          BatchStage,
+          WastageLog,
+          Room,
+          TreatmentPackage,
+          Admission,
         ],
-        synchronize: false, // Disabled to prevent schema conflicts with existing data
+        synchronize: false, // Disabled - synchronize causes issues
         logging: configService.get<string>('NODE_ENV') === 'development',
         namingStrategy: new CustomNamingStrategy(),
       }),
@@ -154,6 +180,8 @@ import { CustomNamingStrategy } from './common/naming-strategy';
     ExpensesModule,
     BudgetsModule,
     PayrollModule,
+    ManufacturingModule,
+    RetreatModule,
   ],
   controllers: [AppController],
   providers: [AppService],

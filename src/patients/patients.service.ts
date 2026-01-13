@@ -20,7 +20,7 @@ export class PatientsService {
     private patientsRepository: Repository<Patient>,
     @InjectRepository(User)
     private usersRepository: Repository<User>,
-  ) {}
+  ) { }
 
   async create(
     userId: string,
@@ -133,10 +133,12 @@ export class PatientsService {
 
     return {
       data,
-      total,
-      page,
-      limit,
-      totalPages: Math.ceil(total / limit),
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+      },
     };
   }
 

@@ -23,7 +23,7 @@ export class StaffService {
     private staffRepository: Repository<Staff>,
     @InjectRepository(User)
     private usersRepository: Repository<User>,
-  ) {}
+  ) { }
 
   // Clinic positions that clinic users can create
   private readonly clinicPositions = [
@@ -70,8 +70,8 @@ export class StaffService {
       throw new NotFoundException('User not found');
     }
 
-    // Only clinic and manufacturer users can access staff
-    if (!['clinic', 'manufacturer', 'admin'].includes(userRole)) {
+    // Only clinic, manufacturer and admin users can access staff
+    if (!['clinic', 'manufacturer', 'admin', 'SUPER_ADMIN', 'OWNER', 'MANAGER', 'STAFF'].includes(userRole)) {
       throw new ForbiddenException('You do not have permission to view staff');
     }
 
@@ -84,7 +84,7 @@ export class StaffService {
     // Admin can see all, but for clinic/manufacturer, filter by organization
     const queryBuilder = this.staffRepository.createQueryBuilder('staff');
 
-    if (userRole !== 'admin' && organizationId) {
+    if (!['admin', 'SUPER_ADMIN'].includes(userRole) && organizationId) {
       queryBuilder.where('staff.organizationId = :organizationId', {
         organizationId,
       });
@@ -126,7 +126,7 @@ export class StaffService {
     }
 
     // Verify user belongs to same organization (unless admin)
-    if (userRole !== 'admin') {
+    if (!['admin', 'SUPER_ADMIN'].includes(userRole)) {
       const user = await this.usersRepository.findOne({
         where: { id: userId },
       });
@@ -147,7 +147,7 @@ export class StaffService {
 
   async create(userId: string, userRole: string, createDto: CreateStaffDto) {
     // Only clinic and manufacturer users can create staff
-    if (!['clinic', 'manufacturer'].includes(userRole)) {
+    if (!['clinic', 'manufacturer', 'OWNER', 'MANAGER'].includes(userRole)) {
       throw new ForbiddenException(
         'Only clinic and manufacturer users can create staff',
       );
@@ -233,7 +233,7 @@ export class StaffService {
     }
 
     // Verify user belongs to same organization (unless admin)
-    if (userRole !== 'admin') {
+    if (!['admin', 'SUPER_ADMIN'].includes(userRole)) {
       const user = await this.usersRepository.findOne({
         where: { id: userId },
       });
@@ -306,7 +306,7 @@ export class StaffService {
     }
 
     // Verify user belongs to same organization (unless admin)
-    if (userRole !== 'admin') {
+    if (!['admin', 'SUPER_ADMIN'].includes(userRole)) {
       const user = await this.usersRepository.findOne({
         where: { id: userId },
       });
@@ -334,7 +334,7 @@ export class StaffService {
     }
 
     // Verify user belongs to same organization (unless admin)
-    if (userRole !== 'admin') {
+    if (!['admin', 'SUPER_ADMIN'].includes(userRole)) {
       const user = await this.usersRepository.findOne({
         where: { id: userId },
       });
@@ -369,19 +369,19 @@ export class StaffService {
       whatsappNumber: staff.whatsappNumber,
       address:
         staff.addressStreet ||
-        staff.addressCity ||
-        staff.addressDistrict ||
-        staff.addressState ||
-        staff.addressZipCode ||
-        staff.addressCountry
+          staff.addressCity ||
+          staff.addressDistrict ||
+          staff.addressState ||
+          staff.addressZipCode ||
+          staff.addressCountry
           ? {
-              street: staff.addressStreet,
-              city: staff.addressCity,
-              district: staff.addressDistrict,
-              state: staff.addressState,
-              zipCode: staff.addressZipCode,
-              country: staff.addressCountry,
-            }
+            street: staff.addressStreet,
+            city: staff.addressCity,
+            district: staff.addressDistrict,
+            state: staff.addressState,
+            zipCode: staff.addressZipCode,
+            country: staff.addressCountry,
+          }
           : null,
       dateOfBirth: staff.dateOfBirth
         ? staff.dateOfBirth.toISOString().split('T')[0]

@@ -73,7 +73,7 @@ async function main() {
   console.log('');
 
   const config = getDbConfig();
-  const password = 'abc123123';
+  const password = 'password123';
 
   console.log(`Database: ${config.database}`);
   console.log(`User: ${config.user}`);
@@ -94,12 +94,14 @@ async function main() {
 
   // Test user emails
   const testUserEmails = [
+    'superadmin1@ayurlahi.com',
     'admin@test.com',
     'support@test.com',
-    'clinic1@test.com',
-    'clinic2@test.com',
-    'manufacturer1@test.com',
-    'manufacturer2@test.com',
+    'clinic1.owner@test.com',
+    'clinic2.owner@test.com',
+    'mfg1.owner@test.com',
+    'mfg2.owner@test.com',
+    'rahul.final@test.com'
   ];
 
   log('Updating password hashes for test users...', 'cyan');
@@ -119,11 +121,11 @@ async function main() {
       // Write SQL to temporary file to avoid shell expansion issues
       const escapedEmail = email.replace(/'/g, "''");
       const sql = `UPDATE users SET password_hash = $hash$${hashedPassword}$hash$ WHERE email = '${escapedEmail}';`;
-      
+
       // Write SQL to temporary file to avoid shell expansion of $ characters
       const tempFile = path.join(os.tmpdir(), `fix-password-${Date.now()}-${Math.random().toString(36).substring(7)}.sql`);
       fs.writeFileSync(tempFile, sql, 'utf8');
-      
+
       try {
         execSync(
           `psql -h ${config.host} -p ${config.port} -U ${config.user} -d ${config.database} -q -f "${tempFile}"`,

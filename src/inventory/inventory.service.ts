@@ -12,7 +12,7 @@ export class InventoryService {
   constructor(
     @InjectRepository(InventoryItem)
     private readonly inventoryRepository: Repository<InventoryItem>,
-  ) {}
+  ) { }
 
   async create(
     organisationId: string,
@@ -66,5 +66,44 @@ export class InventoryService {
       .where('item.organisation_id = :organisationId', { organisationId })
       .andWhere('item.current_stock <= item.min_stock_level')
       .getMany();
+  }
+
+  async addStock(
+    organisationId: string,
+    items: Array<{
+      sku: string;
+      name: string;
+      quantity: number;
+      unitPrice: number;
+      unit?: string;
+    }>,
+  ): Promise<void> {
+    for (const item of items) {
+      // Find existing item by SKU
+      let inventoryItem = await this.inventoryRepository.findOne({
+        where: { organisationId, sku: item.sku },
+      });
+
+      if (inventoryItem) {
+        // Update stock
+        inventoryItem.currentStock += item.quantity;
+        // Optionally update price (weighted average or latest?) - Keeping simple: latest
+        inventoryItem.unitPrice = item.unitPrice;
+        await this.inventoryRepository.save(inventoryItem);
+      } else {
+        // Create new item
+        inventoryItem = this.inventoryRepository.create({
+          organisationId,
+          name: item.name,
+          sku: item.sku,
+          currentStock: item.quantity,
+          unitPrice: item.unitPrice,
+          unit: item.unit || 'Unit', // Default unit
+          minStockLevel: 10, // Default min stock
+          costPrice: item.unitPrice, // Assumed cost matches purchase price
+        });
+        await this.inventoryRepository.save(inventoryItem);
+      }
+    }
   }
 }

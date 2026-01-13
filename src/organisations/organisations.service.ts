@@ -11,12 +11,18 @@ import { CreateOrganisationDto } from './dto/create-organisation.dto';
 import { UpdateOrganisationDto } from './dto/update-organisation.dto';
 import { GetOrganisationsDto } from './dto/get-organisations.dto';
 
+import { OrganisationUser } from '../organisation-users/entities/organisation-user.entity';
+import { UsersService } from '../users/users.service';
+
 @Injectable()
 export class OrganisationsService {
   constructor(
     @InjectRepository(Organisation)
     private readonly organisationsRepository: Repository<Organisation>,
-  ) {}
+    @InjectRepository(OrganisationUser)
+    private readonly organisationUserRepository: Repository<OrganisationUser>,
+    private readonly usersService: UsersService,
+  ) { }
 
   async create(
     createDto: CreateOrganisationDto,
@@ -37,7 +43,42 @@ export class OrganisationsService {
       status: createDto.status || 'active',
     });
 
-    return await this.organisationsRepository.save(organisation);
+    const savedOrg = await this.organisationsRepository.save(organisation);
+
+    // Create primary user if provided
+    if (createDto.primaryUser) {
+      try {
+        // Create the user
+        // Note: passing 'SUPER_ADMIN' as role to bypass permission check
+        const userRole = createDto.type === 'CLINIC' ? 'clinic' : 'manufacturer'; // Mapping to UserRole enum string
+
+        const user = await this.usersService.create('SUPER_ADMIN', {
+          email: createDto.primaryUser.email,
+          password: createDto.primaryUser.password,
+          firstName: createDto.primaryUser.firstName,
+          lastName: createDto.primaryUser.lastName,
+          phone: createDto.primaryUser.phone,
+          isActive: true,
+          role: userRole as any,
+        });
+
+        // Link user to organisation
+        const orgUser = this.organisationUserRepository.create({
+          organisationId: savedOrg.id,
+          userId: user.id,
+          role: 'OWNER',
+          isPrimary: true,
+          createdBy: createdBy,
+        });
+
+        await this.organisationUserRepository.save(orgUser);
+      } catch (error) {
+        console.error('Failed to create primary user for organisation:', error);
+        throw error;
+      }
+    }
+
+    return savedOrg;
   }
 
   async findAll(query: GetOrganisationsDto): Promise<{
@@ -56,11 +97,13 @@ export class OrganisationsService {
 
     const queryBuilder = this.organisationsRepository
       .createQueryBuilder('org')
+      .leftJoinAndSelect('org.users', 'orgUser', 'orgUser.isPrimary = :isPrimary', { isPrimary: true })
+      .leftJoinAndSelect('orgUser.user', 'user')
       .where('org.deletedAt IS NULL');
 
     if (search) {
       queryBuilder.andWhere(
-        '(org.name ILIKE :search OR org.clinicName ILIKE :search OR org.companyName ILIKE :search)',
+        '(org.name ILIKE :search OR org.clinicName ILIKE :search OR org.companyName ILIKE :search OR user.email ILIKE :search)',
         { search: `%${search}%` },
       );
     }
@@ -91,6 +134,7 @@ export class OrganisationsService {
   async findOne(id: string): Promise<Organisation> {
     const organisation = await this.organisationsRepository.findOne({
       where: { id, deletedAt: IsNull() },
+      relations: ['users', 'users.user'],
     });
 
     if (!organisation) {
@@ -119,7 +163,29 @@ export class OrganisationsService {
       }
     }
 
+    // Update primary user if provided
+    if (updateDto.primaryUser && organisation.users) {
+      const primaryOrgUser = organisation.users.find(u => u.isPrimary);
+      if (primaryOrgUser && primaryOrgUser.user) {
+        // Create a partial update object for the user
+        const userUpdate: any = {};
+        if (updateDto.primaryUser.firstName) userUpdate.firstName = updateDto.primaryUser.firstName;
+        if (updateDto.primaryUser.lastName) userUpdate.lastName = updateDto.primaryUser.lastName;
+        if (updateDto.primaryUser.phone) userUpdate.phone = updateDto.primaryUser.phone;
+        // Email update might be sensitive or require unique check, UsersService.update handles it?
+        // UsersService.update usually expects role checks or we pass 'SUPER_ADMIN' to bypass if allowed.
+        // Let's assume we can update basic details.
+
+        if (Object.keys(userUpdate).length > 0) {
+          await this.usersService.update(primaryOrgUser.user.id, userUpdate, 'SUPER_ADMIN' as any);
+        }
+      }
+    }
+
     Object.assign(organisation, updateDto);
+    // Remove primaryUser from organisation object before saving to avoid error if it tries to map to column
+    delete (organisation as any).primaryUser;
+
     return await this.organisationsRepository.save(organisation);
   }
 

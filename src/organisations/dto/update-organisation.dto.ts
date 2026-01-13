@@ -87,5 +87,12 @@ export class UpdateOrganisationDto {
   @Min(0)
   @Max(100)
   commissionRate?: number;
+
+  @IsOptional()
+  primaryUser?: {
+    firstName?: string;
+    lastName?: string;
+    phone?: string;
+  };
 }
 

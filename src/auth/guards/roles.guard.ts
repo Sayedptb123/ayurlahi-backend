@@ -5,7 +5,7 @@ import { UserRole } from '../../users/enums/user-role.enum';
 
 @Injectable()
 export class RolesGuard implements CanActivate {
-  constructor(private reflector: Reflector) {}
+  constructor(private reflector: Reflector) { }
 
   canActivate(context: ExecutionContext): boolean {
     const requiredRoles = this.reflector.getAllAndOverride<UserRole[]>(
@@ -26,9 +26,9 @@ export class RolesGuard implements CanActivate {
     // This allows new JWT tokens with SUPER_ADMIN, OWNER, etc. to work with old @Roles() decorators
     const normalizeRole = (role: string): string => {
       if (!role) return '';
-      
+
       const upperRole = role.toUpperCase();
-      
+
       // Map organization roles to legacy roles
       if (upperRole === 'SUPER_ADMIN') return UserRole.ADMIN;
       if (upperRole === 'SUPPORT') return UserRole.SUPPORT;
@@ -38,17 +38,19 @@ export class RolesGuard implements CanActivate {
         if (user.organisationType === 'MANUFACTURER') return UserRole.MANUFACTURER;
         if (user.organisationType === 'AYURLAHI_TEAM') return UserRole.ADMIN;
       }
-      
+
       // Return as-is if already a legacy role
       return role.toLowerCase();
     };
 
     const userRole = normalizeRole(user.role);
 
+    // SUPER_ADMIN and ADMIN have access to everything
+    if (user.role === 'SUPER_ADMIN' || user.role === UserRole.SUPER_ADMIN || userRole === UserRole.ADMIN) {
+      return true;
+    }
+
     // Check if user has one of the required roles
-    // Admin has access to everything
-    return requiredRoles.some(
-      (role) => userRole === role || userRole === UserRole.ADMIN,
-    );
+    return requiredRoles.some((role) => userRole === role);
   }
 }

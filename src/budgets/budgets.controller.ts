@@ -24,25 +24,25 @@ export class BudgetsController {
     constructor(private readonly budgetsService: BudgetsService) { }
 
     @Post()
-    @Roles(UserRole.OWNER, UserRole.MANAGER, UserRole.ADMIN)
+    @Roles(UserRole.OWNER, UserRole.MANAGER, UserRole.ADMIN, UserRole.CLINIC, UserRole.MANUFACTURER)
     create(@Body() createBudgetDto: CreateBudgetDto, @Request() req) {
         return this.budgetsService.create(createBudgetDto, req.user as User);
     }
 
     @Get()
-    @Roles(UserRole.OWNER, UserRole.MANAGER, UserRole.ADMIN)
+    @Roles(UserRole.OWNER, UserRole.MANAGER, UserRole.ADMIN, UserRole.CLINIC, UserRole.MANUFACTURER)
     findAll(@Request() req) {
         return this.budgetsService.findAll(req.user as User);
     }
 
     @Get(':id')
-    @Roles(UserRole.OWNER, UserRole.MANAGER, UserRole.ADMIN)
+    @Roles(UserRole.OWNER, UserRole.MANAGER, UserRole.ADMIN, UserRole.CLINIC, UserRole.MANUFACTURER)
     findOne(@Param('id') id: string, @Request() req) {
         return this.budgetsService.findOne(id, req.user as User);
     }
 
     @Patch(':id')
-    @Roles(UserRole.OWNER, UserRole.MANAGER, UserRole.ADMIN)
+    @Roles(UserRole.OWNER, UserRole.MANAGER, UserRole.ADMIN, UserRole.CLINIC, UserRole.MANUFACTURER)
     update(
         @Param('id') id: string,
         @Body() updateBudgetDto: UpdateBudgetDto,
@@ -52,7 +52,7 @@ export class BudgetsController {
     }
 
     @Delete(':id')
-    @Roles(UserRole.OWNER, UserRole.MANAGER, UserRole.ADMIN)
+    @Roles(UserRole.OWNER, UserRole.MANAGER, UserRole.ADMIN, UserRole.CLINIC, UserRole.MANUFACTURER)
     remove(@Param('id') id: string, @Request() req) {
         return this.budgetsService.remove(id, req.user as User);
     }

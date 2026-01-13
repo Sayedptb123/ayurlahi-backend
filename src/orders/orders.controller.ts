@@ -19,16 +19,16 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 @Controller('orders')
 @UseGuards(JwtAuthGuard)
 export class OrdersController {
-  constructor(private readonly ordersService: OrdersService) {}
+  constructor(private readonly ordersService: OrdersService) { }
 
   @Get()
   async findAll(@Request() req, @Query() query: GetOrdersDto) {
-    return this.ordersService.findAll(req.user.userId, req.user.role, query);
+    return this.ordersService.findAll(req.user.userId, req.user.role, req.user.organisationType, query);
   }
 
   @Get(':id')
   async findOne(@Param('id', ParseUUIDPipe) id: string, @Request() req) {
-    return this.ordersService.findOne(id, req.user.userId, req.user.role);
+    return this.ordersService.findOne(id, req.user.userId, req.user.role, req.user.organisationType);
   }
 
   @Post()
@@ -51,6 +51,7 @@ export class OrdersController {
       id,
       req.user.userId,
       req.user.role,
+      req.user.organisationType,
       updateDto,
     );
   }

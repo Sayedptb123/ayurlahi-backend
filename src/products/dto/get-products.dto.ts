@@ -37,4 +37,8 @@ export class GetProductsDto {
   @Type(() => Boolean)
   @IsBoolean()
   isActive?: boolean;
+
+  @IsOptional()
+  @IsString()
+  status?: string;
 }

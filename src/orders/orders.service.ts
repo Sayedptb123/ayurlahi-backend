@@ -13,6 +13,7 @@ import { User } from '../users/entities/user.entity';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { GetOrdersDto } from './dto/get-orders.dto';
 import { UpdateOrderStatusDto } from './dto/update-order-status.dto';
+import { InventoryService } from '../inventory/inventory.service';
 
 @Injectable()
 export class OrdersService {
@@ -25,9 +26,10 @@ export class OrdersService {
     private productsRepository: Repository<Product>,
     @InjectRepository(User)
     private usersRepository: Repository<User>,
-  ) {}
+    private inventoryService: InventoryService,
+  ) { }
 
-  async findAll(userId: string, userRole: string, query: GetOrdersDto) {
+  async findAll(userId: string, userRole: string, organisationType: string | undefined, query: GetOrdersDto) {
     const { page = 1, limit = 20, status, source } = query;
     const skip = (page - 1) * limit;
 
@@ -36,8 +38,8 @@ export class OrdersService {
       .leftJoinAndSelect('order.items', 'items')
       .where('order.deletedAt IS NULL');
 
-    // Role-based filtering
-    if (userRole === 'clinic') {
+    // Role-based filtering using organisationType from JWT
+    if (organisationType === 'CLINIC') {
       // Clinic users can only see their own orders
       const user = await this.usersRepository.findOne({
         where: { id: userId },
@@ -53,7 +55,7 @@ export class OrdersService {
           pagination: { page, limit, total: 0, totalPages: 0 },
         };
       }
-    } else if (userRole === 'manufacturer') {
+    } else if (organisationType === 'MANUFACTURER') {
       // Manufacturer users can only see orders with their products
       const user = await this.usersRepository.findOne({
         where: { id: userId },
@@ -96,7 +98,7 @@ export class OrdersService {
     };
   }
 
-  async findOne(id: string, userId: string, userRole: string) {
+  async findOne(id: string, userId: string, userRole: string, organisationType: string | undefined) {
     const order = await this.ordersRepository.findOne({
       where: { id, deletedAt: IsNull() },
       relations: ['items'],
@@ -106,15 +108,15 @@ export class OrdersService {
       throw new NotFoundException(`Order with ID ${id} not found`);
     }
 
-    // Role-based access control
-    if (userRole === 'clinic') {
+    // Role-based access control using organisationType from JWT
+    if (organisationType === 'CLINIC') {
       const user = await this.usersRepository.findOne({
         where: { id: userId },
       });
       if (!user || user.clinicId !== order.clinicId) {
         throw new ForbiddenException('You do not have access to this order');
       }
-    } else if (userRole === 'manufacturer') {
+    } else if (organisationType === 'MANUFACTURER') {
       const user = await this.usersRepository.findOne({
         where: { id: userId },
       });
@@ -266,7 +268,7 @@ export class OrdersService {
   }
 
   async reorder(orderId: string, userId: string) {
-    const originalOrder = await this.findOne(orderId, userId, 'clinic');
+    const originalOrder = await this.findOne(orderId, userId, 'clinic', 'CLINIC');
 
     const createOrderDto: CreateOrderDto = {
       items: originalOrder.items.map((item) => ({
@@ -292,9 +294,10 @@ export class OrdersService {
     id: string,
     userId: string,
     userRole: string,
+    organisationType: string | undefined,
     updateDto: UpdateOrderStatusDto,
   ) {
-    const order = await this.findOne(id, userId, userRole);
+    const order = await this.findOne(id, userId, userRole, organisationType);
 
     // Only admin, support, and manufacturer can update status
     if (!['admin', 'support', 'manufacturer'].includes(userRole)) {
@@ -316,6 +319,18 @@ export class OrdersService {
       !order.deliveredAt
     ) {
       order.deliveredAt = new Date();
+      // Sync Inventory
+      if (order.items && order.items.length > 0) {
+        await this.inventoryService.addStock(
+          order.clinicId,
+          order.items.map((item) => ({
+            sku: item.productSku,
+            name: item.productName,
+            quantity: item.quantity,
+            unitPrice: Number(item.unitPrice),
+          })),
+        );
+      }
     } else if (
       updateDto.status === OrderStatus.CANCELLED &&
       !order.cancelledAt

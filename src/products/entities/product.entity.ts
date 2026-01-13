@@ -7,6 +7,7 @@ import {
   ManyToOne,
   JoinColumn,
 } from 'typeorm';
+import { ProductStatus } from '../enums/product-status.enum';
 
 @Entity('products')
 export class Product {
@@ -74,6 +75,13 @@ export class Product {
 
   @Column({ type: 'jsonb', nullable: true })
   specifications: Record<string, any> | null;
+
+  @Column({
+    type: 'enum',
+    enum: ProductStatus,
+    default: ProductStatus.ACTIVE,
+  })
+  status: ProductStatus;
 
   @Column({ type: 'boolean', default: true, name: 'isActive' })
   isActive: boolean;
