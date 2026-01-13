@@ -29,7 +29,9 @@
     "fix:passwords": "node scripts/fix-user-passwords.js",
     "check:schema": "node scripts/check-users-schema.js",
     "migrate:fix-users": "psql -U postgres -d ayurlahi -f migrations/fix-users-table-schema.sql",
-    "migrate:medilink:run": "node scripts/run-medilink-migrations.js"
+    "migrate:medilink:run": "node scripts/run-medilink-migrations.js",
+    "migrate:doctors-to-staff": "node scripts/migrate-doctors-to-staff.js",
+    "migrate:doctors-to-staff:rollback": "node scripts/migrate-doctors-to-staff.js rollback"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.1",

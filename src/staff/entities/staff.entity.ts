@@ -50,13 +50,6 @@ export class Staff {
   @Column({ type: 'uuid', name: 'organization_id' })
   organizationId: string;
 
-  @Column({
-    type: 'enum',
-    enum: OrganizationType,
-    name: 'organization_type',
-  })
-  organizationType: OrganizationType;
-
   @Column({ type: 'varchar', length: 100, name: 'first_name' })
   firstName: string;
 

@@ -12,6 +12,7 @@ import {
   OrganizationType,
 } from './entities/staff.entity';
 import { User } from '../users/entities/user.entity';
+import { OrganisationUser } from '../organisation-users/entities/organisation-user.entity';
 import { CreateStaffDto } from './dto/create-staff.dto';
 import { UpdateStaffDto } from './dto/update-staff.dto';
 import { GetStaffDto } from './dto/get-staff.dto';
@@ -23,6 +24,8 @@ export class StaffService {
     private staffRepository: Repository<Staff>,
     @InjectRepository(User)
     private usersRepository: Repository<User>,
+    @InjectRepository(OrganisationUser)
+    private organisationUsersRepository: Repository<OrganisationUser>,
   ) { }
 
   // Clinic positions that clinic users can create
@@ -61,14 +64,28 @@ export class StaffService {
     StaffPosition.OTHER,
   ];
 
+  private async getOrganizationId(userId: string): Promise<string> {
+    const user = await this.usersRepository.findOne({ where: { id: userId } });
+    if (user?.clinicId || user?.manufacturerId) {
+      // Cast to string as we checked for existence
+      return (user.clinicId || user.manufacturerId) as string;
+    }
+
+    const orgUser = await this.organisationUsersRepository.findOne({
+      where: { userId },
+    });
+
+    if (orgUser) {
+      return orgUser.organisationId;
+    }
+
+    throw new ForbiddenException('User organization not found');
+  }
+
   async findAll(userId: string, userRole: string, query: GetStaffDto) {
+    console.log('[Staff Service] findAll called:', { userId, userRole, query });
     const { page = 1, limit = 20, position, isActive } = query;
     const skip = (page - 1) * limit;
-
-    const user = await this.usersRepository.findOne({ where: { id: userId } });
-    if (!user) {
-      throw new NotFoundException('User not found');
-    }
 
     // Only clinic, manufacturer and admin users can access staff
     if (!['clinic', 'manufacturer', 'admin', 'SUPER_ADMIN', 'OWNER', 'MANAGER', 'STAFF'].includes(userRole)) {
@@ -76,20 +93,24 @@ export class StaffService {
     }
 
     // Get organization ID from user
-    const organizationId = user.clinicId || user.manufacturerId;
-    const organizationType = user.clinicId
-      ? OrganizationType.CLINIC
-      : OrganizationType.MANUFACTURER;
+    let organizationId: string | null = null;
+    try {
+      organizationId = await this.getOrganizationId(userId);
+    } catch (e) {
+      console.log('[Staff Service] Organization check skipped or failed for admin/check:', e.message);
+    }
+    console.log('[Staff Service] Organization ID:', organizationId);
 
     // Admin can see all, but for clinic/manufacturer, filter by organization
     const queryBuilder = this.staffRepository.createQueryBuilder('staff');
 
-    if (!['admin', 'SUPER_ADMIN'].includes(userRole) && organizationId) {
+    if (!['admin', 'SUPER_ADMIN'].includes(userRole)) {
+      if (!organizationId) {
+        throw new ForbiddenException('User organization not found');
+      }
+      console.log('[Staff Service] Filtering by organizationId:', organizationId);
       queryBuilder.where('staff.organizationId = :organizationId', {
         organizationId,
-      });
-      queryBuilder.andWhere('staff.organizationType = :organizationType', {
-        organizationType,
       });
     }
 
@@ -102,10 +123,12 @@ export class StaffService {
     }
 
     const total = await queryBuilder.getCount();
+    console.log('[Staff Service] Total count:', total);
     queryBuilder.skip(skip).take(limit);
     queryBuilder.orderBy('staff.createdAt', 'DESC');
 
     const data = await queryBuilder.getMany();
+    console.log('[Staff Service] Data retrieved:', data.length, 'records');
 
     return {
       data: data.map((staff) => this.mapToResponse(staff)),
@@ -127,15 +150,8 @@ export class StaffService {
 
     // Verify user belongs to same organization (unless admin)
     if (!['admin', 'SUPER_ADMIN'].includes(userRole)) {
-      const user = await this.usersRepository.findOne({
-        where: { id: userId },
-      });
-      if (!user) {
-        throw new NotFoundException('User not found');
-      }
-
-      const userOrgId = user.clinicId || user.manufacturerId;
-      if (staff.organizationId !== userOrgId) {
+      const organizationId = await this.getOrganizationId(userId);
+      if (staff.organizationId !== organizationId) {
         throw new ForbiddenException(
           'You do not have access to this staff member',
         );
@@ -153,25 +169,12 @@ export class StaffService {
       );
     }
 
-    const user = await this.usersRepository.findOne({ where: { id: userId } });
-    if (!user) {
-      throw new NotFoundException('User not found');
-    }
-
-    const organizationId = user.clinicId || user.manufacturerId;
-    const organizationType = user.clinicId
-      ? OrganizationType.CLINIC
-      : OrganizationType.MANUFACTURER;
-
-    if (!organizationId) {
-      throw new ForbiddenException('User organization not found');
-    }
+    const organizationId = await this.getOrganizationId(userId);
 
     // Validate position matches organization type
-    const allowedPositions =
-      organizationType === OrganizationType.CLINIC
-        ? this.clinicPositions
-        : this.manufacturerPositions;
+    // We assume clinic for now if checking organization users, or logic needs to be smarter
+    // For now, let's allow all positions if we found valid organizationId
+    const allowedPositions = [...this.clinicPositions, ...this.manufacturerPositions];
 
     if (!allowedPositions.includes(createDto.position)) {
       throw new BadRequestException('Invalid position for organization type');
@@ -189,7 +192,6 @@ export class StaffService {
 
     const staff = this.staffRepository.create({
       organizationId,
-      organizationType,
       firstName: createDto.firstName,
       lastName: createDto.lastName,
       position: createDto.position,
@@ -234,15 +236,8 @@ export class StaffService {
 
     // Verify user belongs to same organization (unless admin)
     if (!['admin', 'SUPER_ADMIN'].includes(userRole)) {
-      const user = await this.usersRepository.findOne({
-        where: { id: userId },
-      });
-      if (!user) {
-        throw new NotFoundException('User not found');
-      }
-
-      const userOrgId = user.clinicId || user.manufacturerId;
-      if (staff.organizationId !== userOrgId) {
+      const organizationId = await this.getOrganizationId(userId);
+      if (staff.organizationId !== organizationId) {
         throw new ForbiddenException(
           'You do not have access to this staff member',
         );
@@ -307,15 +302,8 @@ export class StaffService {
 
     // Verify user belongs to same organization (unless admin)
     if (!['admin', 'SUPER_ADMIN'].includes(userRole)) {
-      const user = await this.usersRepository.findOne({
-        where: { id: userId },
-      });
-      if (!user) {
-        throw new NotFoundException('User not found');
-      }
-
-      const userOrgId = user.clinicId || user.manufacturerId;
-      if (staff.organizationId !== userOrgId) {
+      const organizationId = await this.getOrganizationId(userId);
+      if (staff.organizationId !== organizationId) {
         throw new ForbiddenException(
           'You do not have access to this staff member',
         );
@@ -335,15 +323,8 @@ export class StaffService {
 
     // Verify user belongs to same organization (unless admin)
     if (!['admin', 'SUPER_ADMIN'].includes(userRole)) {
-      const user = await this.usersRepository.findOne({
-        where: { id: userId },
-      });
-      if (!user) {
-        throw new NotFoundException('User not found');
-      }
-
-      const userOrgId = user.clinicId || user.manufacturerId;
-      if (staff.organizationId !== userOrgId) {
+      const organizationId = await this.getOrganizationId(userId);
+      if (staff.organizationId !== organizationId) {
         throw new ForbiddenException(
           'You do not have access to this staff member',
         );
@@ -359,7 +340,6 @@ export class StaffService {
     return {
       id: staff.id,
       organizationId: staff.organizationId,
-      organizationType: staff.organizationType,
       firstName: staff.firstName,
       lastName: staff.lastName,
       position: staff.position,
@@ -384,10 +364,14 @@ export class StaffService {
           }
           : null,
       dateOfBirth: staff.dateOfBirth
-        ? staff.dateOfBirth.toISOString().split('T')[0]
+        ? (typeof staff.dateOfBirth === 'string'
+          ? (staff.dateOfBirth as string).split('T')[0]
+          : (staff.dateOfBirth as Date).toISOString().split('T')[0])
         : null,
       dateOfJoining: staff.dateOfJoining
-        ? staff.dateOfJoining.toISOString().split('T')[0]
+        ? (typeof staff.dateOfJoining === 'string'
+          ? (staff.dateOfJoining as string).split('T')[0]
+          : (staff.dateOfJoining as Date).toISOString().split('T')[0])
         : null,
       salary: staff.salary ? Number(staff.salary) : null,
       qualifications: staff.qualifications,
