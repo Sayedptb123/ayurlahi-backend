@@ -18,7 +18,14 @@ export type OrganisationUserRole =
   | 'ADMIN'
   | 'MANAGER'
   | 'DOCTOR'
-  | 'STAFF';
+  | 'NURSE'
+  | 'THERAPIST'
+  | 'PHARMACIST'
+  | 'RECEPTIONIST'
+  | 'LAB_TECHNICIAN'
+  | 'STAFF'
+  | 'PATIENT';
+
 
 @Entity('organisation_users')
 @Index(['userId'])

@@ -16,6 +16,9 @@ import { OrganisationUser } from '../organisation-users/entities/organisation-us
 import { CreateStaffDto } from './dto/create-staff.dto';
 import { UpdateStaffDto } from './dto/update-staff.dto';
 import { GetStaffDto } from './dto/get-staff.dto';
+import * as bcrypt from 'bcryptjs';
+import * as crypto from 'crypto';
+
 
 @Injectable()
 export class StaffService {
@@ -336,6 +339,283 @@ export class StaffService {
     return this.mapToResponse(updatedStaff);
   }
 
+  // ============================================================================
+  // STAFF INVITATION METHODS
+  // ============================================================================
+
+  async inviteStaff(
+    staffId: string,
+    userId: string,
+    userRole: string,
+    sendEmail: boolean = true,
+    sendSMS: boolean = false,
+  ) {
+    try {
+      console.log('[Staff Service] inviteStaff called:', { staffId, userId, userRole });
+
+      // Only OWNER, MANAGER, ADMIN can invite staff
+      if (!['OWNER', 'MANAGER', 'ADMIN', 'SUPER_ADMIN'].includes(userRole)) {
+        throw new ForbiddenException('You do not have permission to invite staff');
+      }
+
+      console.log('[Staff Service] Finding staff...');
+      const staff = await this.staffRepository.findOne({ where: { id: staffId } });
+
+      if (!staff) {
+        throw new NotFoundException(`Staff member with ID ${staffId} not found`);
+      }
+
+      console.log('[Staff Service] Staff found:', {
+        id: staff.id,
+        name: `${staff.firstName} ${staff.lastName}`,
+        organizationId: staff.organizationId,
+        email: staff.email,
+        phone: staff.phone
+      });
+
+      // Verify user belongs to same organization
+      if (!['SUPER_ADMIN'].includes(userRole)) {
+        console.log('[Staff Service] Verifying organization access...');
+        const organizationId = await this.getOrganizationId(userId);
+        console.log('[Staff Service] User organizationId:', organizationId);
+
+        if (staff.organizationId !== organizationId) {
+          throw new ForbiddenException(
+            'You do not have access to this staff member',
+          );
+        }
+      }
+
+      // Check if staff already has a user account
+      if (staff.hasUserAccount && staff.userId) {
+        throw new BadRequestException('Staff member already has a user account');
+      }
+
+      // Validate staff has email or phone
+      if (!staff.email && !staff.phone) {
+        throw new BadRequestException(
+          'Staff member must have email or phone number to receive invitation',
+        );
+      }
+
+      // Generate invitation token
+      console.log('[Staff Service] Generating invitation token...');
+      const invitationToken = this.generateInvitationToken();
+      const expiresAt = new Date();
+      expiresAt.setHours(expiresAt.getHours() + 24); // 24 hours expiry
+
+      // Create user account (inactive until invitation is accepted)
+      console.log('[Staff Service] Creating user account...');
+      const userData = {
+        email: staff.email || null,
+        phone: staff.phone || `TEMP_${Date.now()}`,
+        firstName: staff.firstName,
+        lastName: staff.lastName,
+        passwordHash: null,
+        isActive: false,
+        isEmailVerified: false,
+      };
+      console.log('[Staff Service] User data:', userData);
+
+      const user = this.usersRepository.create(userData);
+
+      console.log('[Staff Service] Saving user...');
+      const savedUser = await this.usersRepository.save(user);
+      console.log('[Staff Service] User saved:', { id: savedUser.id });
+
+      // Map staff position to organization role
+      console.log('[Staff Service] Mapping position to role...');
+      const role = this.mapPositionToRole(staff.position);
+      console.log('[Staff Service] Mapped role:', role);
+
+      // Create organisation_users entry
+      console.log('[Staff Service] Creating organisation_users entry...');
+      const orgUserData = {
+        userId: savedUser.id,
+        organisationId: staff.organizationId,
+        role: role as any,
+        isPrimary: false, // Set to false to avoid unique constraint on organisation_id
+      };
+      console.log('[Staff Service] OrgUser data:', orgUserData);
+
+
+      const orgUser = this.organisationUsersRepository.create(orgUserData);
+
+      console.log('[Staff Service] Saving organisation_users...');
+      await this.organisationUsersRepository.save(orgUser);
+      console.log('[Staff Service] Organisation_users saved');
+
+      // Update staff record
+      console.log('[Staff Service] Updating staff record...');
+      staff.userId = savedUser.id;
+      staff.hasUserAccount = true;
+      staff.userAccountStatus = 'pending';
+      staff.invitationToken = invitationToken;
+      staff.invitationSentAt = new Date();
+      staff.invitationExpiresAt = expiresAt;
+
+      await this.staffRepository.save(staff);
+      console.log('[Staff Service] Staff record updated');
+
+      // TODO: Send invitation email/SMS
+      // For now, we'll just log the invitation details
+      console.log('[Staff Service] Invitation created successfully:', {
+        staffId: staff.id,
+        userId: savedUser.id,
+        email: staff.email,
+        phone: staff.phone,
+        token: invitationToken,
+        expiresAt,
+      });
+
+      return {
+        message: 'Invitation sent successfully',
+        invitationToken, // Return token for testing (remove in production)
+        expiresAt,
+      };
+    } catch (error) {
+      console.error('[Staff Service] ERROR in inviteStaff:', {
+        message: error.message,
+        stack: error.stack,
+        name: error.name,
+        code: error.code,
+        detail: error.detail,
+      });
+      throw error;
+    }
+  }
+
+  async acceptInvitation(token: string, password: string, confirmPassword: string) {
+    // Validate passwords match
+    if (password !== confirmPassword) {
+      throw new BadRequestException('Passwords do not match');
+    }
+
+    // Find staff by invitation token
+    const staff = await this.staffRepository.findOne({
+      where: { invitationToken: token },
+    });
+
+    if (!staff) {
+      throw new NotFoundException('Invalid invitation token');
+    }
+
+    // Check if token is expired
+    if (staff.invitationExpiresAt && new Date() > staff.invitationExpiresAt) {
+      throw new BadRequestException('Invitation token has expired');
+    }
+
+    // Check if invitation is already accepted
+    if (staff.userAccountStatus === 'active') {
+      throw new BadRequestException('Invitation has already been accepted');
+    }
+
+    // Get user account
+    if (!staff.userId) {
+      throw new BadRequestException('User account not found');
+    }
+
+    const user = await this.usersRepository.findOne({
+      where: { id: staff.userId },
+    });
+
+    if (!user) {
+      throw new NotFoundException('User account not found');
+    }
+
+    // Hash password
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    // Update user account
+    user.passwordHash = hashedPassword;
+    user.isActive = true;
+    await this.usersRepository.save(user);
+
+    // Update staff record
+    staff.userAccountStatus = 'active';
+    staff.invitationToken = null; // Clear token after use
+    await this.staffRepository.save(staff);
+
+    return {
+      message: 'Invitation accepted successfully. You can now log in.',
+    };
+  }
+
+  async resendInvitation(
+    staffId: string,
+    userId: string,
+    userRole: string,
+  ) {
+    const staff = await this.staffRepository.findOne({ where: { id: staffId } });
+
+    if (!staff) {
+      throw new NotFoundException(`Staff member with ID ${staffId} not found`);
+    }
+
+    // Verify user belongs to same organization
+    if (!['SUPER_ADMIN'].includes(userRole)) {
+      const organizationId = await this.getOrganizationId(userId);
+      if (staff.organizationId !== organizationId) {
+        throw new ForbiddenException(
+          'You do not have access to this staff member',
+        );
+      }
+    }
+
+    // Check if staff has a pending invitation
+    if (!staff.hasUserAccount || staff.userAccountStatus !== 'pending') {
+      throw new BadRequestException(
+        'Staff member does not have a pending invitation',
+      );
+    }
+
+    // Generate new invitation token
+    const invitationToken = this.generateInvitationToken();
+    const expiresAt = new Date();
+    expiresAt.setHours(expiresAt.getHours() + 24);
+
+    staff.invitationToken = invitationToken;
+    staff.invitationSentAt = new Date();
+    staff.invitationExpiresAt = expiresAt;
+
+    await this.staffRepository.save(staff);
+
+    console.log('[Staff Service] Invitation resent:', {
+      staffId: staff.id,
+      email: staff.email,
+      token: invitationToken,
+    });
+
+    return {
+      message: 'Invitation resent successfully',
+      invitationToken, // Return token for testing
+      expiresAt,
+    };
+  }
+
+  // ============================================================================
+  // HELPER METHODS
+  // ============================================================================
+
+  private mapPositionToRole(position: StaffPosition): string {
+    const roleMapping = {
+      [StaffPosition.DOCTOR]: 'DOCTOR',
+      [StaffPosition.NURSE]: 'NURSE',
+      [StaffPosition.THERAPIST]: 'THERAPIST',
+      [StaffPosition.PHARMACIST]: 'PHARMACIST',
+      [StaffPosition.RECEPTIONIST]: 'RECEPTIONIST',
+      [StaffPosition.MANAGER]: 'MANAGER',
+      [StaffPosition.ADMINISTRATOR]: 'ADMIN',
+      // Add more mappings as needed
+    };
+
+    return roleMapping[position] || 'STAFF'; // Default to STAFF role
+  }
+
+  private generateInvitationToken(): string {
+    return crypto.randomBytes(32).toString('hex');
+  }
+
   private mapToResponse(staff: Staff) {
     return {
       id: staff.id,
@@ -378,8 +658,15 @@ export class StaffService {
       specialization: staff.specialization,
       isActive: staff.isActive,
       notes: staff.notes,
+      // User account fields
+      userId: staff.userId,
+      hasUserAccount: staff.hasUserAccount,
+      userAccountStatus: staff.userAccountStatus,
+      invitationSentAt: staff.invitationSentAt?.toISOString() || null,
+      invitationExpiresAt: staff.invitationExpiresAt?.toISOString() || null,
       createdAt: staff.createdAt.toISOString(),
       updatedAt: staff.updatedAt.toISOString(),
     };
   }
 }
+

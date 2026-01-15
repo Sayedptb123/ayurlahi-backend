@@ -19,14 +19,15 @@ async function bootstrap() {
     }),
   );
 
-  // Enable CORS to allow requests from frontend
+  // Enable CORS to allow requests from frontend (allow any origin for mobile dev)
   app.enableCors({
-    origin: process.env.FRONTEND_URL || 'http://localhost:5173',
+    origin: true,
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
   });
 
-  await app.listen(process.env.PORT ?? 3000);
+  // Listen on 0.0.0.0 to be accessible from network
+  await app.listen(process.env.PORT ?? 3000, '0.0.0.0');
 }
 bootstrap();

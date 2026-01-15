@@ -22,7 +22,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 @Controller('staff')
 @UseGuards(JwtAuthGuard)
 export class StaffController {
-  constructor(private readonly staffService: StaffService) {}
+  constructor(private readonly staffService: StaffService) { }
 
   @Get()
   async findAll(@Request() req, @Query() query: GetStaffDto) {
@@ -62,5 +62,56 @@ export class StaffController {
   @Patch(':id/status')
   async toggleStatus(@Param('id', ParseUUIDPipe) id: string, @Request() req) {
     return this.staffService.toggleStatus(id, req.user.userId, req.user.role);
+  }
+
+  // ============================================================================
+  // STAFF INVITATION ENDPOINTS
+  // ============================================================================
+
+  @Post(':id/invite')
+  @HttpCode(HttpStatus.OK)
+  async inviteStaff(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Request() req,
+    @Body() inviteDto: { sendEmail?: boolean; sendSMS?: boolean },
+  ) {
+    return this.staffService.inviteStaff(
+      id,
+      req.user.userId,
+      req.user.role,
+      inviteDto.sendEmail,
+      inviteDto.sendSMS,
+    );
+  }
+
+  @Post(':id/resend-invitation')
+  @HttpCode(HttpStatus.OK)
+  async resendInvitation(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Request() req,
+  ) {
+    return this.staffService.resendInvitation(
+      id,
+      req.user.userId,
+      req.user.role,
+    );
+  }
+}
+
+// Public endpoints (no auth required)
+@Controller('staff')
+export class StaffPublicController {
+  constructor(private readonly staffService: StaffService) { }
+
+  @Post('accept-invitation')
+  @HttpCode(HttpStatus.OK)
+  async acceptInvitation(
+    @Body() acceptDto: { token: string; password: string; confirmPassword: string },
+  ) {
+    return this.staffService.acceptInvitation(
+      acceptDto.token,
+      acceptDto.password,
+      acceptDto.confirmPassword,
+    );
   }
 }

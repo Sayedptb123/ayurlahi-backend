@@ -160,9 +160,43 @@ export class Staff {
   @Column({ type: 'text', nullable: true, name: 'notes' })
   notes: string | null;
 
+  // User Account Fields (for staff login)
+  @Column({ type: 'uuid', nullable: true, name: 'user_id' })
+  userId: string | null;
+
+  @Column({ type: 'boolean', default: false, name: 'has_user_account' })
+  hasUserAccount: boolean;
+
+  @Column({
+    type: 'varchar',
+    length: 20,
+    nullable: true,
+    name: 'user_account_status',
+  })
+  userAccountStatus: 'pending' | 'active' | 'suspended' | null;
+
+  @Column({ type: 'timestamp', nullable: true, name: 'invitation_sent_at' })
+  invitationSentAt: Date | null;
+
+  @Column({
+    type: 'varchar',
+    length: 255,
+    nullable: true,
+    name: 'invitation_token',
+  })
+  invitationToken: string | null;
+
+  @Column({
+    type: 'timestamp',
+    nullable: true,
+    name: 'invitation_expires_at',
+  })
+  invitationExpiresAt: Date | null;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 
   @UpdateDateColumn({ name: 'updated_at' })
   updatedAt: Date;
 }
+

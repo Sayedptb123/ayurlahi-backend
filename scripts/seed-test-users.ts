@@ -3,16 +3,16 @@ import { AppModule } from '../src/app.module';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { User } from '../src/users/entities/user.entity';
-import * as bcrypt from 'bcrypt';
+import * as bcrypt from 'bcryptjs';
 
 async function bootstrap() {
   const app = await NestFactory.createApplicationContext(AppModule);
-  
+
   const userRepository = app.get<Repository<User>>(getRepositoryToken(User));
-  
+
   const password = 'abc123123';
   const hashedPassword = await bcrypt.hash(password, 10);
-  
+
   const testUsers = [
     {
       email: 'admin@test.com',
@@ -55,22 +55,22 @@ async function bootstrap() {
       isEmailVerified: true,
     },
   ];
-  
+
   console.log('Creating test users...');
   console.log('');
-  
+
   for (const userData of testUsers) {
     try {
       // Check if user already exists
       const existingUser = await userRepository.findOne({
         where: { email: userData.email },
       });
-      
+
       if (existingUser) {
         console.log(`⚠ User ${userData.email} already exists. Skipping...`);
         continue;
       }
-      
+
       // Create user - new structure (no role, clinicId, manufacturerId - those are in organisation_users)
       const user = userRepository.create({
         email: userData.email,
@@ -81,15 +81,15 @@ async function bootstrap() {
         isActive: userData.isActive, // Maps to is_active column
         isEmailVerified: userData.isEmailVerified, // Maps to is_email_verified column
       });
-      
+
       const savedUser = await userRepository.save(user);
-      
+
       console.log(`✅ Created user: ${userData.email} (ID: ${savedUser.id})`);
     } catch (error) {
       console.error(`✗ Failed to create user ${userData.email}:`, error.message);
     }
   }
-  
+
   console.log('');
   console.log('========================================');
   console.log('Test Users Created Successfully!');
@@ -103,7 +103,7 @@ async function bootstrap() {
   console.log('  - clinic@test.com (Clinic)');
   console.log('  - manufacturer@test.com (Manufacturer)');
   console.log('');
-  
+
   await app.close();
 }
 

@@ -7,7 +7,7 @@ import {
 import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import * as bcrypt from 'bcrypt';
+import * as bcrypt from 'bcryptjs';
 import { User } from '../users/entities/user.entity';
 import { OrganisationUser } from '../organisation-users/entities/organisation-user.entity';
 import { Organisation } from '../organisations/entities/organisation.entity';
@@ -32,7 +32,7 @@ export class AuthService {
     @InjectRepository(Organisation)
     private organisationsRepository: Repository<Organisation>,
     private jwtService: JwtService,
-  ) {}
+  ) { }
 
   async validateUser(email: string, password: string): Promise<User | null> {
     try {
@@ -153,11 +153,11 @@ export class AuthService {
         },
         currentOrganisation: currentOrg
           ? {
-              id: currentOrg.organisation.id,
-              name: currentOrg.organisation.name,
-              type: currentOrg.organisation.type,
-              role: currentOrg.role,
-            }
+            id: currentOrg.organisation.id,
+            name: currentOrg.organisation.name,
+            type: currentOrg.organisation.type,
+            role: currentOrg.role,
+          }
           : null,
         organisations,
       };
@@ -258,11 +258,11 @@ export class AuthService {
       isEmailVerified: user.isEmailVerified,
       currentOrganisation: currentOrgUser
         ? {
-            id: currentOrgUser.organisation.id,
-            name: currentOrgUser.organisation.name,
-            type: currentOrgUser.organisation.type,
-            role: currentOrgUser.role,
-          }
+          id: currentOrgUser.organisation.id,
+          name: currentOrgUser.organisation.name,
+          type: currentOrgUser.organisation.type,
+          role: currentOrgUser.role,
+        }
         : null,
       organisations,
     };
@@ -329,11 +329,11 @@ export class AuthService {
         },
         currentOrganisation: currentOrg
           ? {
-              id: currentOrg.organisation.id,
-              name: currentOrg.organisation.name,
-              type: currentOrg.organisation.type,
-              role: currentOrg.role,
-            }
+            id: currentOrg.organisation.id,
+            name: currentOrg.organisation.name,
+            type: currentOrg.organisation.type,
+            role: currentOrg.role,
+          }
           : null,
         organisations,
       };
