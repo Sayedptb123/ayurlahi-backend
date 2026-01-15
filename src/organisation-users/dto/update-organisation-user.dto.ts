@@ -14,3 +14,4 @@ export class UpdateOrganisationUserDto {
   isPrimary?: boolean;
 }
 
+

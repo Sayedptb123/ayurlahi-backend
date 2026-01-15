@@ -52,3 +52,4 @@ COMMENT ON COLUMN organisations.approval_status IS 'Approval status for clinics/
 
 
 
+

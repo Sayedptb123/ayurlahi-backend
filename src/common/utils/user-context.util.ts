@@ -73,3 +73,4 @@ export function isManufacturerUser(user: RequestUser): boolean {
   return user.organisationType === 'MANUFACTURER';
 }
 
+

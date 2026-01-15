@@ -62,3 +62,4 @@ COMMENT ON COLUMN duty_templates.schedule_pattern IS 'JSONB pattern defining the
 
 
 
+

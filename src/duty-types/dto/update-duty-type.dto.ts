@@ -48,3 +48,4 @@ export class UpdateDutyTypeDto {
   isActive?: boolean;
 }
 
+

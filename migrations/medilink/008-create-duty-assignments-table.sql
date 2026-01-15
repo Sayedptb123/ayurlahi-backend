@@ -63,3 +63,4 @@ COMMENT ON COLUMN duty_assignments.status IS 'Current status of the duty assignm
 
 
 
+
