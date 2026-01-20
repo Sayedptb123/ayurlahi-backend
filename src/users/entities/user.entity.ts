@@ -57,6 +57,9 @@ export class User {
   @Column({ type: 'uuid', nullable: true, name: 'manufacturer_id' })
   manufacturerId: string | null;
 
+  @Column({ type: 'varchar', length: 20, nullable: true, name: 'whatsapp_number' })
+  whatsappNumber: string | null;
+
   @Column({ type: 'timestamp', nullable: true, name: 'last_login_at' })
   lastLoginAt: Date | null;
 

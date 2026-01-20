@@ -119,6 +119,7 @@ export class AuthService {
         type: ou.organisation.type,
         role: ou.role,
         isPrimary: ou.isPrimary,
+        discountPercentage: ou.organisation.discountPercentage,
       }));
 
       // JWT payload with current organisation context
@@ -157,6 +158,7 @@ export class AuthService {
             name: currentOrg.organisation.name,
             type: currentOrg.organisation.type,
             role: currentOrg.role,
+            discountPercentage: currentOrg.organisation.discountPercentage,
           }
           : null,
         organisations,
@@ -246,6 +248,7 @@ export class AuthService {
       type: ou.organisation.type,
       role: ou.role,
       isPrimary: ou.isPrimary,
+      discountPercentage: ou.organisation.discountPercentage,
     }));
 
     return {
@@ -262,6 +265,7 @@ export class AuthService {
           name: currentOrgUser.organisation.name,
           type: currentOrgUser.organisation.type,
           role: currentOrgUser.role,
+          discountPercentage: currentOrgUser.organisation.discountPercentage,
         }
         : null,
       organisations,
@@ -313,6 +317,7 @@ export class AuthService {
         type: ou.organisation.type,
         role: ou.role,
         isPrimary: ou.isPrimary,
+        discountPercentage: ou.organisation.discountPercentage,
       }));
 
       return {
@@ -333,6 +338,7 @@ export class AuthService {
             name: currentOrg.organisation.name,
             type: currentOrg.organisation.type,
             role: currentOrg.role,
+            discountPercentage: currentOrg.organisation.discountPercentage,
           }
           : null,
         organisations,

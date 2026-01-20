@@ -9,6 +9,8 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, IsNull, Like } from 'typeorm';
 import * as bcrypt from 'bcryptjs';
 import { User } from './entities/user.entity';
+import { Organisation } from '../organisations/entities/organisation.entity';
+import { OrganisationUser } from '../organisation-users/entities/organisation-user.entity';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { GetUsersDto } from './dto/get-users.dto';
@@ -19,6 +21,10 @@ export class UsersService {
   constructor(
     @InjectRepository(User)
     private usersRepository: Repository<User>,
+    @InjectRepository(Organisation)
+    private organisationsRepository: Repository<Organisation>,
+    @InjectRepository(OrganisationUser)
+    private organisationUsersRepository: Repository<OrganisationUser>,
   ) { }
 
   async findByEmail(email: string): Promise<User | null> {
@@ -62,12 +68,34 @@ export class UsersService {
     queryBuilder.skip(skip).take(limit);
     queryBuilder.orderBy('user.createdAt', 'DESC');
 
+    // Join with organisations to get names
+    // We map to virtual properties since relations aren't explicitly defined in User entity
+    queryBuilder.leftJoinAndMapOne(
+      'user.manufacturer',
+      Organisation,
+      'manufacturer',
+      'manufacturer.id = user.manufacturerId'
+    );
+    queryBuilder.leftJoinAndMapOne(
+      'user.clinic',
+      Organisation,
+      'clinic',
+      'clinic.id = user.clinicId'
+    );
+
     const data = await queryBuilder.getMany();
 
-    // Remove password hash from response
-    const users = data.map((user) => {
+    // Map to frontend expected format
+    const users = data.map((user: any) => {
       const { passwordHash, ...userWithoutPassword } = user;
-      return userWithoutPassword;
+      return {
+        ...userWithoutPassword,
+        name: `${user.firstName} ${user.lastName}`,
+        organizationName: user.manufacturer?.name || user.clinic?.name || null,
+        // Include full objects if needed by frontend types
+        manufacturer: user.manufacturer,
+        clinic: user.clinic,
+      };
     });
 
     return {
@@ -121,7 +149,7 @@ export class UsersService {
       throw new BadRequestException('Phone number is required');
     }
 
-    // Create user (no role, clinicId, manufacturerId - those are in organisation_users)
+    // Create user
     const user = this.usersRepository.create({
       email: createUserDto.email || null,
       passwordHash,
@@ -131,9 +159,50 @@ export class UsersService {
       isActive:
         createUserDto.isActive !== undefined ? createUserDto.isActive : true,
       isEmailVerified: false,
+      role: createUserDto.role, // Fix: Assign role
+      whatsappNumber: createUserDto.whatsappNumber,
     });
 
     const savedUser = await this.usersRepository.save(user);
+
+    // If role is MANUFACTURER or CLINIC and organizationName is provided, create organisation
+    if (
+      (createUserDto.role === 'manufacturer' || createUserDto.role === 'clinic') &&
+      createUserDto.organizationName
+    ) {
+      const orgType = createUserDto.role === 'manufacturer' ? 'MANUFACTURER' : 'CLINIC';
+
+      // Create Organisation
+      const org = this.organisationsRepository.create({
+        name: createUserDto.organizationName,
+        companyName: createUserDto.organizationName, // Use same name for company name
+        type: orgType as any,
+        status: 'active',
+        approvalStatus: 'approved', // Auto-approve for manual creation by admin
+        isVerified: true,
+        isActive: true,
+      });
+
+      const savedOrg = await this.organisationsRepository.save(org);
+
+      // Link User to Organisation via OrganisationUser
+      const orgUser = this.organisationUsersRepository.create({
+        userId: savedUser.id,
+        organisationId: savedOrg.id,
+        role: 'OWNER', // Default to owner for the first user
+        isActive: true,
+      });
+
+      await this.organisationUsersRepository.save(orgUser);
+
+      // Update User legacy fields
+      if (createUserDto.role === 'manufacturer') {
+        savedUser.manufacturerId = savedOrg.id;
+      } else if (createUserDto.role === 'clinic') {
+        savedUser.clinicId = savedOrg.id;
+      }
+      await this.usersRepository.save(savedUser);
+    }
 
     // Remove password hash from response
     const { passwordHash: _, ...userWithoutPassword } = savedUser;

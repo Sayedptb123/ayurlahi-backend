@@ -49,6 +49,11 @@ export class CreateProductDto {
     @Min(0)
     price: number;
 
+    @IsNumber()
+    @IsOptional()
+    @Min(0)
+    mrp?: number;
+
     @IsEnum(['INTERNAL', 'DROPSHIP'])
     @IsOptional()
     fulfillmentType?: 'INTERNAL' | 'DROPSHIP';

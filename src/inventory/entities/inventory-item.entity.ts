@@ -33,6 +33,9 @@ export class InventoryItem {
   @Column({ nullable: true })
   category: string;
 
+  @Column({ name: 'product_id', nullable: true })
+  productId: string;
+
   @Column()
   unit: string;
 

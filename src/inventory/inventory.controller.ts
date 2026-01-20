@@ -22,14 +22,19 @@ import { UserRole } from '../users/enums/user-role.enum';
 @Controller('organisations/:organisationId/inventory')
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class InventoryController {
-  constructor(private readonly inventoryService: InventoryService) {}
+  constructor(private readonly inventoryService: InventoryService) { }
 
   @Post()
-  @Roles(UserRole.OWNER, UserRole.MANAGER, UserRole.ADMIN, UserRole.DOCTOR)
+  @Roles(UserRole.CLINIC, UserRole.MANUFACTURER, UserRole.ADMIN)
   create(
     @Param('organisationId') organisationId: string,
     @Body() createInventoryItemDto: CreateInventoryItemDto,
   ) {
+    console.log('[Inventory Controller] Creating item:', {
+      organisationId,
+      dto: createInventoryItemDto,
+      hasProductId: 'productId' in createInventoryItemDto,
+    });
     return this.inventoryService.create(organisationId, createInventoryItemDto);
   }
 
@@ -52,12 +57,18 @@ export class InventoryController {
   }
 
   @Patch(':id')
-  @Roles(UserRole.OWNER, UserRole.MANAGER, UserRole.ADMIN)
+  @Roles(UserRole.CLINIC, UserRole.MANUFACTURER, UserRole.ADMIN)
   update(
     @Param('organisationId') organisationId: string,
     @Param('id') id: string,
     @Body() updateInventoryItemDto: UpdateInventoryItemDto,
   ) {
+    console.log('[Inventory Controller] Updating item:', {
+      organisationId,
+      id,
+      dto: updateInventoryItemDto,
+      hasProductId: 'productId' in updateInventoryItemDto,
+    });
     return this.inventoryService.update(
       organisationId,
       id,
@@ -66,7 +77,7 @@ export class InventoryController {
   }
 
   @Delete(':id')
-  @Roles(UserRole.OWNER, UserRole.MANAGER, UserRole.ADMIN)
+  @Roles(UserRole.CLINIC, UserRole.MANUFACTURER, UserRole.ADMIN)
   remove(
     @Param('organisationId') organisationId: string,
     @Param('id') id: string,

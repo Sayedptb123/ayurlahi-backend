@@ -51,4 +51,12 @@ export class CreateUserDto {
   @IsOptional()
   @IsUUID()
   manufacturerId?: string;
+
+  @IsOptional()
+  @IsString()
+  organizationName?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  sendWelcomeEmail?: boolean;
 }

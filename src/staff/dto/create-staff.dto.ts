@@ -11,6 +11,8 @@ import {
   MaxLength,
   ValidateIf,
   ValidateNested,
+  IsBoolean,
+  MinLength,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { StaffPosition } from '../entities/staff.entity';
@@ -115,4 +117,16 @@ export class CreateStaffDto {
   @IsString()
   @MaxLength(1000)
   notes?: string;
+
+  // User account creation fields
+  @IsOptional()
+  @IsBoolean()
+  createUserAccount?: boolean;
+
+  @ValidateIf((o) => o.createUserAccount === true)
+  @IsNotEmpty({ message: 'Password is required when creating user account' })
+  @IsString()
+  @MinLength(8, { message: 'Password must be at least 8 characters' })
+  @MaxLength(100)
+  password?: string;
 }

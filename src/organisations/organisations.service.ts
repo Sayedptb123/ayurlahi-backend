@@ -62,10 +62,16 @@ export class OrganisationsService {
           role: userRole as any,
         });
 
+        // The create method usually returns the user object without password
+        // But if it's returning User | User[], we need to be careful.
+        // UsersService.create returns Promise<Partial<User>>
+
+        const userId = (user as any).id; // Safe cast since we know it's a user
+
         // Link user to organisation
         const orgUser = this.organisationUserRepository.create({
           organisationId: savedOrg.id,
-          userId: user.id,
+          userId: userId,
           role: 'OWNER',
           isPrimary: true,
           createdBy: createdBy,

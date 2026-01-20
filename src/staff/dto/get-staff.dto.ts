@@ -1,4 +1,4 @@
-import { IsOptional, IsString, IsBoolean, IsInt, Min } from 'class-validator';
+import { IsOptional, IsString, IsBoolean, IsInt, Min, IsUUID } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class GetStaffDto {
@@ -22,4 +22,8 @@ export class GetStaffDto {
   @Type(() => Boolean)
   @IsBoolean()
   isActive?: boolean;
+
+  @IsOptional()
+  @IsUUID()
+  organizationId?: string;
 }

@@ -61,6 +61,9 @@ export class OrganisationUser {
   @Column({ type: 'boolean', default: false, name: 'is_primary' })
   isPrimary: boolean;
 
+  @Column({ type: 'boolean', default: true, name: 'is_active' })
+  isActive: boolean;
+
   @Column({ type: 'uuid', nullable: true, name: 'created_by' })
   createdBy: string | null;
 

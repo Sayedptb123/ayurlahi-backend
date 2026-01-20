@@ -41,6 +41,9 @@ export class Product {
   @Column({ type: 'decimal', precision: 10, scale: 2 })
   price: number;
 
+  @Column({ type: 'decimal', precision: 10, scale: 2, nullable: true })
+  mrp: number;
+
   @Column({
     type: 'enum',
     enum: ['INTERNAL', 'DROPSHIP'],
@@ -96,6 +99,12 @@ export class Product {
     name: 'licenseNumber',
   })
   licenseNumber: string | null;
+
+  @Column({ type: 'varchar', length: 50, nullable: true })
+  form: string | null;
+
+  @Column({ type: 'varchar', length: 50, nullable: true, name: 'packSize' })
+  packSize: string | null;
 
   @CreateDateColumn({ name: 'createdAt' })
   createdAt: Date;

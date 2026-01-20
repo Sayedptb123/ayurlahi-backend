@@ -30,6 +30,7 @@ export class ProductsController {
 
   @Get('my-products')
   async getMyProducts(@Request() req, @Query() query: GetProductsDto) {
+    console.log('[ProductsController] getMyProducts user:', req.user);
     return this.productsService.findByManufacturer(
       req.user.organisationId,
       query,

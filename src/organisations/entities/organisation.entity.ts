@@ -100,6 +100,18 @@ export class Organisation {
   @Column({ type: 'boolean', default: false, name: 'is_verified' })
   isVerified: boolean;
 
+  @Column({ type: 'boolean', default: true, name: 'is_active' })
+  isActive: boolean;
+
+  @Column({
+    type: 'decimal',
+    precision: 5,
+    scale: 2,
+    default: 0,
+    name: 'discount_percentage',
+  })
+  discountPercentage: number;
+
   @Column({ type: 'timestamp', nullable: true, name: 'approved_at' })
   approvedAt: Date | null;
 

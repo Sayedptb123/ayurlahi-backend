@@ -87,7 +87,7 @@ export class StaffService {
 
   async findAll(userId: string, userRole: string, query: GetStaffDto) {
     console.log('[Staff Service] findAll called:', { userId, userRole, query });
-    const { page = 1, limit = 20, position, isActive } = query;
+    const { page = 1, limit = 20, position, isActive, organizationId } = query;
     const skip = (page - 1) * limit;
 
     // Only clinic, manufacturer and admin users can access staff
@@ -95,25 +95,32 @@ export class StaffService {
       throw new ForbiddenException('You do not have permission to view staff');
     }
 
-    // Get organization ID from user
-    let organizationId: string | null = null;
-    try {
-      organizationId = await this.getOrganizationId(userId);
-    } catch (e) {
-      console.log('[Staff Service] Organization check skipped or failed for admin/check:', e.message);
-    }
-    console.log('[Staff Service] Organization ID:', organizationId);
+    // Determine which organization to filter by
+    let targetOrganizationId: string | null = null;
 
-    // Admin can see all, but for clinic/manufacturer, filter by organization
-    const queryBuilder = this.staffRepository.createQueryBuilder('staff');
-
-    if (!['admin', 'SUPER_ADMIN'].includes(userRole)) {
-      if (!organizationId) {
+    if (organizationId && ['admin', 'SUPER_ADMIN'].includes(userRole)) {
+      // Admin provided specific organizationId in query - use that
+      targetOrganizationId = organizationId;
+      console.log('[Staff Service] Admin filtering by provided organizationId:', targetOrganizationId);
+    } else if (!['admin', 'SUPER_ADMIN'].includes(userRole)) {
+      // Non-admin users: filter by their own organization
+      try {
+        targetOrganizationId = await this.getOrganizationId(userId);
+        console.log('[Staff Service] Non-admin user, filtering by their organizationId:', targetOrganizationId);
+      } catch (e) {
+        console.log('[Staff Service] Organization check failed:', e.message);
         throw new ForbiddenException('User organization not found');
       }
-      console.log('[Staff Service] Filtering by organizationId:', organizationId);
+    }
+    // If admin and no organizationId provided, targetOrganizationId stays null (show all)
+
+    // Build query
+    const queryBuilder = this.staffRepository.createQueryBuilder('staff');
+
+    if (targetOrganizationId) {
+      console.log('[Staff Service] Filtering by organizationId:', targetOrganizationId);
       queryBuilder.where('staff.organizationId = :organizationId', {
-        organizationId,
+        organizationId: targetOrganizationId,
       });
     }
 
@@ -222,6 +229,52 @@ export class StaffService {
     });
 
     const savedStaff = await this.staffRepository.save(staff);
+
+    // Create user account if requested
+    if (createDto.createUserAccount && createDto.password) {
+      // Validate email or phone exists
+      if (!savedStaff.email && !savedStaff.phone) {
+        throw new BadRequestException(
+          'Staff member must have email or phone number to create user account',
+        );
+      }
+
+      // Hash password
+      const hashedPassword = await bcrypt.hash(createDto.password, 10);
+
+      // Create user account
+      const user = this.usersRepository.create({
+        email: savedStaff.email || null,
+        phone: savedStaff.phone || `STAFF_${Date.now()}`,
+        firstName: savedStaff.firstName,
+        lastName: savedStaff.lastName,
+        passwordHash: hashedPassword,
+        isActive: true,
+        isEmailVerified: false,
+      });
+
+      const savedUser = await this.usersRepository.save(user);
+
+      // Map staff position to organization role
+      const role = this.mapPositionToRole(savedStaff.position);
+
+      // Create organisation_users entry
+      const orgUser = this.organisationUsersRepository.create({
+        userId: savedUser.id,
+        organisationId: organizationId,
+        role: role as any,
+        isPrimary: false,
+      });
+
+      await this.organisationUsersRepository.save(orgUser);
+
+      // Update staff record with user ID
+      savedStaff.userId = savedUser.id;
+      savedStaff.hasUserAccount = true;
+      savedStaff.userAccountStatus = 'active';
+      await this.staffRepository.save(savedStaff);
+    }
+
     return this.mapToResponse(savedStaff);
   }
 
@@ -293,6 +346,52 @@ export class StaffService {
     if (updateDto.notes !== undefined) staff.notes = updateDto.notes;
 
     const updatedStaff = await this.staffRepository.save(staff);
+
+    // Create user account if requested and doesn't exist
+    if (updateDto.createUserAccount && updateDto.password && !staff.userId) {
+      // Validate email or phone exists
+      if (!updatedStaff.email && !updatedStaff.phone) {
+        throw new BadRequestException(
+          'Staff member must have email or phone number to create user account',
+        );
+      }
+
+      // Hash password
+      const hashedPassword = await bcrypt.hash(updateDto.password, 10);
+
+      // Create user account
+      const user = this.usersRepository.create({
+        email: updatedStaff.email || null,
+        phone: updatedStaff.phone || `STAFF_${Date.now()}`,
+        firstName: updatedStaff.firstName,
+        lastName: updatedStaff.lastName,
+        passwordHash: hashedPassword,
+        isActive: true,
+        isEmailVerified: false,
+      });
+
+      const savedUser = await this.usersRepository.save(user);
+
+      // Map staff position to organization role
+      const role = this.mapPositionToRole(updatedStaff.position);
+
+      // Create organisation_users entry
+      const orgUser = this.organisationUsersRepository.create({
+        userId: savedUser.id,
+        organisationId: updatedStaff.organizationId,
+        role: role as any,
+        isPrimary: false,
+      });
+
+      await this.organisationUsersRepository.save(orgUser);
+
+      // Update staff record with user ID
+      updatedStaff.userId = savedUser.id;
+      updatedStaff.hasUserAccount = true;
+      updatedStaff.userAccountStatus = 'active';
+      await this.staffRepository.save(updatedStaff);
+    }
+
     return this.mapToResponse(updatedStaff);
   }
 

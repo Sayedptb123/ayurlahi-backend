@@ -25,6 +25,10 @@ export class CreateInventoryItemDto {
   category?: string;
 
   @IsString()
+  @IsOptional()
+  productId?: string;
+
+  @IsString()
   @IsNotEmpty()
   unit: string;
 
@@ -65,6 +69,10 @@ export class UpdateInventoryItemDto {
   @IsString()
   @IsOptional()
   category?: string;
+
+  @IsString()
+  @IsOptional()
+  productId?: string;
 
   @IsString()
   @IsOptional()
