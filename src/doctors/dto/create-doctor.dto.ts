@@ -69,10 +69,10 @@ export class CreateDoctorDto {
   @MaxLength(36)
   userId?: string; // Optional: link to existing user account
 
-  @IsNotEmpty()
+  @IsOptional()
   @IsString()
   @MaxLength(50)
-  doctorId: string;
+  doctorId?: string;
 
   @IsNotEmpty()
   @IsString()
@@ -122,4 +122,12 @@ export class CreateDoctorDto {
   @IsOptional()
   @IsBoolean()
   isActive?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  createUserAccount?: boolean;
+
+  @IsOptional()
+  @IsString()
+  password?: string;
 }

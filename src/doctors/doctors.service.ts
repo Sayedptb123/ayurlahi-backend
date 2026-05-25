@@ -7,8 +7,10 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import * as bcrypt from 'bcryptjs';
 import { Doctor } from './entities/doctor.entity';
 import { User } from '../users/entities/user.entity';
+import { OrganisationUser } from '../organisation-users/entities/organisation-user.entity';
 import { CreateDoctorDto } from './dto/create-doctor.dto';
 import { UpdateDoctorDto } from './dto/update-doctor.dto';
 import { GetDoctorsDto } from './dto/get-doctors.dto';
@@ -20,6 +22,8 @@ export class DoctorsService {
     private doctorsRepository: Repository<Doctor>,
     @InjectRepository(User)
     private usersRepository: Repository<User>,
+    @InjectRepository(OrganisationUser)
+    private organisationUsersRepository: Repository<OrganisationUser>,
   ) { }
 
   async create(
@@ -44,6 +48,14 @@ export class DoctorsService {
     const clinicId = organisationId;
     if (!clinicId && userRole !== 'SUPER_ADMIN' && userRole !== 'SUPPORT') {
       throw new BadRequestException('Clinic not associated with user');
+    }
+
+    // Auto-generate doctorId if not provided
+    if (!createDto.doctorId) {
+      const count = await this.doctorsRepository.count({
+        where: { clinicId: clinicId as string },
+      });
+      createDto.doctorId = `DOC${String(count + 1).padStart(3, '0')}`;
     }
 
     // Check if doctorId is unique within the clinic
@@ -80,7 +92,60 @@ export class DoctorsService {
       isActive: createDto.isActive ?? true,
     });
 
-    return this.doctorsRepository.save(doctor);
+    const savedDoctor = await this.doctorsRepository.save(doctor);
+
+    // Create user account if requested
+    if (createDto.createUserAccount && createDto.password) {
+      if (!savedDoctor.email && !savedDoctor.phone) {
+        throw new BadRequestException(
+          'Doctor must have email or phone to create a login account',
+        );
+      }
+
+      // Check if a user already exists with this email
+      let targetUser = savedDoctor.email
+        ? await this.usersRepository.findOne({ where: { email: savedDoctor.email } })
+        : null;
+
+      if (targetUser) {
+        // User exists — update password and link doctor to this user
+        const hashedPassword = await bcrypt.hash(createDto.password, 10);
+        await this.usersRepository.update(targetUser.id, { passwordHash: hashedPassword, isActive: true });
+      } else {
+        // Create new user
+        const hashedPassword = await bcrypt.hash(createDto.password, 10);
+        const user = this.usersRepository.create({
+          email: savedDoctor.email || null,
+          phone: savedDoctor.phone || `DOC_${Date.now()}`,
+          firstName: savedDoctor.firstName,
+          lastName: savedDoctor.lastName,
+          passwordHash: hashedPassword,
+          isActive: true,
+          isEmailVerified: false,
+        });
+        targetUser = await this.usersRepository.save(user);
+      }
+
+      // Ensure org_user entry exists for this user in this org
+      const existingOrgUser = await this.organisationUsersRepository.findOne({
+        where: { userId: targetUser.id, organisationId: clinicId as string },
+      });
+      if (!existingOrgUser) {
+        const orgUser = this.organisationUsersRepository.create({
+          userId: targetUser.id,
+          organisationId: clinicId as string,
+          role: 'DOCTOR' as any,
+          isPrimary: false,
+          permissions: { dashboard: true, patients: true, appointments: true, admissions: true, doctors: true, ipd: false, duty: false, billing: false, staff: false, marketplace: false },
+        });
+        await this.organisationUsersRepository.save(orgUser);
+      }
+
+      await this.doctorsRepository.update(savedDoctor.id, { userId: targetUser.id });
+      savedDoctor.userId = targetUser.id;
+    }
+
+    return savedDoctor;
   }
 
   async findAll(
@@ -193,13 +258,19 @@ export class DoctorsService {
     organisationType: string | undefined,
     updateDto: UpdateDoctorDto,
   ) {
-    const doctor = await this.findOne(
-      id,
-      userId,
-      userRole,
-      organisationId,
-      organisationType,
-    );
+    // Load without relations to avoid TypeORM nulling the clinicId FK on save
+    const doctor = await this.doctorsRepository.findOne({ where: { id } });
+
+    if (!doctor) {
+      throw new NotFoundException(`Doctor with ID ${id} not found`);
+    }
+
+    // Access control
+    if (organisationType === 'CLINIC') {
+      if (!organisationId || organisationId !== doctor.clinicId) {
+        throw new ForbiddenException('You do not have access to this doctor');
+      }
+    }
 
     // Check doctorId uniqueness if being updated
     if (updateDto.doctorId && updateDto.doctorId !== doctor.doctorId) {

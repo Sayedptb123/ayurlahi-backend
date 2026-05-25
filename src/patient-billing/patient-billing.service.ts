@@ -9,7 +9,6 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { PatientBill, BillStatus } from './entities/patient-bill.entity';
 import { BillItem } from './entities/bill-item.entity';
-import { User } from '../users/entities/user.entity';
 import { Patient } from '../patients/entities/patient.entity';
 import { Appointment } from '../appointments/entities/appointment.entity';
 import { CreateBillDto } from './dto/create-bill.dto';
@@ -24,23 +23,19 @@ export class PatientBillingService {
     private billsRepository: Repository<PatientBill>,
     @InjectRepository(BillItem)
     private billItemsRepository: Repository<BillItem>,
-    @InjectRepository(User)
-    private usersRepository: Repository<User>,
     @InjectRepository(Patient)
     private patientsRepository: Repository<Patient>,
     @InjectRepository(Appointment)
     private appointmentsRepository: Repository<Appointment>,
   ) {}
 
-  private calculateBillTotals(items: BillItem[]): {
-    subtotal: number;
-    total: number;
-  } {
+  private calculateBillTotals(items: BillItem[]): { subtotal: number } {
     const subtotal = items.reduce(
-      (sum, item) => sum + item.unitPrice * item.quantity - item.discount,
+      (sum, item) =>
+        sum + Number(item.unitPrice) * item.quantity - Number(item.discount),
       0,
     );
-    return { subtotal, total: subtotal };
+    return { subtotal };
   }
 
   async create(
@@ -50,7 +45,6 @@ export class PatientBillingService {
     organisationType: string | undefined,
     createDto: CreateBillDto,
   ) {
-    // Only clinic users and admin can create bills
     if (
       organisationType !== 'CLINIC' &&
       userRole !== 'SUPER_ADMIN' &&
@@ -66,9 +60,9 @@ export class PatientBillingService {
       throw new BadRequestException('Clinic not associated with user');
     }
 
-    // Check if billNumber is unique
+    // Check billNumber uniqueness within this org
     const existingBill = await this.billsRepository.findOne({
-      where: { billNumber: createDto.billNumber },
+      where: { billNumber: createDto.billNumber, organisationId: clinicId },
     });
     if (existingBill) {
       throw new ConflictException(
@@ -76,18 +70,16 @@ export class PatientBillingService {
       );
     }
 
-    // Verify patient exists and belongs to clinic
     const patient = await this.patientsRepository.findOne({
       where: { id: createDto.patientId },
     });
     if (!patient) {
       throw new NotFoundException('Patient not found');
     }
-    if (patient.clinicId !== clinicId) {
+    if (patient.organisationId !== clinicId) {
       throw new ForbiddenException('Patient does not belong to this clinic');
     }
 
-    // If appointmentId is provided, verify it exists and belongs to clinic
     if (createDto.appointmentId) {
       const appointment = await this.appointmentsRepository.findOne({
         where: { id: createDto.appointmentId },
@@ -95,7 +87,7 @@ export class PatientBillingService {
       if (!appointment) {
         throw new NotFoundException('Appointment not found');
       }
-      if (appointment.clinicId !== clinicId) {
+      if (appointment.organisationId !== clinicId) {
         throw new ForbiddenException(
           'Appointment does not belong to this clinic',
         );
@@ -107,12 +99,10 @@ export class PatientBillingService {
       }
     }
 
-    // Validate items
     if (!createDto.items || createDto.items.length === 0) {
       throw new BadRequestException('Bill must have at least one item');
     }
 
-    // Create bill items
     const billItems = createDto.items.map((item) =>
       this.billItemsRepository.create({
         itemType: item.itemType,
@@ -125,15 +115,12 @@ export class PatientBillingService {
       }),
     );
 
-    // Calculate totals
     const { subtotal } = this.calculateBillTotals(billItems);
     const discount = createDto.discount || 0;
     const tax = createDto.tax || 0;
     const total = subtotal - discount + tax;
     const paidAmount = createDto.paidAmount || 0;
-    const balance = total - paidAmount;
 
-    // Determine status
     let status = createDto.status || BillStatus.DRAFT;
     if (paidAmount > 0 && paidAmount < total) {
       status = BillStatus.PARTIAL;
@@ -143,9 +130,8 @@ export class PatientBillingService {
       status = BillStatus.PENDING;
     }
 
-    // Create bill
     const bill = this.billsRepository.create({
-      clinicId,
+      organisationId: clinicId,
       patientId: createDto.patientId,
       appointmentId: createDto.appointmentId || null,
       billNumber: createDto.billNumber,
@@ -156,7 +142,6 @@ export class PatientBillingService {
       tax,
       total,
       paidAmount,
-      balance,
       status,
       paymentMethod: createDto.paymentMethod || null,
       notes: createDto.notes || null,
@@ -184,7 +169,6 @@ export class PatientBillingService {
     } = query;
     const skip = (page - 1) * limit;
 
-    // Only clinic users and admin can view bills
     if (
       organisationType !== 'CLINIC' &&
       userRole !== 'SUPER_ADMIN' &&
@@ -193,30 +177,21 @@ export class PatientBillingService {
       throw new ForbiddenException('You do not have permission to view bills');
     }
 
-    // Build query
     const queryBuilder = this.billsRepository
       .createQueryBuilder('bill')
       .leftJoinAndSelect('bill.patient', 'patient')
       .leftJoinAndSelect('bill.appointment', 'appointment')
       .leftJoinAndSelect('bill.items', 'items');
 
-    // Clinic users can only see their clinic's bills
     if (organisationType === 'CLINIC') {
       if (!organisationId) {
-        return {
-          data: [],
-          total: 0,
-          page,
-          limit,
-          totalPages: 0,
-        };
+        return { data: [], total: 0, page, limit, totalPages: 0 };
       }
-      queryBuilder.where('bill.clinicId = :clinicId', {
-        clinicId: organisationId,
+      queryBuilder.where('bill.organisationId = :organisationId', {
+        organisationId,
       });
     }
 
-    // Filters
     if (patientId) {
       queryBuilder.andWhere('bill.patientId = :patientId', { patientId });
     }
@@ -242,7 +217,6 @@ export class PatientBillingService {
       queryBuilder.andWhere('bill.billDate <= :endDate', { endDate });
     }
 
-    // Order and pagination
     queryBuilder
       .orderBy('bill.billDate', 'DESC')
       .addOrderBy('bill.createdAt', 'DESC')
@@ -251,13 +225,7 @@ export class PatientBillingService {
 
     const [data, total] = await queryBuilder.getManyAndCount();
 
-    return {
-      data,
-      total,
-      page,
-      limit,
-      totalPages: Math.ceil(total / limit),
-    };
+    return { data, total, page, limit, totalPages: Math.ceil(total / limit) };
   }
 
   async findOne(
@@ -269,16 +237,15 @@ export class PatientBillingService {
   ) {
     const bill = await this.billsRepository.findOne({
       where: { id },
-      relations: ['clinic', 'patient', 'appointment', 'items'],
+      relations: ['patient', 'appointment', 'items'],
     });
 
     if (!bill) {
       throw new NotFoundException(`Bill with ID ${id} not found`);
     }
 
-    // Access control
     if (organisationType === 'CLINIC') {
-      if (!organisationId || organisationId !== bill.clinicId) {
+      if (!organisationId || organisationId !== bill.organisationId) {
         throw new ForbiddenException('You do not have access to this bill');
       }
     }
@@ -294,18 +261,24 @@ export class PatientBillingService {
     organisationType: string | undefined,
     updateDto: UpdateBillDto,
   ) {
-    const bill = await this.findOne(
-      id,
-      userId,
-      userRole,
-      organisationId,
-      organisationType,
-    );
+    const bill = await this.billsRepository.findOne({ where: { id } });
 
-    // Check billNumber uniqueness if being updated
+    if (!bill) {
+      throw new NotFoundException(`Bill with ID ${id} not found`);
+    }
+
+    if (organisationType === 'CLINIC') {
+      if (!organisationId || organisationId !== bill.organisationId) {
+        throw new ForbiddenException('You do not have access to this bill');
+      }
+    }
+
     if (updateDto.billNumber && updateDto.billNumber !== bill.billNumber) {
       const existingBill = await this.billsRepository.findOne({
-        where: { billNumber: updateDto.billNumber },
+        where: {
+          billNumber: updateDto.billNumber,
+          organisationId: bill.organisationId,
+        },
       });
       if (existingBill) {
         throw new ConflictException(
@@ -314,12 +287,11 @@ export class PatientBillingService {
       }
     }
 
-    // If updating patient or appointment, verify they belong to clinic
     if (updateDto.patientId && updateDto.patientId !== bill.patientId) {
       const patient = await this.patientsRepository.findOne({
         where: { id: updateDto.patientId },
       });
-      if (!patient || patient.clinicId !== bill.clinicId) {
+      if (!patient || patient.organisationId !== bill.organisationId) {
         throw new ForbiddenException('Patient does not belong to this clinic');
       }
     }
@@ -331,19 +303,18 @@ export class PatientBillingService {
       const appointment = await this.appointmentsRepository.findOne({
         where: { id: updateDto.appointmentId },
       });
-      if (!appointment || appointment.clinicId !== bill.clinicId) {
+      if (
+        !appointment ||
+        appointment.organisationId !== bill.organisationId
+      ) {
         throw new ForbiddenException(
           'Appointment does not belong to this clinic',
         );
       }
     }
 
-    // Update items if provided
     if (updateDto.items !== undefined) {
-      // Remove existing items
       await this.billItemsRepository.delete({ billId: bill.id });
-
-      // Create new items
       bill.items = updateDto.items.map((item) =>
         this.billItemsRepository.create({
           billId: bill.id,
@@ -358,7 +329,6 @@ export class PatientBillingService {
       );
     }
 
-    // Recalculate totals if items or amounts changed
     if (
       updateDto.items !== undefined ||
       updateDto.discount !== undefined ||
@@ -368,11 +338,9 @@ export class PatientBillingService {
       bill.subtotal = subtotal;
       bill.discount = updateDto.discount ?? bill.discount;
       bill.tax = updateDto.tax ?? bill.tax;
-      bill.total = subtotal - bill.discount + bill.tax;
-      bill.balance = bill.total - bill.paidAmount;
+      bill.total = subtotal - Number(bill.discount) + Number(bill.tax);
     }
 
-    // Update other fields
     if (updateDto.billNumber !== undefined)
       bill.billNumber = updateDto.billNumber;
     if (updateDto.patientId !== undefined) bill.patientId = updateDto.patientId;
@@ -384,19 +352,17 @@ export class PatientBillingService {
       bill.dueDate = updateDto.dueDate ? new Date(updateDto.dueDate) : null;
     if (updateDto.paidAmount !== undefined) {
       bill.paidAmount = updateDto.paidAmount;
-      bill.balance = bill.total - bill.paidAmount;
     }
     if (updateDto.status !== undefined) bill.status = updateDto.status;
     if (updateDto.paymentMethod !== undefined)
       bill.paymentMethod = updateDto.paymentMethod;
     if (updateDto.notes !== undefined) bill.notes = updateDto.notes;
 
-    // Update status based on payment
+    // Recalculate status based on payment
     if (updateDto.paidAmount !== undefined) {
-      if (bill.paidAmount >= bill.total) {
+      if (Number(bill.paidAmount) >= Number(bill.total)) {
         bill.status = BillStatus.PAID;
-        bill.balance = 0;
-      } else if (bill.paidAmount > 0) {
+      } else if (Number(bill.paidAmount) > 0) {
         bill.status = BillStatus.PARTIAL;
       } else {
         bill.status = BillStatus.PENDING;
@@ -430,24 +396,20 @@ export class PatientBillingService {
       throw new BadRequestException('Cannot record payment for cancelled bill');
     }
 
-    const newPaidAmount = bill.paidAmount + paymentDto.amount;
-    const balance = bill.total - newPaidAmount;
+    const newPaidAmount = Number(bill.paidAmount) + paymentDto.amount;
+    const newBalance = Number(bill.total) - newPaidAmount;
 
-    if (newPaidAmount > bill.total) {
+    if (newPaidAmount > Number(bill.total)) {
       throw new BadRequestException(
         'Payment amount exceeds bill total. Overpayment not allowed.',
       );
     }
 
-    // Update bill
     bill.paidAmount = newPaidAmount;
-    bill.balance = balance;
     bill.paymentMethod = paymentDto.paymentMethod;
 
-    // Update status
-    if (balance <= 0) {
+    if (newBalance <= 0) {
       bill.status = BillStatus.PAID;
-      bill.balance = 0;
     } else {
       bill.status = BillStatus.PARTIAL;
     }
@@ -475,7 +437,7 @@ export class PatientBillingService {
       organisationId,
       organisationType,
     );
-    await this.billsRepository.remove(bill);
+    await this.billsRepository.softDelete(bill.id);
     return { message: 'Bill deleted successfully' };
   }
 }

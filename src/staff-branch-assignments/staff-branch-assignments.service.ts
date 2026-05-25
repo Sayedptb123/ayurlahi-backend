@@ -38,7 +38,7 @@ export class StaffBranchAssignmentsService {
 
     // Verify staff exists and belongs to organisation
     const staff = await this.staffRepository.findOne({
-      where: { id: createDto.staffId, organizationId: organisationId },
+      where: { id: createDto.staffId, organisationId: organisationId },
     });
     if (!staff) {
       throw new NotFoundException('Staff not found');

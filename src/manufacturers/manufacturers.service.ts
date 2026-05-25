@@ -22,19 +22,26 @@ export class ManufacturersService {
     private organisationUsersRepository: Repository<OrganisationUser>,
   ) { }
 
-  async findAll(userRole: string) {
-    // Only admin and support can see all manufacturers
+  async findAll(userRole: string, params: { status?: string; page: number; limit: number }) {
     if (!RoleUtils.isAdminOrSupport(userRole)) {
-      throw new ForbiddenException(
-        'You do not have permission to view all manufacturers',
-      );
+      throw new ForbiddenException('You do not have permission to view all manufacturers');
     }
 
-    // Query organisations table filtered by type='MANUFACTURER'
-    return this.organisationsRepository.find({
-      where: { type: 'MANUFACTURER', deletedAt: IsNull() },
+    const { status, page, limit } = params;
+    const where: any = { type: 'MANUFACTURER', deletedAt: IsNull() };
+    if (status) where.approvalStatus = status;
+
+    const [data, total] = await this.organisationsRepository.findAndCount({
+      where,
       order: { createdAt: 'DESC' },
+      skip: (page - 1) * limit,
+      take: limit,
     });
+
+    return {
+      data,
+      pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
+    };
   }
 
   async findOne(id: string, userId: string, userRole: string) {
@@ -102,7 +109,6 @@ export class ManufacturersService {
     manufacturer.approvalStatus = 'approved';
     manufacturer.approvedAt = new Date();
     manufacturer.approvedBy = approvedBy;
-    manufacturer.isVerified = true;
 
     return this.organisationsRepository.save(manufacturer);
   }

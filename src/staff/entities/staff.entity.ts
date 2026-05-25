@@ -7,7 +7,6 @@ import {
 } from 'typeorm';
 
 export enum StaffPosition {
-  // Clinic Positions
   DOCTOR = 'doctor',
   THERAPIST = 'therapist',
   AYURVEDIC_PRACTITIONER = 'ayurvedic_practitioner',
@@ -24,7 +23,6 @@ export enum StaffPosition {
   RECEPTIONIST = 'receptionist',
   MANAGER = 'manager',
   ADMINISTRATOR = 'administrator',
-  // Manufacturer Positions
   PRODUCTION_MANAGER = 'production_manager',
   QUALITY_CONTROL = 'quality_control',
   PACKAGER = 'packager',
@@ -33,13 +31,7 @@ export enum StaffPosition {
   ACCOUNTANT = 'accountant',
   SUPERVISOR = 'supervisor',
   TECHNICIAN = 'technician',
-  // Common
   OTHER = 'other',
-}
-
-export enum OrganizationType {
-  CLINIC = 'clinic',
-  MANUFACTURER = 'manufacturer',
 }
 
 @Entity('staff')
@@ -47,8 +39,8 @@ export class Staff {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column({ type: 'uuid', name: 'organization_id' })
-  organizationId: string;
+  @Column({ type: 'uuid', name: 'organisation_id' })
+  organisationId: string;
 
   @Column({ type: 'varchar', length: 100, name: 'first_name' })
   firstName: string;
@@ -56,19 +48,10 @@ export class Staff {
   @Column({ type: 'varchar', length: 100, name: 'last_name' })
   lastName: string;
 
-  @Column({
-    type: 'enum',
-    enum: StaffPosition,
-    name: 'position',
-  })
+  @Column({ type: 'varchar', length: 50, name: 'position' })
   position: StaffPosition;
 
-  @Column({
-    type: 'varchar',
-    length: 100,
-    nullable: true,
-    name: 'position_custom',
-  })
+  @Column({ type: 'varchar', length: 100, nullable: true, name: 'position_custom' })
   positionCustom: string | null;
 
   @Column({ type: 'varchar', length: 255, nullable: true, name: 'email' })
@@ -77,56 +60,11 @@ export class Staff {
   @Column({ type: 'varchar', length: 20, nullable: true, name: 'phone' })
   phone: string | null;
 
-  @Column({
-    type: 'varchar',
-    length: 20,
-    nullable: true,
-    name: 'whatsapp_number',
-  })
+  @Column({ type: 'varchar', length: 20, nullable: true, name: 'whatsapp_number' })
   whatsappNumber: string | null;
 
-  @Column({ type: 'text', nullable: true, name: 'address_street' })
-  addressStreet: string | null;
-
-  @Column({
-    type: 'varchar',
-    length: 100,
-    nullable: true,
-    name: 'address_city',
-  })
-  addressCity: string | null;
-
-  @Column({
-    type: 'varchar',
-    length: 100,
-    nullable: true,
-    name: 'address_district',
-  })
-  addressDistrict: string | null;
-
-  @Column({
-    type: 'varchar',
-    length: 100,
-    nullable: true,
-    name: 'address_state',
-  })
-  addressState: string | null;
-
-  @Column({
-    type: 'varchar',
-    length: 20,
-    nullable: true,
-    name: 'address_zip_code',
-  })
-  addressZipCode: string | null;
-
-  @Column({
-    type: 'varchar',
-    length: 100,
-    nullable: true,
-    name: 'address_country',
-  })
-  addressCountry: string | null;
+  @Column({ type: 'jsonb', nullable: true, name: 'address' })
+  address: Record<string, any> | null;
 
   @Column({ type: 'date', nullable: true, name: 'date_of_birth' })
   dateOfBirth: Date | null;
@@ -134,24 +72,16 @@ export class Staff {
   @Column({ type: 'date', nullable: true, name: 'date_of_joining' })
   dateOfJoining: Date | null;
 
-  @Column({
-    type: 'decimal',
-    precision: 10,
-    scale: 2,
-    nullable: true,
-    name: 'salary',
-  })
+  @Column({ type: 'date', nullable: true, name: 'date_of_leaving' })
+  dateOfLeaving: Date | null;
+
+  @Column({ type: 'decimal', precision: 10, scale: 2, nullable: true, name: 'salary' })
   salary: number | null;
 
   @Column({ type: 'jsonb', nullable: true, name: 'qualifications' })
   qualifications: string[] | null;
 
-  @Column({
-    type: 'varchar',
-    length: 255,
-    nullable: true,
-    name: 'specialization',
-  })
+  @Column({ type: 'varchar', length: 255, nullable: true, name: 'specialization' })
   specialization: string | null;
 
   @Column({ type: 'boolean', default: true, name: 'is_active' })
@@ -160,38 +90,52 @@ export class Staff {
   @Column({ type: 'text', nullable: true, name: 'notes' })
   notes: string | null;
 
-  // User Account Fields (for staff login)
+  // Doctor-specific columns (nullable — only set for position=DOCTOR)
+  @Column({ type: 'varchar', length: 50, nullable: true, name: 'doctor_code' })
+  doctorCode: string | null;
+
+  @Column({ type: 'varchar', length: 100, nullable: true, name: 'license_number' })
+  licenseNumber: string | null;
+
+  @Column({ type: 'decimal', precision: 10, scale: 2, nullable: true, name: 'consultation_fee' })
+  consultationFee: number | null;
+
+  @Column({ type: 'jsonb', nullable: true, name: 'schedule' })
+  schedule: Record<string, any> | null;
+
+  @Column({ type: 'varchar', length: 50, nullable: true, name: 'employee_code' })
+  employeeCode: string | null;
+
+  // User account fields
   @Column({ type: 'uuid', nullable: true, name: 'user_id' })
   userId: string | null;
 
   @Column({ type: 'boolean', default: false, name: 'has_user_account' })
   hasUserAccount: boolean;
 
-  @Column({
-    type: 'varchar',
-    length: 20,
-    nullable: true,
-    name: 'user_account_status',
-  })
+  @Column({ type: 'varchar', length: 20, nullable: true, name: 'user_account_status' })
   userAccountStatus: 'pending' | 'active' | 'suspended' | null;
 
   @Column({ type: 'timestamp', nullable: true, name: 'invitation_sent_at' })
   invitationSentAt: Date | null;
 
-  @Column({
-    type: 'varchar',
-    length: 255,
-    nullable: true,
-    name: 'invitation_token',
-  })
+  @Column({ type: 'varchar', length: 255, nullable: true, name: 'invitation_token' })
   invitationToken: string | null;
 
-  @Column({
-    type: 'timestamp',
-    nullable: true,
-    name: 'invitation_expires_at',
-  })
+  @Column({ type: 'timestamp', nullable: true, name: 'invitation_expires_at' })
   invitationExpiresAt: Date | null;
+
+  @Column({ type: 'varchar', length: 50, nullable: true, name: 'organisation_type' })
+  organisationType: string | null;
+
+  @Column({ type: 'uuid', nullable: true, name: 'created_by' })
+  createdBy: string | null;
+
+  @Column({ type: 'uuid', nullable: true, name: 'updated_by' })
+  updatedBy: string | null;
+
+  @Column({ type: 'timestamp', nullable: true, name: 'deleted_at' })
+  deletedAt: Date | null;
 
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
@@ -199,4 +143,3 @@ export class Staff {
   @UpdateDateColumn({ name: 'updated_at' })
   updatedAt: Date;
 }
-

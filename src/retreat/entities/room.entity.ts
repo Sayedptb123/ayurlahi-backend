@@ -7,7 +7,7 @@ import {
     ManyToOne,
     JoinColumn,
 } from 'typeorm';
-import { Clinic } from '../../clinics/entities/clinic.entity';
+import { Organisation } from '../../organisations/entities/organisation.entity';
 
 export enum RoomType {
     SUITE = 'SUITE',
@@ -28,23 +28,24 @@ export class Room {
     @PrimaryGeneratedColumn('uuid')
     id: string;
 
-    @Column({ type: 'uuid', name: 'clinicId' })
-    clinicId: string;
+    @Column({ type: 'uuid', name: 'organisation_id' })
+    organisationId: string;
 
-    @ManyToOne(() => Clinic)
-    @JoinColumn({ name: 'clinicId' })
-    clinic: Clinic;
+    @ManyToOne(() => Organisation)
+    @JoinColumn({ name: 'organisation_id' })
+    organisation: Organisation;
 
-    @Column({ type: 'varchar', length: 50, name: 'roomNumber' })
+    @Column({ type: 'varchar', length: 50, name: 'room_number' })
     roomNumber: string;
 
-    @Column({ type: 'varchar', length: 50, nullable: true })
-    floor: string;
+    @Column({ type: 'varchar', length: 50, nullable: true, name: 'floor' })
+    floor: string | null;
 
     @Column({
         type: 'enum',
         enum: RoomType,
         default: RoomType.PRIVATE,
+        name: 'type',
     })
     type: RoomType;
 
@@ -52,21 +53,31 @@ export class Room {
         type: 'enum',
         enum: RoomStatus,
         default: RoomStatus.AVAILABLE,
+        name: 'status',
     })
     status: RoomStatus;
 
-    @Column({ type: 'decimal', precision: 10, scale: 2, default: 0 })
+    @Column({ type: 'decimal', precision: 10, scale: 2, default: 0, name: 'price_per_day' })
     pricePerDay: number;
 
-    @Column({ type: 'jsonb', nullable: true })
-    amenities: string[];
+    @Column({ type: 'jsonb', nullable: true, name: 'amenities' })
+    amenities: string[] | null;
 
-    @Column({ type: 'text', nullable: true })
-    description: string;
+    @Column({ type: 'text', nullable: true, name: 'description' })
+    description: string | null;
 
-    @CreateDateColumn()
+    @Column({ type: 'boolean', default: true, name: 'is_active' })
+    isActive: boolean;
+
+    @Column({ type: 'uuid', nullable: true, name: 'branch_id' })
+    branchId: string | null;
+
+    @Column({ type: 'timestamp', nullable: true, name: 'deleted_at' })
+    deletedAt: Date | null;
+
+    @CreateDateColumn({ name: 'created_at' })
     createdAt: Date;
 
-    @UpdateDateColumn()
+    @UpdateDateColumn({ name: 'updated_at' })
     updatedAt: Date;
 }

@@ -2,6 +2,7 @@ import {
   Controller,
   Post,
   Get,
+  Patch,
   Body,
   UseGuards,
   Request,
@@ -9,7 +10,9 @@ import {
 import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
+import { RegisterOrganisationDto } from './dto/register-organisation.dto';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
+import { UpdateMeDto } from './dto/update-me.dto';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 
 @Controller('auth')
@@ -35,6 +38,11 @@ export class AuthController {
     return this.authService.register(registerDto);
   }
 
+  @Post('register-organisation')
+  async registerOrganisation(@Body() dto: RegisterOrganisationDto) {
+    return this.authService.registerOrganisation(dto);
+  }
+
   @Get('me')
   @UseGuards(JwtAuthGuard)
   async getProfile(@Request() req) {
@@ -49,6 +57,12 @@ export class AuthController {
       req.user.userId,
       req.user.organisationId,
     );
+  }
+
+  @Patch('me')
+  @UseGuards(JwtAuthGuard)
+  updateMe(@Request() req, @Body() dto: UpdateMeDto) {
+    return this.authService.updateMe(req.user.userId, dto);
   }
 
   @Post('switch-organisation')

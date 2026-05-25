@@ -7,7 +7,7 @@ import {
     ManyToOne,
     JoinColumn,
 } from 'typeorm';
-import { Clinic } from '../../clinics/entities/clinic.entity';
+import { Organisation } from '../../organisations/entities/organisation.entity';
 
 @Entity('treatment_packages')
 export class TreatmentPackage {
@@ -15,31 +15,29 @@ export class TreatmentPackage {
     id: string;
 
     @Column({ type: 'uuid', name: 'clinicId' })
-    clinicId: string;
+    organisationId: string;
 
-    @ManyToOne(() => Clinic)
+    @ManyToOne(() => Organisation)
     @JoinColumn({ name: 'clinicId' })
-    clinic: Clinic;
+    organisation: Organisation;
 
-    @Column({ type: 'varchar', length: 255 })
+    @Column({ type: 'varchar', length: 255, name: 'name' })
     name: string;
 
-    @Column({ type: 'text', nullable: true })
-    description: string;
+    @Column({ type: 'text', nullable: true, name: 'description' })
+    description: string | null;
 
-    @Column({ type: 'int', default: 1 })
+    @Column({ type: 'int', default: 1, name: 'durationDays' })
     durationDays: number;
 
-    @Column({ type: 'decimal', precision: 10, scale: 2, default: 0 })
+    @Column({ type: 'decimal', precision: 10, scale: 2, default: 0, name: 'price' })
     price: number;
 
-    // e.g. ["Accommodation", "All Meals", "Daily Abhyangam", "Consultation"]
-    @Column({ type: 'jsonb', nullable: true })
-    inclusions: string[];
+    @Column({ type: 'jsonb', nullable: true, name: 'inclusions' })
+    inclusions: string[] | null;
 
-    // For frontend visual appeal
-    @Column({ type: 'varchar', length: 500, nullable: true })
-    imageUrl: string;
+    @Column({ type: 'varchar', length: 500, nullable: true, name: 'imageUrl' })
+    imageUrl: string | null;
 
     @CreateDateColumn()
     createdAt: Date;

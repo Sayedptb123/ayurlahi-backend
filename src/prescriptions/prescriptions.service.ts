@@ -11,9 +11,8 @@ import {
   PrescriptionStatus,
 } from './entities/prescription.entity';
 import { PrescriptionItem } from './entities/prescription-item.entity';
-import { User } from '../users/entities/user.entity';
 import { Patient } from '../patients/entities/patient.entity';
-import { Doctor } from '../doctors/entities/doctor.entity';
+import { Staff } from '../staff/entities/staff.entity';
 import { Appointment } from '../appointments/entities/appointment.entity';
 import { CreatePrescriptionDto } from './dto/create-prescription.dto';
 import { UpdatePrescriptionDto } from './dto/update-prescription.dto';
@@ -26,12 +25,10 @@ export class PrescriptionsService {
     private prescriptionsRepository: Repository<Prescription>,
     @InjectRepository(PrescriptionItem)
     private prescriptionItemsRepository: Repository<PrescriptionItem>,
-    @InjectRepository(User)
-    private usersRepository: Repository<User>,
     @InjectRepository(Patient)
     private patientsRepository: Repository<Patient>,
-    @InjectRepository(Doctor)
-    private doctorsRepository: Repository<Doctor>,
+    @InjectRepository(Staff)
+    private staffRepository: Repository<Staff>,
     @InjectRepository(Appointment)
     private appointmentsRepository: Repository<Appointment>,
   ) {}
@@ -43,7 +40,6 @@ export class PrescriptionsService {
     organisationType: string | undefined,
     createDto: CreatePrescriptionDto,
   ) {
-    // Only clinic users and admin can create prescriptions
     if (
       organisationType !== 'CLINIC' &&
       userRole !== 'SUPER_ADMIN' &&
@@ -54,34 +50,39 @@ export class PrescriptionsService {
       );
     }
 
+    if (
+      userRole !== 'DOCTOR' &&
+      userRole !== 'SUPER_ADMIN' &&
+      userRole !== 'SUPPORT'
+    ) {
+      throw new ForbiddenException('Only doctors can write prescriptions');
+    }
+
     const clinicId = organisationId;
     if (!clinicId && userRole !== 'SUPER_ADMIN' && userRole !== 'SUPPORT') {
       throw new BadRequestException('Clinic not associated with user');
     }
 
-    // Verify patient exists and belongs to clinic
     const patient = await this.patientsRepository.findOne({
       where: { id: createDto.patientId },
     });
     if (!patient) {
       throw new NotFoundException('Patient not found');
     }
-    if (patient.clinicId !== clinicId) {
+    if (patient.organisationId !== clinicId) {
       throw new ForbiddenException('Patient does not belong to this clinic');
     }
 
-    // Verify doctor exists and belongs to clinic
-    const doctor = await this.doctorsRepository.findOne({
+    const doctor = await this.staffRepository.findOne({
       where: { id: createDto.doctorId },
     });
     if (!doctor) {
       throw new NotFoundException('Doctor not found');
     }
-    if (doctor.clinicId !== clinicId) {
+    if (doctor.organisationId !== clinicId) {
       throw new ForbiddenException('Doctor does not belong to this clinic');
     }
 
-    // If appointmentId is provided, verify it exists and belongs to clinic
     if (createDto.appointmentId) {
       const appointment = await this.appointmentsRepository.findOne({
         where: { id: createDto.appointmentId },
@@ -89,7 +90,7 @@ export class PrescriptionsService {
       if (!appointment) {
         throw new NotFoundException('Appointment not found');
       }
-      if (appointment.clinicId !== clinicId) {
+      if (appointment.organisationId !== clinicId) {
         throw new ForbiddenException(
           'Appointment does not belong to this clinic',
         );
@@ -101,14 +102,12 @@ export class PrescriptionsService {
       }
     }
 
-    // Validate items
     if (!createDto.items || createDto.items.length === 0) {
       throw new BadRequestException('Prescription must have at least one item');
     }
 
-    // Create prescription with items
     const prescription = this.prescriptionsRepository.create({
-      clinicId: clinicId,
+      organisationId: clinicId,
       patientId: createDto.patientId,
       appointmentId: createDto.appointmentId || null,
       doctorId: createDto.doctorId,
@@ -151,7 +150,6 @@ export class PrescriptionsService {
     } = query;
     const skip = (page - 1) * limit;
 
-    // Only clinic users and admin can view prescriptions
     if (
       organisationType !== 'CLINIC' &&
       userRole !== 'SUPER_ADMIN' &&
@@ -162,7 +160,6 @@ export class PrescriptionsService {
       );
     }
 
-    // Build query
     const queryBuilder = this.prescriptionsRepository
       .createQueryBuilder('prescription')
       .leftJoinAndSelect('prescription.patient', 'patient')
@@ -170,33 +167,21 @@ export class PrescriptionsService {
       .leftJoinAndSelect('prescription.appointment', 'appointment')
       .leftJoinAndSelect('prescription.items', 'items');
 
-    // Clinic users can only see their clinic's prescriptions
     if (organisationType === 'CLINIC') {
       if (!organisationId) {
-        return {
-          data: [],
-          total: 0,
-          page,
-          limit,
-          totalPages: 0,
-        };
+        return { data: [], total: 0, page, limit, totalPages: 0 };
       }
-      queryBuilder.where('prescription.clinicId = :clinicId', {
-        clinicId: organisationId,
+      queryBuilder.where('prescription.organisationId = :organisationId', {
+        organisationId,
       });
     }
 
-    // Filters
     if (patientId) {
-      queryBuilder.andWhere('prescription.patientId = :patientId', {
-        patientId,
-      });
+      queryBuilder.andWhere('prescription.patientId = :patientId', { patientId });
     }
 
     if (doctorId) {
-      queryBuilder.andWhere('prescription.doctorId = :doctorId', {
-        doctorId,
-      });
+      queryBuilder.andWhere('prescription.doctorId = :doctorId', { doctorId });
     }
 
     if (appointmentId) {
@@ -224,7 +209,6 @@ export class PrescriptionsService {
       });
     }
 
-    // Order and pagination
     queryBuilder
       .orderBy('prescription.prescriptionDate', 'DESC')
       .addOrderBy('prescription.createdAt', 'DESC')
@@ -233,13 +217,7 @@ export class PrescriptionsService {
 
     const [data, total] = await queryBuilder.getManyAndCount();
 
-    return {
-      data,
-      total,
-      page,
-      limit,
-      totalPages: Math.ceil(total / limit),
-    };
+    return { data, total, page, limit, totalPages: Math.ceil(total / limit) };
   }
 
   async findOne(
@@ -251,16 +229,15 @@ export class PrescriptionsService {
   ) {
     const prescription = await this.prescriptionsRepository.findOne({
       where: { id },
-      relations: ['clinic', 'patient', 'doctor', 'appointment', 'items'],
+      relations: ['patient', 'doctor', 'appointment', 'items'],
     });
 
     if (!prescription) {
       throw new NotFoundException(`Prescription with ID ${id} not found`);
     }
 
-    // Access control
     if (organisationType === 'CLINIC') {
-      if (!organisationId || organisationId !== prescription.clinicId) {
+      if (!organisationId || organisationId !== prescription.organisationId) {
         throw new ForbiddenException(
           'You do not have access to this prescription',
         );
@@ -278,29 +255,39 @@ export class PrescriptionsService {
     organisationType: string | undefined,
     updateDto: UpdatePrescriptionDto,
   ) {
-    const prescription = await this.findOne(
-      id,
-      userId,
-      userRole,
-      organisationId,
-      organisationType,
-    );
+    const prescription = await this.prescriptionsRepository.findOne({
+      where: { id },
+    });
 
-    // If updating patient, doctor, or appointment, verify they belong to clinic
+    if (!prescription) {
+      throw new NotFoundException(`Prescription with ID ${id} not found`);
+    }
+
+    if (organisationType === 'CLINIC') {
+      if (
+        !organisationId ||
+        organisationId !== prescription.organisationId
+      ) {
+        throw new ForbiddenException(
+          'You do not have access to this prescription',
+        );
+      }
+    }
+
     if (updateDto.patientId && updateDto.patientId !== prescription.patientId) {
       const patient = await this.patientsRepository.findOne({
         where: { id: updateDto.patientId },
       });
-      if (!patient || patient.clinicId !== prescription.clinicId) {
+      if (!patient || patient.organisationId !== prescription.organisationId) {
         throw new ForbiddenException('Patient does not belong to this clinic');
       }
     }
 
     if (updateDto.doctorId && updateDto.doctorId !== prescription.doctorId) {
-      const doctor = await this.doctorsRepository.findOne({
+      const doctor = await this.staffRepository.findOne({
         where: { id: updateDto.doctorId },
       });
-      if (!doctor || doctor.clinicId !== prescription.clinicId) {
+      if (!doctor || doctor.organisationId !== prescription.organisationId) {
         throw new ForbiddenException('Doctor does not belong to this clinic');
       }
     }
@@ -312,14 +299,16 @@ export class PrescriptionsService {
       const appointment = await this.appointmentsRepository.findOne({
         where: { id: updateDto.appointmentId },
       });
-      if (!appointment || appointment.clinicId !== prescription.clinicId) {
+      if (
+        !appointment ||
+        appointment.organisationId !== prescription.organisationId
+      ) {
         throw new ForbiddenException(
           'Appointment does not belong to this clinic',
         );
       }
     }
 
-    // Update prescription fields
     if (updateDto.patientId !== undefined)
       prescription.patientId = updateDto.patientId;
     if (updateDto.appointmentId !== undefined)
@@ -333,14 +322,10 @@ export class PrescriptionsService {
     if (updateDto.notes !== undefined) prescription.notes = updateDto.notes;
     if (updateDto.status !== undefined) prescription.status = updateDto.status;
 
-    // Update items if provided
     if (updateDto.items !== undefined) {
-      // Remove existing items
       await this.prescriptionItemsRepository.delete({
         prescriptionId: prescription.id,
       });
-
-      // Create new items
       prescription.items = updateDto.items.map((item, index) =>
         this.prescriptionItemsRepository.create({
           prescriptionId: prescription.id,
@@ -372,7 +357,7 @@ export class PrescriptionsService {
       organisationId,
       organisationType,
     );
-    await this.prescriptionsRepository.remove(prescription);
+    await this.prescriptionsRepository.softDelete(prescription.id);
     return { message: 'Prescription deleted successfully' };
   }
 }

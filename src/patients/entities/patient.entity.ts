@@ -7,7 +7,7 @@ import {
   ManyToOne,
   JoinColumn,
 } from 'typeorm';
-import { Clinic } from '../../clinics/entities/clinic.entity';
+import { Organisation } from '../../organisations/entities/organisation.entity';
 
 export enum Gender {
   MALE = 'male',
@@ -20,27 +20,22 @@ export class Patient {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column({ type: 'uuid', name: 'clinicId' })
-  clinicId: string;
+  @Column({ type: 'uuid', name: 'organisation_id' })
+  organisationId: string;
 
-  @Column({ type: 'varchar', length: 50, name: 'patientId' })
-  patientId: string;
+  @Column({ type: 'varchar', length: 50, name: 'patient_code' })
+  patientCode: string;
 
-  @Column({ type: 'varchar', length: 100, name: 'firstName' })
+  @Column({ type: 'varchar', length: 100, name: 'first_name' })
   firstName: string;
 
-  @Column({ type: 'varchar', length: 100, name: 'lastName' })
+  @Column({ type: 'varchar', length: 100, name: 'last_name' })
   lastName: string;
 
-  @Column({ type: 'date', nullable: true, name: 'dateOfBirth' })
+  @Column({ type: 'date', nullable: true, name: 'date_of_birth' })
   dateOfBirth: Date | null;
 
-  @Column({
-    type: 'enum',
-    enum: Gender,
-    nullable: true,
-    name: 'gender',
-  })
+  @Column({ type: 'varchar', length: 20, nullable: true, name: 'gender' })
   gender: Gender | null;
 
   @Column({ type: 'varchar', length: 20, nullable: true, name: 'phone' })
@@ -50,39 +45,39 @@ export class Patient {
   email: string | null;
 
   @Column({ type: 'jsonb', nullable: true, name: 'address' })
-  address: {
-    street?: string;
-    city?: string;
-    district?: string;
-    state?: string;
-    zipCode?: string;
-    country?: string;
-  } | null;
+  address: Record<string, any> | null;
 
-  @Column({ type: 'jsonb', nullable: true, name: 'emergencyContact' })
-  emergencyContact: {
-    name?: string;
-    relationship?: string;
-    phone?: string;
-    email?: string;
-  } | null;
+  @Column({ type: 'jsonb', nullable: true, name: 'emergency_contact' })
+  emergencyContact: Record<string, any> | null;
 
-  @Column({ type: 'varchar', length: 10, nullable: true, name: 'bloodGroup' })
+  @Column({ type: 'varchar', length: 10, nullable: true, name: 'blood_group' })
   bloodGroup: string | null;
 
   @Column({ type: 'jsonb', nullable: true, name: 'allergies' })
   allergies: string[] | null;
 
-  @Column({ type: 'text', nullable: true, name: 'medicalHistory' })
+  @Column({ type: 'text', nullable: true, name: 'medical_history' })
   medicalHistory: string | null;
 
-  @ManyToOne(() => Clinic)
-  @JoinColumn({ name: 'clinicId' })
-  clinic: Clinic;
+  @Column({ type: 'uuid', nullable: true, name: 'mother_patient_id' })
+  motherPatientId: string | null;
 
-  @CreateDateColumn({ name: 'createdAt' })
+  @Column({ type: 'uuid', nullable: true, name: 'created_by' })
+  createdBy: string | null;
+
+  @Column({ type: 'uuid', nullable: true, name: 'updated_by' })
+  updatedBy: string | null;
+
+  @Column({ type: 'timestamp', nullable: true, name: 'deleted_at' })
+  deletedAt: Date | null;
+
+  @ManyToOne(() => Organisation)
+  @JoinColumn({ name: 'organisation_id' })
+  organisation: Organisation;
+
+  @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 
-  @UpdateDateColumn({ name: 'updatedAt' })
+  @UpdateDateColumn({ name: 'updated_at' })
   updatedAt: Date;
 }

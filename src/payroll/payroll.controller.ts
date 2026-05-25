@@ -17,7 +17,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { UserRole } from '../users/enums/user-role.enum';
-import { User } from '../users/entities/user.entity';
+
 
 @Controller('payroll')
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -26,8 +26,8 @@ export class PayrollController {
 
     @Post('structure')
     @Roles(UserRole.OWNER, UserRole.MANAGER, UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.CLINIC, UserRole.MANUFACTURER)
-    createStructure(@Body() dto: CreateSalaryStructureDto) {
-        return this.payrollService.createOrUpdateSalaryStructure(dto);
+    createStructure(@Request() req, @Body() dto: CreateSalaryStructureDto) {
+        return this.payrollService.createOrUpdateSalaryStructure(req.user, dto);
     }
 
     @Get('structure/:staffId')
@@ -39,7 +39,7 @@ export class PayrollController {
     @Post('generate')
     @Roles(UserRole.OWNER, UserRole.MANAGER, UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.CLINIC, UserRole.MANUFACTURER)
     generate(@Request() req, @Body() dto: GeneratePayrollDto) {
-        return this.payrollService.generatePayroll(req.user as User, dto);
+        return this.payrollService.generatePayroll(req.user, dto);
     }
 
     @Get('history')
@@ -49,7 +49,7 @@ export class PayrollController {
         @Query('month') month?: number,
         @Query('year') year?: number,
     ) {
-        return this.payrollService.getPayrollRecords(req.user as User, month, year);
+        return this.payrollService.getPayrollRecords(req.user, month, year);
     }
 
     @Patch(':id/status')

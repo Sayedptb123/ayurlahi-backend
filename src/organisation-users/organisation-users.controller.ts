@@ -51,6 +51,20 @@ export class OrganisationUsersController {
     return this.organisationUsersService.remove(id);
   }
 
+  @Patch('by-user/:userId')
+  updatePermissionsByUser(
+    @Param('userId') targetUserId: string,
+    @Body('permissions') permissions: Record<string, boolean>,
+    @Request() req,
+  ) {
+    const organisationId = req.user?.organisationId;
+    return this.organisationUsersService.updatePermissionsByUserId(
+      targetUserId,
+      organisationId,
+      permissions,
+    );
+  }
+
   @Get('user/:userId/organisations')
   getUserOrganisations(@Param('userId') userId: string) {
     return this.organisationUsersService.getUserOrganisations(userId);

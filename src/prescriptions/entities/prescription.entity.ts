@@ -8,16 +8,17 @@ import {
   OneToMany,
   JoinColumn,
 } from 'typeorm';
-import { Clinic } from '../../clinics/entities/clinic.entity';
+import { Organisation } from '../../organisations/entities/organisation.entity';
 import { Patient } from '../../patients/entities/patient.entity';
-import { Doctor } from '../../doctors/entities/doctor.entity';
+import { Staff } from '../../staff/entities/staff.entity';
 import { Appointment } from '../../appointments/entities/appointment.entity';
 import { PrescriptionItem } from './prescription-item.entity';
 
 export enum PrescriptionStatus {
   ACTIVE = 'active',
-  COMPLETED = 'completed',
+  DISPENSED = 'dispensed',
   CANCELLED = 'cancelled',
+  EXPIRED = 'expired',
 }
 
 @Entity('prescriptions')
@@ -25,50 +26,48 @@ export class Prescription {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column({ type: 'uuid', name: 'clinicId' })
-  clinicId: string;
+  @Column({ type: 'uuid', name: 'organisation_id' })
+  organisationId: string;
 
-  @Column({ type: 'uuid', name: 'patientId' })
+  @Column({ type: 'uuid', name: 'patient_id' })
   patientId: string;
 
-  @Column({ type: 'uuid', nullable: true, name: 'appointmentId' })
+  @Column({ type: 'uuid', nullable: true, name: 'appointment_id' })
   appointmentId: string | null;
 
-  @Column({ type: 'uuid', name: 'doctorId' })
+  @Column({ type: 'uuid', name: 'doctor_id' })
   doctorId: string;
 
-  @Column({ type: 'date', name: 'prescriptionDate' })
+  @Column({ type: 'date', name: 'prescription_date' })
   prescriptionDate: Date;
 
-  @Column({ type: 'text', name: 'diagnosis' })
-  diagnosis: string;
+  @Column({ type: 'text', nullable: true, name: 'diagnosis' })
+  diagnosis: string | null;
 
   @Column({ type: 'text', nullable: true, name: 'notes' })
   notes: string | null;
 
-  @Column({
-    type: 'enum',
-    enum: PrescriptionStatus,
-    default: PrescriptionStatus.ACTIVE,
-    name: 'status',
-  })
+  @Column({ type: 'varchar', length: 20, default: PrescriptionStatus.ACTIVE, name: 'status' })
   status: PrescriptionStatus;
 
-  @ManyToOne(() => Clinic)
-  @JoinColumn({ name: 'clinicId' })
-  clinic: Clinic;
+  @Column({ type: 'timestamp', nullable: true, name: 'deleted_at' })
+  deletedAt: Date | null;
+
+  @ManyToOne(() => Organisation)
+  @JoinColumn({ name: 'organisation_id' })
+  organisation: Organisation;
 
   @ManyToOne(() => Patient)
-  @JoinColumn({ name: 'patientId' })
+  @JoinColumn({ name: 'patient_id' })
   patient: Patient;
 
   @ManyToOne(() => Appointment, { nullable: true })
-  @JoinColumn({ name: 'appointmentId' })
+  @JoinColumn({ name: 'appointment_id' })
   appointment: Appointment | null;
 
-  @ManyToOne(() => Doctor)
-  @JoinColumn({ name: 'doctorId' })
-  doctor: Doctor;
+  @ManyToOne(() => Staff)
+  @JoinColumn({ name: 'doctor_id' })
+  doctor: Staff;
 
   @OneToMany(() => PrescriptionItem, (item) => item.prescription, {
     cascade: true,
@@ -76,9 +75,9 @@ export class Prescription {
   })
   items: PrescriptionItem[];
 
-  @CreateDateColumn({ name: 'createdAt' })
+  @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 
-  @UpdateDateColumn({ name: 'updatedAt' })
+  @UpdateDateColumn({ name: 'updated_at' })
   updatedAt: Date;
 }

@@ -15,6 +15,7 @@ import { UpdateDutyAssignmentDto } from './dto/update-duty-assignment.dto';
 import { GetDutyAssignmentsDto } from './dto/get-duty-assignments.dto';
 import { CheckInDto } from './dto/check-in.dto';
 import { CheckOutDto } from './dto/check-out.dto';
+import { NotificationsService } from '../notifications/notifications.service';
 
 @Injectable()
 export class DutyAssignmentsService {
@@ -27,6 +28,7 @@ export class DutyAssignmentsService {
     private readonly staffRepository: Repository<Staff>,
     @InjectRepository(DutyType)
     private readonly dutyTypesRepository: Repository<DutyType>,
+    private readonly notificationsService: NotificationsService,
   ) {}
 
   async create(
@@ -46,7 +48,7 @@ export class DutyAssignmentsService {
 
     // Verify staff exists and belongs to organisation
     const staff = await this.staffRepository.findOne({
-      where: { id: createDto.staffId, organizationId: organisationId },
+      where: { id: createDto.staffId, organisationId: organisationId },
     });
     if (!staff) {
       throw new NotFoundException('Staff not found');
@@ -77,7 +79,23 @@ export class DutyAssignmentsService {
       assignedBy,
     });
 
-    return await this.assignmentsRepository.save(assignment);
+    const saved = await this.assignmentsRepository.save(assignment);
+
+    // Send push notification to assigned staff member
+    if (staff.userId) {
+      const dateStr = new Date(createDto.dutyDate).toLocaleDateString('en-IN', {
+        day: 'numeric', month: 'short', year: 'numeric',
+      });
+      this.notificationsService
+        .sendToUsers({
+          userIds: [staff.userId],
+          title: 'Shift Assigned',
+          body: `You have been assigned ${dutyType.name} on ${dateStr}`,
+        })
+        .catch(() => {/* non-critical */});
+    }
+
+    return saved;
   }
 
   async findAll(
@@ -167,7 +185,7 @@ export class DutyAssignmentsService {
     // If updating staff, verify they exist
     if (updateDto.staffId && updateDto.staffId !== assignment.staffId) {
       const staff = await this.staffRepository.findOne({
-        where: { id: updateDto.staffId, organizationId: organisationId },
+        where: { id: updateDto.staffId, organisationId: organisationId },
       });
       if (!staff) {
         throw new NotFoundException('Staff not found');

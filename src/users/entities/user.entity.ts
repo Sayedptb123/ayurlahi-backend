@@ -7,11 +7,7 @@ import {
   Index,
 } from 'typeorm';
 
-import { UserRole } from '../enums/user-role.enum';
-
 @Entity('users')
-@Index(['phone'])
-@Index(['email'])
 @Index(['isActive'])
 export class User {
   @PrimaryGeneratedColumn('uuid')
@@ -23,18 +19,13 @@ export class User {
   @Column({ type: 'varchar', length: 100, name: 'last_name' })
   lastName: string;
 
-  @Column({ type: 'varchar', length: 20, unique: true })
+  @Column({ type: 'varchar', length: 20, name: 'phone' })
   phone: string;
 
-  @Column({ type: 'varchar', length: 255, unique: true, nullable: true })
+  @Column({ type: 'varchar', length: 255, nullable: true, name: 'email' })
   email: string | null;
 
-  @Column({
-    type: 'varchar',
-    length: 255,
-    nullable: true,
-    name: 'password_hash',
-  })
+  @Column({ type: 'varchar', length: 255, nullable: true, name: 'password_hash' })
   passwordHash: string | null;
 
   @Column({ type: 'boolean', default: true, name: 'is_active' })
@@ -43,25 +34,11 @@ export class User {
   @Column({ type: 'boolean', default: false, name: 'is_email_verified' })
   isEmailVerified: boolean;
 
-  @Column({
-    type: 'enum',
-    enum: UserRole,
-    default: UserRole.CLINIC,
-    nullable: true,
-  })
-  role: UserRole;
-
-  @Column({ type: 'uuid', nullable: true, name: 'clinic_id' })
-  clinicId: string | null;
-
-  @Column({ type: 'uuid', nullable: true, name: 'manufacturer_id' })
-  manufacturerId: string | null;
-
-  @Column({ type: 'varchar', length: 20, nullable: true, name: 'whatsapp_number' })
-  whatsappNumber: string | null;
-
   @Column({ type: 'timestamp', nullable: true, name: 'last_login_at' })
   lastLoginAt: Date | null;
+
+  @Column({ type: 'timestamp', nullable: true, name: 'deleted_at' })
+  deletedAt: Date | null;
 
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;

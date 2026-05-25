@@ -1,11 +1,13 @@
 import { Injectable, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, Between, LessThanOrEqual, MoreThanOrEqual } from 'typeorm';
+import { Repository, Between, LessThanOrEqual, MoreThanOrEqual, In } from 'typeorm';
 import { Room, RoomStatus } from './entities/room.entity';
 import { TreatmentPackage } from './entities/treatment-package.entity';
 import { Admission, AdmissionStatus } from './entities/admission.entity';
 import { RoomBooking, BookingStatus } from './entities/room-booking.entity';
+import { OrganisationUser } from '../organisation-users/entities/organisation-user.entity';
 import { CreateBookingDto, UpdateBookingDto, CheckAvailabilityDto } from './dto/booking.dto';
+import { NotificationsService } from '../notifications/notifications.service';
 
 @Injectable()
 export class RetreatService {
@@ -18,44 +20,58 @@ export class RetreatService {
         private admissionRepo: Repository<Admission>,
         @InjectRepository(RoomBooking)
         private bookingRepo: Repository<RoomBooking>,
+        @InjectRepository(OrganisationUser)
+        private orgUserRepo: Repository<OrganisationUser>,
+        private notificationsService: NotificationsService,
     ) { }
 
     // --- ROOMS ---
     async getRooms(clinicId: string) {
         return this.roomRepo.find({
-            where: { clinicId },
+            where: { organisationId: clinicId },
             order: { roomNumber: 'ASC' },
         });
     }
 
     async createRoom(clinicId: string, data: Partial<Room>) {
-        const room = this.roomRepo.create({ ...data, clinicId });
+        const room = this.roomRepo.create({ ...data, organisationId: clinicId });
+        return this.roomRepo.save(room);
+    }
+
+    async updateRoomStatus(clinicId: string, id: string, status: string) {
+        const room = await this.roomRepo.findOne({ where: { id, organisationId: clinicId } });
+        if (!room) throw new NotFoundException('Room not found');
+        room.status = status as RoomStatus;
         return this.roomRepo.save(room);
     }
 
     async deleteRoom(clinicId: string, id: string) {
-        const room = await this.roomRepo.findOne({ where: { id, clinicId } });
+        const room = await this.roomRepo.findOne({ where: { id, organisationId: clinicId } });
         if (!room) throw new NotFoundException('Room not found');
-        return this.roomRepo.remove(room);
+        await this.roomRepo.softDelete(room.id);
     }
 
     // --- PACKAGES ---
     async getPackages(clinicId: string) {
         return this.packageRepo.find({
-            where: { clinicId },
+            where: { organisationId: clinicId },
             order: { price: 'ASC' },
         });
     }
 
     async createPackage(clinicId: string, data: Partial<TreatmentPackage>) {
-        const pkg = this.packageRepo.create({ ...data, clinicId });
+        const pkg = this.packageRepo.create({ ...data, organisationId: clinicId });
         return this.packageRepo.save(pkg);
     }
 
     // --- ADMISSIONS ---
-    async getAdmissions(clinicId: string) {
+    async getAdmissions(clinicId: string, params?: { patientId?: string; status?: string }) {
+        const where: any = { organisationId: clinicId };
+        if (params?.patientId) where.patientId = params.patientId;
+        if (params?.status) where.status = params.status;
+        else where.status = AdmissionStatus.ACTIVE;
         return this.admissionRepo.find({
-            where: { clinicId, status: AdmissionStatus.ACTIVE },
+            where,
             relations: ['patient', 'room', 'treatmentPackage'],
             order: { checkInDate: 'DESC' },
         });
@@ -68,7 +84,7 @@ export class RetreatService {
         const { patientId, roomId, packageId, checkInDate } = data;
 
         // 1. Verify Room Availability
-        const room = await this.roomRepo.findOne({ where: { id: roomId, clinicId } });
+        const room = await this.roomRepo.findOne({ where: { id: roomId, organisationId: clinicId } });
         if (!room) throw new NotFoundException('Room not found');
         if (room.status !== RoomStatus.AVAILABLE) {
             throw new ConflictException(`Room ${room.roomNumber} is not available (Status: ${room.status})`);
@@ -76,7 +92,7 @@ export class RetreatService {
 
         // 2. Create Admission
         const admission = this.admissionRepo.create({
-            clinicId,
+            organisationId: clinicId,
             patientId,
             roomId,
             packageId,
@@ -99,12 +115,30 @@ export class RetreatService {
 
         // Transactional save (simplified per method)
         await this.roomRepo.save(room);
-        return this.admissionRepo.save(admission);
+        const savedAdmission = await this.admissionRepo.save(admission);
+
+        // Notify clinic doctors and managers about the new admission
+        this.orgUserRepo
+            .find({ where: { organisationId: clinicId, role: In(['DOCTOR', 'MANAGER', 'OWNER', 'ADMIN']), isActive: true } })
+            .then((orgUsers) => {
+                const userIds = orgUsers.map((ou) => ou.userId).filter(Boolean);
+                if (userIds.length > 0) {
+                    this.notificationsService.sendToUsers({
+                        userIds,
+                        title: 'Patient Admitted',
+                        body: `Room ${room.roomNumber} — check-in on ${new Date(savedAdmission.checkInDate).toLocaleDateString()}`,
+                        data: { admissionId: savedAdmission.id, type: 'patient_admitted' },
+                    }).catch(() => {});
+                }
+            })
+            .catch(() => {});
+
+        return savedAdmission;
     }
 
     async discharge(clinicId: string, admissionId: string) {
         const admission = await this.admissionRepo.findOne({
-            where: { id: admissionId, clinicId },
+            where: { id: admissionId, organisationId: clinicId },
             relations: ['room']
         });
 
@@ -141,7 +175,7 @@ export class RetreatService {
         }
 
         // Check room exists
-        const room = await this.roomRepo.findOne({ where: { id: roomId, clinicId } });
+        const room = await this.roomRepo.findOne({ where: { id: roomId, organisationId: clinicId } });
         if (!room) throw new NotFoundException('Room not found');
 
         // Check availability (no overlapping bookings)
@@ -164,7 +198,7 @@ export class RetreatService {
 
         // Create booking
         const booking = this.bookingRepo.create({
-            clinicId,
+            organisationId: clinicId,
             patientId,
             roomId,
             packageId,
@@ -191,7 +225,7 @@ export class RetreatService {
                 .leftJoinAndSelect('booking.patient', 'patient')
                 .leftJoinAndSelect('booking.room', 'room')
                 .leftJoinAndSelect('booking.treatmentPackage', 'package')
-                .where('booking.clinicId = :clinicId', { clinicId });
+                .where('booking.organisationId = :organisationId', { organisationId: clinicId });
 
             if (filters?.status) {
                 query.andWhere('booking.status = :status', { status: filters.status });
@@ -219,7 +253,7 @@ export class RetreatService {
 
     async getBookingById(clinicId: string, bookingId: string) {
         const booking = await this.bookingRepo.findOne({
-            where: { id: bookingId, clinicId },
+            where: { id: bookingId, organisationId: clinicId },
             relations: ['patient', 'room', 'treatmentPackage'],
         });
 

@@ -28,19 +28,11 @@ export class OrganisationsService {
     createDto: CreateOrganisationDto,
     createdBy?: string,
   ): Promise<Organisation> {
-    // Check for duplicate license number if provided
-    if (createDto.licenseNumber) {
-      const existing = await this.organisationsRepository.findOne({
-        where: { licenseNumber: createDto.licenseNumber, deletedAt: IsNull() },
-      });
-      if (existing) {
-        throw new ConflictException('License number already exists');
-      }
-    }
-
     const organisation = this.organisationsRepository.create({
-      ...createDto,
-      status: createDto.status || 'active',
+      name: createDto.name,
+      type: createDto.type,
+      approvalStatus: 'pending',
+      isActive: true,
     });
 
     const savedOrg = await this.organisationsRepository.save(organisation);
@@ -156,19 +148,6 @@ export class OrganisationsService {
   ): Promise<Organisation> {
     const organisation = await this.findOne(id);
 
-    // Check for duplicate license number if being updated
-    if (
-      updateDto.licenseNumber &&
-      updateDto.licenseNumber !== organisation.licenseNumber
-    ) {
-      const existing = await this.organisationsRepository.findOne({
-        where: { licenseNumber: updateDto.licenseNumber, deletedAt: IsNull() },
-      });
-      if (existing) {
-        throw new ConflictException('License number already exists');
-      }
-    }
-
     // Update primary user if provided
     if (updateDto.primaryUser && organisation.users) {
       const primaryOrgUser = organisation.users.find(u => u.isPrimary);
@@ -208,7 +187,6 @@ export class OrganisationsService {
     }
 
     organisation.approvalStatus = 'approved';
-    organisation.isVerified = true;
     organisation.approvedAt = new Date();
     organisation.approvedBy = approvedBy;
 

@@ -32,19 +32,10 @@ export class InvoicesService {
 
     // Role-based filtering
     if (userRole === 'clinic') {
-      const user = await this.usersRepository.findOne({
-        where: { id: userId },
-      });
-      if (user && user.clinicId) {
-        queryBuilder.andWhere('order.clinicId = :clinicId', {
-          clinicId: user.clinicId,
-        });
-      } else {
-        return {
-          data: [],
-          pagination: { page, limit, total: 0, totalPages: 0 },
-        };
-      }
+      return {
+        data: [],
+        pagination: { page, limit, total: 0, totalPages: 0 },
+      };
     }
     // Admin and support can see all invoices
 
@@ -86,12 +77,7 @@ export class InvoicesService {
 
     // Role-based access control
     if (userRole === 'clinic') {
-      const user = await this.usersRepository.findOne({
-        where: { id: userId },
-      });
-      if (!user || user.clinicId !== invoice.order.clinicId) {
-        throw new ForbiddenException('You do not have access to this invoice');
-      }
+      throw new ForbiddenException('You do not have access to this invoice');
     }
 
     return {

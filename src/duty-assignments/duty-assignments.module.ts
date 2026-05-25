@@ -7,6 +7,7 @@ import { Branch } from '../branches/entities/branch.entity';
 import { Staff } from '../staff/entities/staff.entity';
 import { DutyType } from '../duty-types/entities/duty-type.entity';
 import { OrganisationUser } from '../organisation-users/entities/organisation-user.entity';
+import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
   imports: [
@@ -17,6 +18,7 @@ import { OrganisationUser } from '../organisation-users/entities/organisation-us
       DutyType,
       OrganisationUser,
     ]),
+    NotificationsModule,
   ],
   controllers: [DutyAssignmentsController],
   providers: [DutyAssignmentsService],

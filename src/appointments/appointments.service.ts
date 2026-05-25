@@ -10,10 +10,12 @@ import { Repository, Between } from 'typeorm';
 import { Appointment, AppointmentStatus } from './entities/appointment.entity';
 import { User } from '../users/entities/user.entity';
 import { Patient } from '../patients/entities/patient.entity';
-import { Doctor } from '../doctors/entities/doctor.entity';
+import { Staff } from '../staff/entities/staff.entity';
 import { CreateAppointmentDto } from './dto/create-appointment.dto';
 import { UpdateAppointmentDto } from './dto/update-appointment.dto';
 import { GetAppointmentsDto } from './dto/get-appointments.dto';
+import { EmailService } from '../email/email.service';
+import { NotificationsService } from '../notifications/notifications.service';
 
 @Injectable()
 export class AppointmentsService {
@@ -24,8 +26,10 @@ export class AppointmentsService {
     private usersRepository: Repository<User>,
     @InjectRepository(Patient)
     private patientsRepository: Repository<Patient>,
-    @InjectRepository(Doctor)
-    private doctorsRepository: Repository<Doctor>,
+    @InjectRepository(Staff)
+    private staffRepository: Repository<Staff>,
+    private emailService: EmailService,
+    private notificationsService: NotificationsService,
   ) { }
 
   async create(
@@ -59,18 +63,18 @@ export class AppointmentsService {
     if (!patient) {
       throw new NotFoundException('Patient not found');
     }
-    if (patient.clinicId !== clinicId) {
+    if (patient.organisationId !== clinicId) {
       throw new ForbiddenException('Patient does not belong to this clinic');
     }
 
-    // Verify doctor exists and belongs to clinic
-    const doctor = await this.doctorsRepository.findOne({
+    // Verify doctor (staff) exists and belongs to clinic
+    const doctor = await this.staffRepository.findOne({
       where: { id: createDto.doctorId },
     });
     if (!doctor) {
       throw new NotFoundException('Doctor not found');
     }
-    if (doctor.clinicId !== clinicId) {
+    if (doctor.organisationId !== clinicId) {
       throw new ForbiddenException('Doctor does not belong to this clinic');
     }
     if (!doctor.isActive) {
@@ -126,14 +130,26 @@ export class AppointmentsService {
 
     const appointment = this.appointmentsRepository.create({
       ...createDto,
-      clinicId,
+      organisationId: clinicId,
       appointmentDate: new Date(createDto.appointmentDate),
       duration: createDto.duration ?? 30,
       status: createDto.status ?? AppointmentStatus.SCHEDULED,
       appointmentType: createDto.appointmentType ?? createDto.appointmentType,
     });
 
-    return this.appointmentsRepository.save(appointment);
+    const saved = await this.appointmentsRepository.save(appointment);
+
+    // Notify the assigned doctor
+    if (doctor.userId) {
+      this.notificationsService.sendToUsers({
+        userIds: [doctor.userId],
+        title: 'New Appointment Scheduled',
+        body: `Patient ${patient.firstName} ${patient.lastName} on ${createDto.appointmentDate} at ${createDto.appointmentTime}`,
+        data: { appointmentId: saved.id, type: 'appointment_created' },
+      }).catch(() => {});
+    }
+
+    return saved;
   }
 
   async findAll(
@@ -184,8 +200,8 @@ export class AppointmentsService {
           totalPages: 0,
         };
       }
-      queryBuilder.where('appointment.clinicId = :clinicId', {
-        clinicId: organisationId,
+      queryBuilder.where('appointment.organisationId = :orgId', {
+        orgId: organisationId,
       });
     }
 
@@ -252,7 +268,7 @@ export class AppointmentsService {
   ) {
     const appointment = await this.appointmentsRepository.findOne({
       where: { id },
-      relations: ['clinic', 'patient', 'doctor'],
+      relations: ['patient', 'doctor'],
     });
 
     if (!appointment) {
@@ -261,7 +277,7 @@ export class AppointmentsService {
 
     // Access control
     if (organisationType === 'CLINIC') {
-      if (!organisationId || organisationId !== appointment.clinicId) {
+      if (!organisationId || organisationId !== appointment.organisationId) {
         throw new ForbiddenException(
           'You do not have access to this appointment',
         );
@@ -279,29 +295,35 @@ export class AppointmentsService {
     organisationType: string | undefined,
     updateDto: UpdateAppointmentDto,
   ) {
-    const appointment = await this.findOne(
-      id,
-      userId,
-      userRole,
-      organisationId,
-      organisationType,
-    );
+    // Load without relations to avoid TypeORM nulling clinicId FK on save
+    const appointment = await this.appointmentsRepository.findOne({ where: { id } });
+
+    if (!appointment) {
+      throw new NotFoundException(`Appointment with ID ${id} not found`);
+    }
+
+    // Access control
+    if (organisationType === 'CLINIC') {
+      if (!organisationId || organisationId !== appointment.organisationId) {
+        throw new ForbiddenException('You do not have access to this appointment');
+      }
+    }
 
     // If updating patient or doctor, verify they belong to the clinic
     if (updateDto.patientId && updateDto.patientId !== appointment.patientId) {
       const patient = await this.patientsRepository.findOne({
         where: { id: updateDto.patientId },
       });
-      if (!patient || patient.clinicId !== appointment.clinicId) {
+      if (!patient || patient.organisationId !== appointment.organisationId) {
         throw new ForbiddenException('Patient does not belong to this clinic');
       }
     }
 
     if (updateDto.doctorId && updateDto.doctorId !== appointment.doctorId) {
-      const doctor = await this.doctorsRepository.findOne({
+      const doctor = await this.staffRepository.findOne({
         where: { id: updateDto.doctorId },
       });
-      if (!doctor || doctor.clinicId !== appointment.clinicId) {
+      if (!doctor || doctor.organisationId !== appointment.organisationId) {
         throw new ForbiddenException('Doctor does not belong to this clinic');
       }
     }
@@ -333,7 +355,36 @@ export class AppointmentsService {
     if (updateDto.reason !== undefined) appointment.reason = updateDto.reason;
     if (updateDto.notes !== undefined) appointment.notes = updateDto.notes;
 
-    return this.appointmentsRepository.save(appointment);
+    const saved = await this.appointmentsRepository.save(appointment);
+
+    // Send email notifications on status changes (fire-and-forget)
+    if (updateDto.status && updateDto.status !== appointment.status) {
+      const patient = await this.patientsRepository.findOne({ where: { id: saved.patientId } });
+      const doctor = await this.staffRepository.findOne({ where: { id: saved.doctorId } });
+
+      if (patient?.email && doctor) {
+        const emailData = {
+          patientName: `${patient.firstName} ${patient.lastName}`,
+          patientEmail: patient.email,
+          doctorName: `${doctor.firstName} ${doctor.lastName}`,
+          clinicName: saved.organisationId ?? '',
+          appointmentDate: saved.appointmentDate?.toLocaleDateString('en-IN') ?? '',
+          appointmentTime: saved.appointmentTime ?? '',
+          appointmentType: saved.appointmentType ?? '',
+        };
+
+        if (updateDto.status === AppointmentStatus.CONFIRMED) {
+          this.emailService.sendAppointmentConfirmation(emailData).catch(() => {});
+        } else if (updateDto.status === AppointmentStatus.CANCELLED) {
+          this.emailService.sendAppointmentCancellation({
+            ...emailData,
+            reason: updateDto.cancellationReason,
+          }).catch(() => {});
+        }
+      }
+    }
+
+    return saved;
   }
 
   async remove(

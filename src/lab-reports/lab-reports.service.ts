@@ -9,9 +9,8 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { LabReport, LabReportStatus } from './entities/lab-report.entity';
 import { LabTest, LabTestStatus } from './entities/lab-test.entity';
-import { User } from '../users/entities/user.entity';
 import { Patient } from '../patients/entities/patient.entity';
-import { Doctor } from '../doctors/entities/doctor.entity';
+import { Staff } from '../staff/entities/staff.entity';
 import { Appointment } from '../appointments/entities/appointment.entity';
 import { CreateLabReportDto } from './dto/create-lab-report.dto';
 import { UpdateLabReportDto } from './dto/update-lab-report.dto';
@@ -24,12 +23,10 @@ export class LabReportsService {
     private labReportsRepository: Repository<LabReport>,
     @InjectRepository(LabTest)
     private labTestsRepository: Repository<LabTest>,
-    @InjectRepository(User)
-    private usersRepository: Repository<User>,
     @InjectRepository(Patient)
     private patientsRepository: Repository<Patient>,
-    @InjectRepository(Doctor)
-    private doctorsRepository: Repository<Doctor>,
+    @InjectRepository(Staff)
+    private staffRepository: Repository<Staff>,
     @InjectRepository(Appointment)
     private appointmentsRepository: Repository<Appointment>,
   ) {}
@@ -41,7 +38,6 @@ export class LabReportsService {
     organisationType: string | undefined,
     createDto: CreateLabReportDto,
   ) {
-    // Only clinic users and admin can create lab reports
     if (
       organisationType !== 'CLINIC' &&
       userRole !== 'SUPER_ADMIN' &&
@@ -57,9 +53,9 @@ export class LabReportsService {
       throw new BadRequestException('Clinic not associated with user');
     }
 
-    // Check if reportNumber is unique
+    // Check reportNumber uniqueness within this organisation
     const existingReport = await this.labReportsRepository.findOne({
-      where: { reportNumber: createDto.reportNumber },
+      where: { reportNumber: createDto.reportNumber, organisationId: clinicId },
     });
     if (existingReport) {
       throw new ConflictException(
@@ -67,29 +63,26 @@ export class LabReportsService {
       );
     }
 
-    // Verify patient exists and belongs to clinic
     const patient = await this.patientsRepository.findOne({
       where: { id: createDto.patientId },
     });
     if (!patient) {
       throw new NotFoundException('Patient not found');
     }
-    if (patient.clinicId !== clinicId) {
+    if (patient.organisationId !== clinicId) {
       throw new ForbiddenException('Patient does not belong to this clinic');
     }
 
-    // Verify doctor exists and belongs to clinic
-    const doctor = await this.doctorsRepository.findOne({
+    const doctor = await this.staffRepository.findOne({
       where: { id: createDto.doctorId },
     });
     if (!doctor) {
       throw new NotFoundException('Doctor not found');
     }
-    if (doctor.clinicId !== clinicId) {
+    if (doctor.organisationId !== clinicId) {
       throw new ForbiddenException('Doctor does not belong to this clinic');
     }
 
-    // If appointmentId is provided, verify it exists and belongs to clinic
     if (createDto.appointmentId) {
       const appointment = await this.appointmentsRepository.findOne({
         where: { id: createDto.appointmentId },
@@ -97,7 +90,7 @@ export class LabReportsService {
       if (!appointment) {
         throw new NotFoundException('Appointment not found');
       }
-      if (appointment.clinicId !== clinicId) {
+      if (appointment.organisationId !== clinicId) {
         throw new ForbiddenException(
           'Appointment does not belong to this clinic',
         );
@@ -109,14 +102,12 @@ export class LabReportsService {
       }
     }
 
-    // Validate tests
     if (!createDto.tests || createDto.tests.length === 0) {
       throw new BadRequestException('Lab report must have at least one test');
     }
 
-    // Create lab report with tests
     const labReport = this.labReportsRepository.create({
-      clinicId,
+      organisationId: clinicId,
       patientId: createDto.patientId,
       appointmentId: createDto.appointmentId || null,
       doctorId: createDto.doctorId,
@@ -164,7 +155,6 @@ export class LabReportsService {
     } = query;
     const skip = (page - 1) * limit;
 
-    // Only clinic users and admin can view lab reports
     if (
       organisationType !== 'CLINIC' &&
       userRole !== 'SUPER_ADMIN' &&
@@ -175,7 +165,6 @@ export class LabReportsService {
       );
     }
 
-    // Build query
     const queryBuilder = this.labReportsRepository
       .createQueryBuilder('labReport')
       .leftJoinAndSelect('labReport.patient', 'patient')
@@ -183,33 +172,21 @@ export class LabReportsService {
       .leftJoinAndSelect('labReport.appointment', 'appointment')
       .leftJoinAndSelect('labReport.tests', 'tests');
 
-    // Clinic users can only see their clinic's lab reports
     if (organisationType === 'CLINIC') {
       if (!organisationId) {
-        return {
-          data: [],
-          total: 0,
-          page,
-          limit,
-          totalPages: 0,
-        };
+        return { data: [], total: 0, page, limit, totalPages: 0 };
       }
-      queryBuilder.where('labReport.clinicId = :clinicId', {
-        clinicId: organisationId,
+      queryBuilder.where('labReport.organisationId = :organisationId', {
+        organisationId,
       });
     }
 
-    // Filters
     if (patientId) {
-      queryBuilder.andWhere('labReport.patientId = :patientId', {
-        patientId,
-      });
+      queryBuilder.andWhere('labReport.patientId = :patientId', { patientId });
     }
 
     if (doctorId) {
-      queryBuilder.andWhere('labReport.doctorId = :doctorId', {
-        doctorId,
-      });
+      queryBuilder.andWhere('labReport.doctorId = :doctorId', { doctorId });
     }
 
     if (appointmentId) {
@@ -228,16 +205,11 @@ export class LabReportsService {
         { startDate, endDate },
       );
     } else if (startDate) {
-      queryBuilder.andWhere('labReport.orderDate >= :startDate', {
-        startDate,
-      });
+      queryBuilder.andWhere('labReport.orderDate >= :startDate', { startDate });
     } else if (endDate) {
-      queryBuilder.andWhere('labReport.orderDate <= :endDate', {
-        endDate,
-      });
+      queryBuilder.andWhere('labReport.orderDate <= :endDate', { endDate });
     }
 
-    // Order and pagination
     queryBuilder
       .orderBy('labReport.orderDate', 'DESC')
       .addOrderBy('labReport.createdAt', 'DESC')
@@ -246,13 +218,7 @@ export class LabReportsService {
 
     const [data, total] = await queryBuilder.getManyAndCount();
 
-    return {
-      data,
-      total,
-      page,
-      limit,
-      totalPages: Math.ceil(total / limit),
-    };
+    return { data, total, page, limit, totalPages: Math.ceil(total / limit) };
   }
 
   async findOne(
@@ -264,16 +230,15 @@ export class LabReportsService {
   ) {
     const labReport = await this.labReportsRepository.findOne({
       where: { id },
-      relations: ['clinic', 'patient', 'doctor', 'appointment', 'tests'],
+      relations: ['patient', 'doctor', 'appointment', 'tests'],
     });
 
     if (!labReport) {
       throw new NotFoundException(`Lab report with ID ${id} not found`);
     }
 
-    // Access control
     if (organisationType === 'CLINIC') {
-      if (!organisationId || organisationId !== labReport.clinicId) {
+      if (!organisationId || organisationId !== labReport.organisationId) {
         throw new ForbiddenException(
           'You do not have access to this lab report',
         );
@@ -291,21 +256,29 @@ export class LabReportsService {
     organisationType: string | undefined,
     updateDto: UpdateLabReportDto,
   ) {
-    const labReport = await this.findOne(
-      id,
-      userId,
-      userRole,
-      organisationId,
-      organisationType,
-    );
+    const labReport = await this.labReportsRepository.findOne({ where: { id } });
 
-    // Check reportNumber uniqueness if being updated
+    if (!labReport) {
+      throw new NotFoundException(`Lab report with ID ${id} not found`);
+    }
+
+    if (organisationType === 'CLINIC') {
+      if (!organisationId || organisationId !== labReport.organisationId) {
+        throw new ForbiddenException(
+          'You do not have access to this lab report',
+        );
+      }
+    }
+
     if (
       updateDto.reportNumber &&
       updateDto.reportNumber !== labReport.reportNumber
     ) {
       const existingReport = await this.labReportsRepository.findOne({
-        where: { reportNumber: updateDto.reportNumber },
+        where: {
+          reportNumber: updateDto.reportNumber,
+          organisationId: labReport.organisationId,
+        },
       });
       if (existingReport) {
         throw new ConflictException(
@@ -314,21 +287,20 @@ export class LabReportsService {
       }
     }
 
-    // If updating patient, doctor, or appointment, verify they belong to clinic
     if (updateDto.patientId && updateDto.patientId !== labReport.patientId) {
       const patient = await this.patientsRepository.findOne({
         where: { id: updateDto.patientId },
       });
-      if (!patient || patient.clinicId !== labReport.clinicId) {
+      if (!patient || patient.organisationId !== labReport.organisationId) {
         throw new ForbiddenException('Patient does not belong to this clinic');
       }
     }
 
     if (updateDto.doctorId && updateDto.doctorId !== labReport.doctorId) {
-      const doctor = await this.doctorsRepository.findOne({
+      const doctor = await this.staffRepository.findOne({
         where: { id: updateDto.doctorId },
       });
-      if (!doctor || doctor.clinicId !== labReport.clinicId) {
+      if (!doctor || doctor.organisationId !== labReport.organisationId) {
         throw new ForbiddenException('Doctor does not belong to this clinic');
       }
     }
@@ -340,14 +312,16 @@ export class LabReportsService {
       const appointment = await this.appointmentsRepository.findOne({
         where: { id: updateDto.appointmentId },
       });
-      if (!appointment || appointment.clinicId !== labReport.clinicId) {
+      if (
+        !appointment ||
+        appointment.organisationId !== labReport.organisationId
+      ) {
         throw new ForbiddenException(
           'Appointment does not belong to this clinic',
         );
       }
     }
 
-    // Update fields
     if (updateDto.reportNumber !== undefined)
       labReport.reportNumber = updateDto.reportNumber;
     if (updateDto.patientId !== undefined)
@@ -371,14 +345,8 @@ export class LabReportsService {
     if (updateDto.reportFile !== undefined)
       labReport.reportFile = updateDto.reportFile;
 
-    // Update tests if provided
     if (updateDto.tests !== undefined) {
-      // Remove existing tests
-      await this.labTestsRepository.delete({
-        labReportId: labReport.id,
-      });
-
-      // Create new tests
+      await this.labTestsRepository.delete({ labReportId: labReport.id });
       labReport.tests = updateDto.tests.map((test) =>
         this.labTestsRepository.create({
           labReportId: labReport.id,
@@ -410,7 +378,7 @@ export class LabReportsService {
       organisationId,
       organisationType,
     );
-    await this.labReportsRepository.remove(labReport);
+    await this.labReportsRepository.softDelete(labReport.id);
     return { message: 'Lab report deleted successfully' };
   }
 }

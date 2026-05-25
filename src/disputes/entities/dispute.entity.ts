@@ -8,7 +8,6 @@ import {
   JoinColumn,
 } from 'typeorm';
 import { Order } from '../../orders/entities/order.entity';
-import { Clinic } from '../../clinics/entities/clinic.entity';
 
 export enum DisputeType {
   ORDER_ISSUE = 'order_issue',
@@ -34,11 +33,12 @@ export class Dispute {
   orderId: string;
 
   @Column({ type: 'uuid', name: 'clinicId' })
-  clinicId: string;
+  organisationId: string;
 
   @Column({
     type: 'enum',
     enum: DisputeType,
+    name: 'type',
   })
   type: DisputeType;
 
@@ -46,13 +46,14 @@ export class Dispute {
     type: 'enum',
     enum: DisputeStatus,
     default: DisputeStatus.OPEN,
+    name: 'status',
   })
   status: DisputeStatus;
 
-  @Column({ type: 'text' })
+  @Column({ type: 'text', name: 'description' })
   description: string;
 
-  @Column({ type: 'jsonb', nullable: true })
+  @Column({ type: 'jsonb', nullable: true, name: 'evidence' })
   evidence: Record<string, any> | null;
 
   @Column({ type: 'uuid', nullable: true, name: 'assignedTo' })
@@ -67,16 +68,12 @@ export class Dispute {
   @Column({ type: 'uuid', nullable: true, name: 'resolvedBy' })
   resolvedBy: string | null;
 
-  @Column({ type: 'jsonb', nullable: true })
+  @Column({ type: 'jsonb', nullable: true, name: 'comments' })
   comments: Record<string, any>[] | null;
 
   @ManyToOne(() => Order)
   @JoinColumn({ name: 'orderId' })
   order: Order;
-
-  @ManyToOne(() => Clinic)
-  @JoinColumn({ name: 'clinicId' })
-  clinic: Clinic;
 
   @CreateDateColumn({ name: 'createdAt' })
   createdAt: Date;

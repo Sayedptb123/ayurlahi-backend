@@ -24,53 +24,61 @@ export enum ExpenseStatus {
 }
 
 @Entity('expenses')
-@Index(['organizationId'])
+@Index(['organisationId'])
 @Index(['category'])
 @Index(['date'])
 export class Expense {
     @PrimaryGeneratedColumn('uuid')
     id: string;
 
-    @Column({ type: 'uuid', name: 'organization_id' })
-    organizationId: string;
+    @Column({ type: 'uuid', name: 'organisation_id' })
+    organisationId: string;
 
-    @Column({ type: 'decimal', precision: 10, scale: 2 })
+    @Column({ type: 'decimal', precision: 10, scale: 2, name: 'amount' })
     amount: number;
 
     @Column({
         type: 'enum',
         enum: ExpenseCategory,
         default: ExpenseCategory.OTHER,
+        name: 'category',
     })
     category: ExpenseCategory;
 
-    @Column({ type: 'text' })
+    @Column({ type: 'text', name: 'description' })
     description: string;
 
-    @Column({ type: 'date' })
+    @Column({ type: 'date', name: 'date' })
     date: Date;
 
-    @Column({ type: 'uuid', name: 'incurred_by' })
-    incurredBy: string;
+    @Column({ type: 'uuid', nullable: true, name: 'incurred_by' })
+    incurredBy: string | null;
 
     @Column({ type: 'text', nullable: true, name: 'receipt_url' })
-    receiptUrl: string;
+    receiptUrl: string | null;
 
     @Column({
         type: 'enum',
         enum: ExpenseStatus,
         default: ExpenseStatus.PENDING,
+        name: 'status',
     })
     status: ExpenseStatus;
 
     @Column({ type: 'text', nullable: true, name: 'rejection_reason' })
-    rejectionReason: string;
+    rejectionReason: string | null;
 
     @Column({ type: 'uuid', nullable: true, name: 'approved_by' })
-    approvedBy: string;
+    approvedBy: string | null;
 
     @Column({ type: 'timestamp', nullable: true, name: 'approved_at' })
-    approvedAt: Date;
+    approvedAt: Date | null;
+
+    @Column({ type: 'uuid', nullable: true, name: 'updated_by' })
+    updatedBy: string | null;
+
+    @Column({ type: 'timestamp', nullable: true, name: 'deleted_at' })
+    deletedAt: Date | null;
 
     @CreateDateColumn({ name: 'created_at' })
     createdAt: Date;

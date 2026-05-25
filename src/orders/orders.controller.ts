@@ -23,22 +23,22 @@ export class OrdersController {
 
   @Get()
   async findAll(@Request() req, @Query() query: GetOrdersDto) {
-    return this.ordersService.findAll(req.user.userId, req.user.role, req.user.organisationType, query);
+    return this.ordersService.findAll(req.user.userId, req.user.role, req.user.organisationType, query, req.user.organisationId);
   }
 
   @Get(':id')
   async findOne(@Param('id', ParseUUIDPipe) id: string, @Request() req) {
-    return this.ordersService.findOne(id, req.user.userId, req.user.role, req.user.organisationType);
+    return this.ordersService.findOne(id, req.user.userId, req.user.role, req.user.organisationType, req.user.organisationId);
   }
 
   @Post()
   async create(@Request() req, @Body() createOrderDto: CreateOrderDto) {
-    return this.ordersService.create(req.user.userId, createOrderDto);
+    return this.ordersService.create(req.user.userId, createOrderDto, req.user.organisationType, req.user.organisationId);
   }
 
   @Post(':id/reorder')
   async reorder(@Param('id', ParseUUIDPipe) id: string, @Request() req) {
-    return this.ordersService.reorder(id, req.user.userId);
+    return this.ordersService.reorder(id, req.user.userId, req.user.organisationId);
   }
 
   @Patch(':id/status')

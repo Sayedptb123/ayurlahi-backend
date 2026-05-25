@@ -5,15 +5,18 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, IsNull } from 'typeorm';
+import { Repository, IsNull, In } from 'typeorm';
 import { Order, OrderStatus, OrderSource } from './entities/order.entity';
 import { OrderItem } from './entities/order-item.entity';
 import { Product } from '../products/entities/product.entity';
 import { User } from '../users/entities/user.entity';
+import { OrganisationUser } from '../organisation-users/entities/organisation-user.entity';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { GetOrdersDto } from './dto/get-orders.dto';
 import { UpdateOrderStatusDto } from './dto/update-order-status.dto';
 import { InventoryService } from '../inventory/inventory.service';
+import { NotificationsService } from '../notifications/notifications.service';
+import { RoleUtils } from '../common/utils/role.utils';
 
 @Injectable()
 export class OrdersService {
@@ -26,10 +29,13 @@ export class OrdersService {
     private productsRepository: Repository<Product>,
     @InjectRepository(User)
     private usersRepository: Repository<User>,
+    @InjectRepository(OrganisationUser)
+    private orgUserRepository: Repository<OrganisationUser>,
     private inventoryService: InventoryService,
+    private notificationsService: NotificationsService,
   ) { }
 
-  async findAll(userId: string, userRole: string, organisationType: string | undefined, query: GetOrdersDto) {
+  async findAll(userId: string, userRole: string, organisationType: string | undefined, query: GetOrdersDto, organisationId?: string) {
     const { page = 1, limit = 20, status, source } = query;
     const skip = (page - 1) * limit;
 
@@ -40,35 +46,16 @@ export class OrdersService {
 
     // Role-based filtering using organisationType from JWT
     if (organisationType === 'CLINIC') {
-      // Clinic users can only see their own orders
-      const user = await this.usersRepository.findOne({
-        where: { id: userId },
-      });
-      if (user && user.clinicId) {
-        queryBuilder.andWhere('order.clinicId = :clinicId', {
-          clinicId: user.clinicId,
-        });
+      if (organisationId) {
+        queryBuilder.andWhere('order.organisation_id = :orgId', { orgId: organisationId });
       } else {
-        // User has no clinic, return empty
-        return {
-          data: [],
-          pagination: { page, limit, total: 0, totalPages: 0 },
-        };
+        return { data: [], pagination: { page, limit, total: 0, totalPages: 0 } };
       }
     } else if (organisationType === 'MANUFACTURER') {
-      // Manufacturer users can only see orders with their products
-      const user = await this.usersRepository.findOne({
-        where: { id: userId },
-      });
-      if (user && user.manufacturerId) {
-        queryBuilder.andWhere('items.manufacturerId = :manufacturerId', {
-          manufacturerId: user.manufacturerId,
-        });
+      if (organisationId) {
+        queryBuilder.andWhere('items.manufacturerId = :manufacturerId', { manufacturerId: organisationId });
       } else {
-        return {
-          data: [],
-          pagination: { page, limit, total: 0, totalPages: 0 },
-        };
+        return { data: [], pagination: { page, limit, total: 0, totalPages: 0 } };
       }
     }
     // Admin and support can see all orders
@@ -98,7 +85,7 @@ export class OrdersService {
     };
   }
 
-  async findOne(id: string, userId: string, userRole: string, organisationType: string | undefined) {
+  async findOne(id: string, userId: string, userRole: string, organisationType: string | undefined, organisationId?: string) {
     const order = await this.ordersRepository.findOne({
       where: { id, deletedAt: IsNull() },
       relations: ['items'],
@@ -110,22 +97,15 @@ export class OrdersService {
 
     // Role-based access control using organisationType from JWT
     if (organisationType === 'CLINIC') {
-      const user = await this.usersRepository.findOne({
-        where: { id: userId },
-      });
-      if (!user || user.clinicId !== order.clinicId) {
+      if (!organisationId || organisationId !== order.organisationId) {
         throw new ForbiddenException('You do not have access to this order');
       }
     } else if (organisationType === 'MANUFACTURER') {
-      const user = await this.usersRepository.findOne({
-        where: { id: userId },
-      });
-      if (!user || !user.manufacturerId) {
+      if (!organisationId) {
         throw new ForbiddenException('You do not have access to this order');
       }
-      // Check if order has items from this manufacturer
       const hasManufacturerItems = order.items.some(
-        (item) => item.manufacturerId === user.manufacturerId,
+        (item) => item.manufacturerId === organisationId,
       );
       if (!hasManufacturerItems) {
         throw new ForbiddenException('You do not have access to this order');
@@ -135,18 +115,15 @@ export class OrdersService {
     return order;
   }
 
-  async create(userId: string, createOrderDto: CreateOrderDto) {
-    // Get user's clinic
-    const user = await this.usersRepository.findOne({ where: { id: userId } });
-
-    if (!user || user.role !== 'clinic' || !user.clinicId) {
+  async create(userId: string, createOrderDto: CreateOrderDto, organisationType?: string, organisationId?: string) {
+    if (organisationType !== 'CLINIC' || !organisationId) {
       throw new ForbiddenException('Only clinic users can create orders');
     }
 
-    // Get clinic data for shipping address if not provided
+    const clinicId = organisationId;
     const clinic = await this.ordersRepository.manager
-      .getRepository('clinics')
-      .findOne({ where: { id: user.clinicId } });
+      .getRepository('organisations')
+      .findOne({ where: { id: clinicId } });
 
     if (!clinic) {
       throw new BadRequestException('Clinic not found');
@@ -165,7 +142,7 @@ export class OrdersService {
           );
         }
 
-        if (!product.isActive) {
+        if (product.status !== 'active') {
           throw new BadRequestException(
             `Product ${product.name} is not active`,
           );
@@ -227,7 +204,7 @@ export class OrdersService {
 
     // Create order
     const order = this.ordersRepository.create({
-      clinicId: user.clinicId,
+      organisationId: clinicId,
       orderNumber,
       status: OrderStatus.PENDING,
       source: createOrderDto.source || OrderSource.WEB,
@@ -236,20 +213,20 @@ export class OrdersService {
       shippingCharges,
       platformFee,
       totalAmount,
-      shippingAddress: createOrderDto.shippingAddress || clinic.address || null,
-      shippingCity: createOrderDto.shippingCity || clinic.city || null,
-      shippingDistrict:
-        createOrderDto.shippingDistrict || clinic.district || null,
-      shippingState: createOrderDto.shippingState || clinic.state || null,
-      shippingPincode: createOrderDto.shippingPincode || clinic.pincode || null,
-      shippingPhone: createOrderDto.shippingPhone || clinic.phone || null,
-      shippingContactName:
-        createOrderDto.shippingContactName || clinic.clinicName || null,
+      shippingAddress: {
+        line1: createOrderDto.shippingAddress ?? undefined,
+        city: createOrderDto.shippingCity ?? undefined,
+        district: createOrderDto.shippingDistrict ?? undefined,
+        state: createOrderDto.shippingState ?? undefined,
+        pincode: createOrderDto.shippingPincode ?? undefined,
+        phone: createOrderDto.shippingPhone ?? undefined,
+        name: createOrderDto.shippingContactName ?? undefined,
+      },
       notes: createOrderDto.notes || null,
       items: orderItems as OrderItem[],
-    });
+    } as any) as unknown as Order;
 
-    const savedOrder = await this.ordersRepository.save(order);
+    const savedOrder = (await this.ordersRepository.save(order)) as unknown as Order;
 
     // Update product stock
     for (const { product, itemDto } of products) {
@@ -264,30 +241,51 @@ export class OrdersService {
       relations: ['items'],
     });
 
+    // Notify manufacturer owners/managers about new order
+    const manufacturerIds = [...new Set(orderItems.map((i) => i.manufacturerId).filter(Boolean))];
+    if (manufacturerIds.length > 0) {
+      this.orgUserRepository
+        .find({ where: { organisationId: In(manufacturerIds), role: In(['OWNER', 'MANAGER', 'ADMIN']), isActive: true } })
+        .then((orgUsers) => {
+          const userIds = orgUsers.map((ou) => ou.userId).filter(Boolean);
+          if (userIds.length > 0) {
+            const itemSummary = orderWithRelations?.items?.map((i) => `${i.productName} x${i.quantity}`).join(', ') ?? '';
+            this.notificationsService.sendToUsers({
+              userIds,
+              title: 'New Order Received',
+              body: `Order ${orderWithRelations?.orderNumber}: ${itemSummary}`,
+              data: { orderId: savedOrder.id, type: 'order_placed' },
+            }).catch(() => {});
+          }
+        })
+        .catch(() => {});
+    }
+
     return orderWithRelations;
   }
 
-  async reorder(orderId: string, userId: string) {
-    const originalOrder = await this.findOne(orderId, userId, 'clinic', 'CLINIC');
+  async reorder(orderId: string, userId: string, organisationId?: string) {
+    const originalOrder = await this.findOne(orderId, userId, 'OWNER', 'CLINIC', organisationId);
 
+    const addr = originalOrder.shippingAddress || {};
     const createOrderDto: CreateOrderDto = {
       items: originalOrder.items.map((item) => ({
         productId: item.productId,
         quantity: item.quantity,
         notes: item.notes || undefined,
       })),
-      shippingAddress: originalOrder.shippingAddress || undefined,
-      shippingCity: originalOrder.shippingCity || undefined,
-      shippingDistrict: originalOrder.shippingDistrict || undefined,
-      shippingState: originalOrder.shippingState || undefined,
-      shippingPincode: originalOrder.shippingPincode || undefined,
-      shippingPhone: originalOrder.shippingPhone || undefined,
-      shippingContactName: originalOrder.shippingContactName || undefined,
+      shippingAddress: (addr as any).line1 || undefined,
+      shippingCity: (addr as any).city || undefined,
+      shippingDistrict: (addr as any).district || undefined,
+      shippingState: (addr as any).state || undefined,
+      shippingPincode: (addr as any).pincode || undefined,
+      shippingPhone: (addr as any).phone || undefined,
+      shippingContactName: (addr as any).name || undefined,
       notes: `Reorder from order ${originalOrder.orderNumber}`,
       source: OrderSource.WEB,
     };
 
-    return this.create(userId, createOrderDto);
+    return this.create(userId, createOrderDto, 'CLINIC', organisationId);
   }
 
   async updateStatus(
@@ -300,7 +298,8 @@ export class OrdersService {
     const order = await this.findOne(id, userId, userRole, organisationType);
 
     // Only admin, support, and manufacturer can update status
-    if (!['admin', 'support', 'manufacturer'].includes(userRole)) {
+    const normalizedRole = RoleUtils.normalizeRole(userRole, organisationType);
+    if (!['admin', 'support', 'manufacturer'].includes(normalizedRole)) {
       throw new ForbiddenException(
         'You do not have permission to update order status',
       );
@@ -322,7 +321,7 @@ export class OrdersService {
       // Sync Inventory
       if (order.items && order.items.length > 0) {
         await this.inventoryService.addStock(
-          order.clinicId,
+          order.organisationId,
           order.items.map((item) => ({
             sku: item.productSku,
             name: item.productName,
@@ -340,6 +339,27 @@ export class OrdersService {
       order.cancellationReason = updateDto.notes || null;
     }
 
-    return this.ordersRepository.save(order);
+    const savedOrder = await this.ordersRepository.save(order);
+
+    // Notify clinic owners/managers about order status change
+    const clinicId = savedOrder.organisationId;
+    if (clinicId) {
+      this.orgUserRepository
+        .find({ where: { organisationId: clinicId, role: In(['OWNER', 'MANAGER', 'ADMIN']), isActive: true } })
+        .then((orgUsers) => {
+          const userIds = orgUsers.map((ou) => ou.userId).filter(Boolean);
+          if (userIds.length > 0) {
+            this.notificationsService.sendToUsers({
+              userIds,
+              title: 'Order Status Updated',
+              body: `Order ${savedOrder.orderNumber} is now ${savedOrder.status.toLowerCase()}`,
+              data: { orderId: savedOrder.id, type: 'order_status_changed' },
+            }).catch(() => {});
+          }
+        })
+        .catch(() => {});
+    }
+
+    return savedOrder;
   }
 }

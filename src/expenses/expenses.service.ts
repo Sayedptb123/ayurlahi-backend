@@ -4,56 +4,46 @@ import { Repository } from 'typeorm';
 import { Expense } from './entities/expense.entity';
 import { CreateExpenseDto } from './dto/create-expense.dto';
 import { UpdateExpenseDto } from './dto/update-expense.dto';
-import { User } from '../users/entities/user.entity';
+
+export type RequestUser = { userId: string; organisationId: string; role?: string; organisationType?: string };
 
 @Injectable()
 export class ExpensesService {
     constructor(
         @InjectRepository(Expense)
         private expenseRepository: Repository<Expense>,
-        @InjectRepository(User)
-        private usersRepository: Repository<User>,
     ) { }
 
-    async create(createExpenseDto: CreateExpenseDto, reqUser: User) {
-        const user = await this.usersRepository.findOne({ where: { id: reqUser.id } });
-        if (!user) throw new NotFoundException('User not found');
-
-        const orgId = user.clinicId || user.manufacturerId;
+    async create(createExpenseDto: CreateExpenseDto, reqUser: RequestUser) {
+        const orgId = reqUser.organisationId;
         if (!orgId) {
             throw new Error('User must belong to an organization to create expenses');
         }
 
         const expense = this.expenseRepository.create({
             ...createExpenseDto,
-            incurredBy: user.id,
-            organizationId: orgId,
+            incurredBy: reqUser.userId,
+            organisationId: orgId,
         });
         return this.expenseRepository.save(expense);
     }
 
-    async findAll(reqUser: User) {
-        const user = await this.usersRepository.findOne({ where: { id: reqUser.id } });
-        if (!user) return [];
-
-        const organizationId = user.clinicId || user.manufacturerId;
-        if (!organizationId) return [];
+    async findAll(reqUser: RequestUser) {
+        const organisationId = reqUser.organisationId;
+        if (!organisationId) return [];
 
         return this.expenseRepository.find({
-            where: { organizationId },
+            where: { organisationId },
             order: { date: 'DESC' },
         });
     }
 
-    async findOne(id: string, reqUser: User) {
-        const user = await this.usersRepository.findOne({ where: { id: reqUser.id } });
-        if (!user) throw new NotFoundException('User not found');
-
-        const organizationId = user.clinicId || user.manufacturerId;
-        if (!organizationId) throw new NotFoundException('Organization not found');
+    async findOne(id: string, reqUser: RequestUser) {
+        const organisationId = reqUser.organisationId;
+        if (!organisationId) throw new NotFoundException('Organization not found');
 
         const expense = await this.expenseRepository.findOne({
-            where: { id, organizationId },
+            where: { id, organisationId },
         });
 
         if (!expense) {
@@ -63,12 +53,12 @@ export class ExpensesService {
         return expense;
     }
 
-    async update(id: string, updateExpenseDto: UpdateExpenseDto, user: User) {
-        const expense = await this.findOne(id, user);
+    async update(id: string, updateExpenseDto: UpdateExpenseDto, reqUser: RequestUser) {
+        const expense = await this.findOne(id, reqUser);
 
         if (updateExpenseDto.status && updateExpenseDto.status !== expense.status) {
             if (updateExpenseDto.status === 'approved' || updateExpenseDto.status === 'rejected') {
-                expense.approvedBy = user.id;
+                expense.approvedBy = reqUser.userId;
                 expense.approvedAt = new Date();
             }
         }
@@ -77,8 +67,9 @@ export class ExpensesService {
         return this.expenseRepository.save(expense);
     }
 
-    async remove(id: string, user: User) {
-        const expense = await this.findOne(id, user);
-        return this.expenseRepository.remove(expense);
+    async remove(id: string, reqUser: RequestUser) {
+        const expense = await this.findOne(id, reqUser);
+        expense.deletedAt = new Date();
+        return this.expenseRepository.save(expense);
     }
 }

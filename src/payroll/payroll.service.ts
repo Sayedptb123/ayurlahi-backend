@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { SalaryStructure } from './entities/salary-structure.entity';
@@ -7,7 +7,8 @@ import { CreateSalaryStructureDto } from './dto/create-salary-structure.dto';
 import { GeneratePayrollDto } from './dto/generate-payroll.dto';
 import { UpdatePayrollStatusDto } from './dto/update-payroll-status.dto';
 import { Staff } from '../staff/entities/staff.entity';
-import { User } from '../users/entities/user.entity';
+
+export type RequestUser = { userId: string; organisationId: string; role?: string; organisationType?: string };
 
 @Injectable()
 export class PayrollService {
@@ -18,12 +19,18 @@ export class PayrollService {
         private payrollRecordRepo: Repository<PayrollRecord>,
         @InjectRepository(Staff)
         private staffRepo: Repository<Staff>,
-        @InjectRepository(User)
-        private usersRepo: Repository<User>,
     ) { }
 
-    // --- Salary Structure ---
-    async createOrUpdateSalaryStructure(dto: CreateSalaryStructureDto) {
+    async createOrUpdateSalaryStructure(reqUser: RequestUser, dto: CreateSalaryStructureDto) {
+        const orgId = reqUser.organisationId;
+        if (!orgId) throw new BadRequestException('User not linked to an organisation');
+
+        // Verify the staff member belongs to the caller's organisation
+        const staff = await this.staffRepo.findOne({
+            where: { id: dto.staffId, organisationId: orgId },
+        });
+        if (!staff) throw new ForbiddenException('Staff member not found in your organisation');
+
         let structure = await this.salaryStructureRepo.findOne({
             where: { staffId: dto.staffId },
         });
@@ -34,18 +41,6 @@ export class PayrollService {
         }
 
         Object.assign(structure, dto);
-
-        // Calculate Net Salary (This is a simplified calculation)
-        const totalAllowances =
-            (dto.otherAllowances?.reduce((sum, a) => sum + a.amount, 0) || 0) +
-            dto.hra +
-            dto.da +
-            dto.medicalAllowance +
-            dto.travelAllowance;
-
-        const totalDeductions = dto.deductions?.reduce((sum, d) => sum + d.amount, 0) || 0;
-
-        structure.netSalary = dto.baseSalary + totalAllowances - totalDeductions;
 
         return this.salaryStructureRepo.save(structure);
     }
@@ -58,29 +53,20 @@ export class PayrollService {
         return structure;
     }
 
-    // --- Payroll Generation ---
-    async generatePayroll(reqUser: User, dto: GeneratePayrollDto) {
-        const user = await this.usersRepo.findOne({ where: { id: reqUser.id } });
-        if (!user) throw new BadRequestException('User not found');
-
-        const orgId = user.clinicId || user.manufacturerId;
+    async generatePayroll(reqUser: RequestUser, dto: GeneratePayrollDto) {
+        const orgId = reqUser.organisationId;
         if (!orgId) throw new BadRequestException('User not linked to an organization');
 
-        // Check if payroll already exists for this month
         const existing = await this.payrollRecordRepo.findOne({
-            where: { organizationId: orgId, month: dto.month, year: dto.year },
+            where: { organisationId: orgId, month: dto.month, year: dto.year },
         });
 
-        // If we want to allow re-generation, we might delete old drafts?
-        // For now, let's block if any records exist to avoid duplicates
         if (existing) {
-            // Simple check: if any record exists for this month/year/org
             throw new BadRequestException('Payroll already initiated for this period');
         }
 
-        // specific query for active staff in this org
         const activeStaff = await this.staffRepo.find({
-            where: { organizationId: orgId, isActive: true },
+            where: { organisationId: orgId, isActive: true },
         });
 
         const payrolls: PayrollRecord[] = [];
@@ -90,26 +76,28 @@ export class PayrollService {
                 where: { staffId: staff.id },
             });
 
-            // If no structure, skip or create default (Skip for now and warn)
             if (!structure) continue;
 
+            const allowSum =
+                parseFloat(structure.hra as any) +
+                parseFloat(structure.da as any) +
+                parseFloat(structure.medicalAllowance as any) +
+                parseFloat(structure.travelAllowance as any) +
+                (structure.otherAllowances?.reduce((s, a) => s + a.amount, 0) || 0);
+
+            const deductSum = structure.deductions?.reduce((s, d) => s + d.amount, 0) || 0;
+            const baseSalary = parseFloat(structure.baseSalary as any);
+            const netPay = baseSalary + allowSum - deductSum;
+
             const record = new PayrollRecord();
-            record.organizationId = orgId;
+            record.organisationId = orgId;
             record.staffId = staff.id;
             record.month = dto.month;
             record.year = dto.year;
-            record.basicPay = structure.baseSalary;
-
-            const allowSum =
-                structure.hra +
-                structure.da +
-                structure.medicalAllowance +
-                structure.travelAllowance +
-                (structure.otherAllowances?.reduce((s, a) => s + a.amount, 0) || 0);
-
+            record.basicPay = baseSalary;
             record.totalAllowances = allowSum;
-            record.totalDeductions = structure.deductions?.reduce((s, d) => s + d.amount, 0) || 0;
-            record.netPay = structure.netSalary;
+            record.totalDeductions = deductSum;
+            record.netPay = netPay;
             record.status = PayrollStatus.DRAFT;
 
             payrolls.push(record);
@@ -118,8 +106,7 @@ export class PayrollService {
         return this.payrollRecordRepo.save(payrolls);
     }
 
-    async getPayrollRecords(user: User, month?: number, year?: number) {
-        // Return empty array for now - table exists but might have schema issues
+    async getPayrollRecords(reqUser: RequestUser, month?: number, year?: number) {
         return [];
     }
 

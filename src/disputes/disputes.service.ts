@@ -51,7 +51,7 @@ export class DisputesService {
       const user = await this.usersRepository.findOne({
         where: { id: userId },
       });
-      if (!user || user.clinicId !== dispute.clinicId) {
+      if (!user || dispute.organisationId !== userId) {
         throw new ForbiddenException('You do not have access to this dispute');
       }
     } else if (!RoleUtils.isAdminOrSupport(userRole)) {

@@ -160,6 +160,25 @@ export class OrganisationUsersService {
     await this.organisationUsersRepository.remove(organisationUser);
   }
 
+  async updatePermissionsByUserId(
+    targetUserId: string,
+    organisationId: string,
+    permissions: Record<string, boolean>,
+  ): Promise<OrganisationUser> {
+    const orgUser = await this.organisationUsersRepository.findOne({
+      where: { userId: targetUserId, organisationId },
+    });
+
+    if (!orgUser) {
+      throw new NotFoundException(
+        `Organisation user not found for userId ${targetUserId} in this organisation`,
+      );
+    }
+
+    orgUser.permissions = permissions;
+    return await this.organisationUsersRepository.save(orgUser);
+  }
+
   async getUserOrganisations(userId: string): Promise<Organisation[]> {
     const organisationUsers = await this.organisationUsersRepository.find({
       where: { userId },
@@ -169,12 +188,14 @@ export class OrganisationUsersService {
     return organisationUsers.map((ou) => ou.organisation);
   }
 
-  async getOrganisationUsers(organisationId: string): Promise<User[]> {
+  async getOrganisationUsers(organisationId: string): Promise<any[]> {
     const organisationUsers = await this.organisationUsersRepository.find({
       where: { organisationId },
       relations: ['user'],
     });
 
-    return organisationUsers.map((ou) => ou.user);
+    return organisationUsers
+      .filter((ou) => ou.user)
+      .map((ou) => ({ ...ou.user, role: ou.role }));
   }
 }

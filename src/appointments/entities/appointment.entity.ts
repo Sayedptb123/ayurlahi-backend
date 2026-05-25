@@ -7,24 +7,25 @@ import {
   ManyToOne,
   JoinColumn,
 } from 'typeorm';
-import { Clinic } from '../../clinics/entities/clinic.entity';
+import { Organisation } from '../../organisations/entities/organisation.entity';
 import { Patient } from '../../patients/entities/patient.entity';
-import { Doctor } from '../../doctors/entities/doctor.entity';
+import { Staff } from '../../staff/entities/staff.entity';
 
 export enum AppointmentStatus {
   SCHEDULED = 'scheduled',
   CONFIRMED = 'confirmed',
-  IN_PROGRESS = 'in-progress',
+  IN_PROGRESS = 'in_progress',
   COMPLETED = 'completed',
   CANCELLED = 'cancelled',
-  NO_SHOW = 'no-show',
+  NO_SHOW = 'no_show',
 }
 
 export enum AppointmentType {
   CONSULTATION = 'consultation',
-  FOLLOW_UP = 'follow-up',
+  FOLLOW_UP = 'follow_up',
+  PROCEDURE = 'procedure',
+  PANCHAKARMA = 'panchakarma',
   EMERGENCY = 'emergency',
-  CHECKUP = 'checkup',
 }
 
 @Entity('appointments')
@@ -32,38 +33,31 @@ export class Appointment {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column({ type: 'uuid', name: 'clinicId' })
-  clinicId: string;
+  @Column({ type: 'uuid', name: 'organisation_id' })
+  organisationId: string;
 
-  @Column({ type: 'uuid', name: 'patientId' })
+  @Column({ type: 'uuid', name: 'patient_id' })
   patientId: string;
 
-  @Column({ type: 'uuid', name: 'doctorId' })
+  @Column({ type: 'uuid', name: 'doctor_id' })
   doctorId: string;
 
-  @Column({ type: 'date', name: 'appointmentDate' })
+  @Column({ type: 'uuid', nullable: true, name: 'branch_id' })
+  branchId: string | null;
+
+  @Column({ type: 'date', name: 'appointment_date' })
   appointmentDate: Date;
 
-  @Column({ type: 'time', name: 'appointmentTime' })
-  appointmentTime: string; // Format: "HH:mm:ss"
+  @Column({ type: 'time', name: 'appointment_time' })
+  appointmentTime: string;
 
   @Column({ type: 'int', default: 30, name: 'duration' })
-  duration: number; // Duration in minutes
+  duration: number;
 
-  @Column({
-    type: 'enum',
-    enum: AppointmentStatus,
-    default: AppointmentStatus.SCHEDULED,
-    name: 'status',
-  })
+  @Column({ type: 'varchar', length: 20, default: AppointmentStatus.SCHEDULED, name: 'status' })
   status: AppointmentStatus;
 
-  @Column({
-    type: 'enum',
-    enum: AppointmentType,
-    default: AppointmentType.CONSULTATION,
-    name: 'appointmentType',
-  })
+  @Column({ type: 'varchar', length: 20, default: AppointmentType.CONSULTATION, name: 'appointment_type' })
   appointmentType: AppointmentType;
 
   @Column({ type: 'text', nullable: true, name: 'reason' })
@@ -72,27 +66,36 @@ export class Appointment {
   @Column({ type: 'text', nullable: true, name: 'notes' })
   notes: string | null;
 
-  @Column({ type: 'timestamp', nullable: true, name: 'cancelledAt' })
+  @Column({ type: 'timestamp', nullable: true, name: 'cancelled_at' })
   cancelledAt: Date | null;
 
-  @Column({ type: 'text', nullable: true, name: 'cancellationReason' })
+  @Column({ type: 'text', nullable: true, name: 'cancellation_reason' })
   cancellationReason: string | null;
 
-  @ManyToOne(() => Clinic)
-  @JoinColumn({ name: 'clinicId' })
-  clinic: Clinic;
+  @Column({ type: 'uuid', nullable: true, name: 'created_by' })
+  createdBy: string | null;
+
+  @Column({ type: 'uuid', nullable: true, name: 'updated_by' })
+  updatedBy: string | null;
+
+  @Column({ type: 'timestamp', nullable: true, name: 'deleted_at' })
+  deletedAt: Date | null;
+
+  @ManyToOne(() => Organisation)
+  @JoinColumn({ name: 'organisation_id' })
+  organisation: Organisation;
 
   @ManyToOne(() => Patient)
-  @JoinColumn({ name: 'patientId' })
+  @JoinColumn({ name: 'patient_id' })
   patient: Patient;
 
-  @ManyToOne(() => Doctor)
-  @JoinColumn({ name: 'doctorId' })
-  doctor: Doctor;
+  @ManyToOne(() => Staff)
+  @JoinColumn({ name: 'doctor_id' })
+  doctor: Staff;
 
-  @CreateDateColumn({ name: 'createdAt' })
+  @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 
-  @UpdateDateColumn({ name: 'updatedAt' })
+  @UpdateDateColumn({ name: 'updated_at' })
   updatedAt: Date;
 }

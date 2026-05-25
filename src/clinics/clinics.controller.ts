@@ -5,6 +5,7 @@ import {
   Post,
   Body,
   Param,
+  Query,
   UseGuards,
   Request,
   ParseUUIDPipe,
@@ -21,8 +22,12 @@ export class ClinicsController {
   constructor(private readonly clinicsService: ClinicsService) { }
 
   @Get()
-  async findAll(@Request() req) {
-    return this.clinicsService.findAll(req.user.role);
+  async findAll(@Request() req, @Query() query: { status?: string; page?: string; limit?: string }) {
+    return this.clinicsService.findAll(req.user.role, {
+      status: query.status,
+      page: query.page ? parseInt(query.page) : 1,
+      limit: query.limit ? parseInt(query.limit) : 20,
+    });
   }
 
   @Get('me')

@@ -4,19 +4,12 @@ import { PatientBillingController } from './patient-billing.controller';
 import { PatientBillingService } from './patient-billing.service';
 import { PatientBill } from './entities/patient-bill.entity';
 import { BillItem } from './entities/bill-item.entity';
-import { User } from '../users/entities/user.entity';
 import { Patient } from '../patients/entities/patient.entity';
 import { Appointment } from '../appointments/entities/appointment.entity';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([
-      PatientBill,
-      BillItem,
-      User,
-      Patient,
-      Appointment,
-    ]),
+    TypeOrmModule.forFeature([PatientBill, BillItem, Patient, Appointment]),
   ],
   controllers: [PatientBillingController],
   providers: [PatientBillingService],

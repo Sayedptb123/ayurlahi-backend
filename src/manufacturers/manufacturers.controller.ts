@@ -4,6 +4,7 @@ import {
   Post,
   Body,
   Param,
+  Query,
   UseGuards,
   Request,
   ParseUUIDPipe,
@@ -19,8 +20,12 @@ export class ManufacturersController {
   constructor(private readonly manufacturersService: ManufacturersService) { }
 
   @Get()
-  async findAll(@Request() req) {
-    return this.manufacturersService.findAll(req.user.role);
+  async findAll(@Request() req, @Query() query: { status?: string; page?: string; limit?: string }) {
+    return this.manufacturersService.findAll(req.user.role, {
+      status: query.status,
+      page: query.page ? parseInt(query.page) : 1,
+      limit: query.limit ? parseInt(query.limit) : 20,
+    });
   }
 
   @Get('me')

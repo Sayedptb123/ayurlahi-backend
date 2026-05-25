@@ -4,21 +4,13 @@ import { LabReportsController } from './lab-reports.controller';
 import { LabReportsService } from './lab-reports.service';
 import { LabReport } from './entities/lab-report.entity';
 import { LabTest } from './entities/lab-test.entity';
-import { User } from '../users/entities/user.entity';
 import { Patient } from '../patients/entities/patient.entity';
-import { Doctor } from '../doctors/entities/doctor.entity';
+import { Staff } from '../staff/entities/staff.entity';
 import { Appointment } from '../appointments/entities/appointment.entity';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([
-      LabReport,
-      LabTest,
-      User,
-      Patient,
-      Doctor,
-      Appointment,
-    ]),
+    TypeOrmModule.forFeature([LabReport, LabTest, Patient, Staff, Appointment]),
   ],
   controllers: [LabReportsController],
   providers: [LabReportsService],

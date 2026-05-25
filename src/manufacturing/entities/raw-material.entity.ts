@@ -27,8 +27,8 @@ export class RawMaterial {
     @Column({ type: 'text', nullable: true })
     description: string | null;
 
-    @Column({ type: 'varchar', length: 100, unique: true })
-    sku: string; // Stock Keeping Unit
+    @Column({ type: 'varchar', length: 100, unique: true, nullable: true })
+    sku: string | null;
 
     @Column({ type: 'varchar', length: 50 })
     unit: string; // e.g., kg, g, liters
@@ -36,8 +36,14 @@ export class RawMaterial {
     @Column({ type: 'decimal', precision: 10, scale: 3, default: 0, name: 'current_stock' })
     currentStock: number;
 
-    @Column({ type: 'decimal', precision: 10, scale: 3, default: 0, name: 'reorder_point' })
-    reorderPoint: number; // Low stock alert level
+    @Column({ type: 'decimal', precision: 10, scale: 3, default: 0, name: 'min_stock_level' })
+    minStockLevel: number;
+
+    @Column({ type: 'decimal', precision: 12, scale: 4, nullable: true, name: 'unit_cost' })
+    unitCost: number | null;
+
+    @Column({ type: 'varchar', length: 255, nullable: true })
+    supplier: string | null;
 
     @Column({ type: 'boolean', default: true, name: 'is_active' })
     isActive: boolean;

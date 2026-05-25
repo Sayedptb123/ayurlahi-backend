@@ -1,17 +1,22 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, In } from 'typeorm';
 import { InventoryItem } from './entities/inventory-item.entity';
+import { OrganisationUser } from '../organisation-users/entities/organisation-user.entity';
 import {
   CreateInventoryItemDto,
   UpdateInventoryItemDto,
 } from './dto/create-inventory-item.dto';
+import { NotificationsService } from '../notifications/notifications.service';
 
 @Injectable()
 export class InventoryService {
   constructor(
     @InjectRepository(InventoryItem)
     private readonly inventoryRepository: Repository<InventoryItem>,
+    @InjectRepository(OrganisationUser)
+    private readonly orgUserRepository: Repository<OrganisationUser>,
+    private readonly notificationsService: NotificationsService,
   ) { }
 
   async create(
@@ -52,7 +57,27 @@ export class InventoryService {
     const item = await this.findOne(organisationId, id);
 
     Object.assign(item, updateInventoryItemDto);
-    return await this.inventoryRepository.save(item);
+    const saved = await this.inventoryRepository.save(item);
+
+    // Send low stock alert if current stock is at or below minimum
+    if (saved.currentStock <= saved.minStockLevel) {
+      this.orgUserRepository
+        .find({ where: { organisationId, role: In(['OWNER', 'MANAGER', 'ADMIN']), isActive: true } })
+        .then((orgUsers) => {
+          const userIds = orgUsers.map((ou) => ou.userId).filter(Boolean);
+          if (userIds.length > 0) {
+            this.notificationsService.sendToUsers({
+              userIds,
+              title: 'Low Stock Alert',
+              body: `${saved.name} is running low (${saved.currentStock} ${saved.unit ?? 'units'} remaining)`,
+              data: { inventoryItemId: saved.id, type: 'low_stock' },
+            }).catch(() => {});
+          }
+        })
+        .catch(() => {});
+    }
+
+    return saved;
   }
 
   async remove(organisationId: string, id: string): Promise<void> {

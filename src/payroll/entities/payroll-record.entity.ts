@@ -18,25 +18,25 @@ export enum PayrollStatus {
 }
 
 @Entity('payroll_records')
-@Index(['organizationId', 'month', 'year'])
+@Index(['organisationId', 'month', 'year'])
 export class PayrollRecord {
     @PrimaryGeneratedColumn('uuid')
     id: string;
 
-    @Column({ type: 'uuid', name: 'organization_id' })
-    organizationId: string;
+    @Column({ type: 'uuid', name: 'organisation_id' })
+    organisationId: string;
+
+    @Column({ type: 'uuid', name: 'staff_id' })
+    staffId: string;
 
     @ManyToOne(() => Staff, { onDelete: 'SET NULL' })
     @JoinColumn({ name: 'staff_id' })
     staff: Staff;
 
-    @Column({ type: 'uuid', name: 'staff_id' })
-    staffId: string;
+    @Column({ type: 'int', name: 'month' })
+    month: number;
 
-    @Column({ type: 'int' })
-    month: number; // 1-12
-
-    @Column({ type: 'int' })
+    @Column({ type: 'int', name: 'year' })
     year: number;
 
     @Column({ type: 'decimal', precision: 10, scale: 2, name: 'basic_pay' })
@@ -55,14 +55,15 @@ export class PayrollRecord {
         type: 'enum',
         enum: PayrollStatus,
         default: PayrollStatus.DRAFT,
+        name: 'status',
     })
     status: PayrollStatus;
 
     @Column({ type: 'date', nullable: true, name: 'payment_date' })
-    paymentDate: Date;
+    paymentDate: Date | null;
 
     @Column({ type: 'text', nullable: true, name: 'transaction_ref' })
-    transactionRef: string;
+    transactionRef: string | null;
 
     @CreateDateColumn({ name: 'created_at' })
     createdAt: Date;

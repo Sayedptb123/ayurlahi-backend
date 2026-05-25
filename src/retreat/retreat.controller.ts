@@ -32,6 +32,12 @@ export class RetreatController {
         return this.retreatService.createRoom(clinicId, body);
     }
 
+    @Patch('rooms/:id')
+    updateRoomStatus(@Request() req, @Param('id') id: string, @Body() body: { status: string }) {
+        const clinicId = req.user.organisationId;
+        return this.retreatService.updateRoomStatus(clinicId, id, body.status);
+    }
+
     @Delete('rooms/:id')
     deleteRoom(@Request() req, @Param('id') id: string) {
         const clinicId = req.user.organisationId;
@@ -51,9 +57,9 @@ export class RetreatController {
     }
 
     @Get('admissions')
-    getAdmissions(@Request() req) {
+    getAdmissions(@Request() req, @Query('patientId') patientId?: string, @Query('status') status?: string) {
         const clinicId = req.user.organisationId;
-        return this.retreatService.getAdmissions(clinicId);
+        return this.retreatService.getAdmissions(clinicId, { patientId, status });
     }
 
     @Post('admissions')

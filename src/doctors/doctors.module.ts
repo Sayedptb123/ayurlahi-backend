@@ -4,9 +4,10 @@ import { DoctorsController } from './doctors.controller';
 import { DoctorsService } from './doctors.service';
 import { Doctor } from './entities/doctor.entity';
 import { User } from '../users/entities/user.entity';
+import { OrganisationUser } from '../organisation-users/entities/organisation-user.entity';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Doctor, User])],
+  imports: [TypeOrmModule.forFeature([Doctor, User, OrganisationUser])],
   controllers: [DoctorsController],
   providers: [DoctorsService],
   exports: [DoctorsService],

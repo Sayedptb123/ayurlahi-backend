@@ -26,7 +26,6 @@ export type OrganisationUserRole =
   | 'STAFF'
   | 'PATIENT';
 
-
 @Entity('organisation_users')
 @Index(['userId'])
 @Index(['organisationId'])
@@ -49,13 +48,10 @@ export class OrganisationUser {
   @JoinColumn({ name: 'organisation_id' })
   organisation: Organisation;
 
-  @Column({
-    type: 'varchar',
-    length: 50,
-  })
+  @Column({ type: 'varchar', length: 50, name: 'role' })
   role: OrganisationUserRole;
 
-  @Column({ type: 'jsonb', nullable: true })
+  @Column({ type: 'jsonb', nullable: true, name: 'permissions' })
   permissions: Record<string, any> | null;
 
   @Column({ type: 'boolean', default: false, name: 'is_primary' })
@@ -67,11 +63,15 @@ export class OrganisationUser {
   @Column({ type: 'uuid', nullable: true, name: 'created_by' })
   createdBy: string | null;
 
+  @Column({ type: 'uuid', nullable: true, name: 'updated_by' })
+  updatedBy: string | null;
+
+  @Column({ type: 'timestamp', nullable: true, name: 'deleted_at' })
+  deletedAt: Date | null;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 
   @UpdateDateColumn({ name: 'updated_at' })
   updatedAt: Date;
 }
-
-

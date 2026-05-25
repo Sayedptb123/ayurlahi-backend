@@ -213,6 +213,23 @@ export class ManufacturingService {
         });
     }
 
+    async createSimpleBatch(data: {
+        manufacturerId: string;
+        batchNumber: string;
+        plannedQuantity: number;
+        startDate?: string;
+        notes?: string;
+    }) {
+        const batch = this.batchRepository.create({
+            manufacturerId: data.manufacturerId,
+            batchNumber: data.batchNumber,
+            plannedQuantity: data.plannedQuantity,
+            status: BatchStatus.PLANNED,
+            startDate: data.startDate ? new Date(data.startDate) as any : null,
+        });
+        return this.batchRepository.save(batch);
+    }
+
     async completeBatch(batchId: string, actualYield?: number) {
         return this.dataSource.transaction(async (manager) => {
             const batch = await manager.findOne(Batch, {

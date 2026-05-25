@@ -23,19 +23,26 @@ export class ClinicsService {
     private organisationUsersRepository: Repository<OrganisationUser>,
   ) { }
 
-  async findAll(userRole: string) {
-    // Only admin and support can see all clinics
+  async findAll(userRole: string, params: { status?: string; page: number; limit: number }) {
     if (!RoleUtils.isAdminOrSupport(userRole)) {
-      throw new ForbiddenException(
-        'You do not have permission to view all clinics',
-      );
+      throw new ForbiddenException('You do not have permission to view all clinics');
     }
 
-    // Query organisations table filtered by type='CLINIC'
-    return this.organisationsRepository.find({
-      where: { type: 'CLINIC', deletedAt: IsNull() },
+    const { status, page, limit } = params;
+    const where: any = { type: 'CLINIC', deletedAt: IsNull() };
+    if (status) where.approvalStatus = status;
+
+    const [data, total] = await this.organisationsRepository.findAndCount({
+      where,
       order: { createdAt: 'DESC' },
+      skip: (page - 1) * limit,
+      take: limit,
     });
+
+    return {
+      data,
+      pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
+    };
   }
 
   async findOne(id: string, userId: string, userRole: string) {
@@ -129,7 +136,6 @@ export class ClinicsService {
     clinic.approvalStatus = 'approved';
     clinic.approvedAt = new Date();
     clinic.approvedBy = approvedBy;
-    clinic.isVerified = true;
 
     return this.organisationsRepository.save(clinic);
   }

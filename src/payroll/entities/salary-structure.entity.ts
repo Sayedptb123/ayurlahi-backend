@@ -4,9 +4,8 @@ import {
     Column,
     CreateDateColumn,
     UpdateDateColumn,
-    OneToOne,
+    ManyToOne,
     JoinColumn,
-    Index,
 } from 'typeorm';
 import { Staff } from '../../staff/entities/staff.entity';
 
@@ -15,22 +14,21 @@ export class SalaryStructure {
     @PrimaryGeneratedColumn('uuid')
     id: string;
 
-    @OneToOne(() => Staff, (staff) => staff.id, { onDelete: 'CASCADE' })
+    @Column({ type: 'uuid', name: 'staff_id' })
+    staffId: string;
+
+    @ManyToOne(() => Staff, { onDelete: 'CASCADE' })
     @JoinColumn({ name: 'staff_id' })
     staff: Staff;
 
-    @Column({ type: 'uuid', name: 'staff_id' })
-    @Index({ unique: true })
-    staffId: string;
-
-    @Column({ type: 'decimal', precision: 10, scale: 2, default: 0 })
+    @Column({ type: 'decimal', precision: 10, scale: 2, default: 0, name: 'base_salary' })
     baseSalary: number;
 
-    @Column({ type: 'decimal', precision: 10, scale: 2, default: 0 })
-    hra: number; // House Rent Allowance
+    @Column({ type: 'decimal', precision: 10, scale: 2, default: 0, name: 'hra' })
+    hra: number;
 
-    @Column({ type: 'decimal', precision: 10, scale: 2, default: 0 })
-    da: number; // Dearness Allowance
+    @Column({ type: 'decimal', precision: 10, scale: 2, default: 0, name: 'da' })
+    da: number;
 
     @Column({ type: 'decimal', precision: 10, scale: 2, default: 0, name: 'medical_allowance' })
     medicalAllowance: number;
@@ -38,14 +36,20 @@ export class SalaryStructure {
     @Column({ type: 'decimal', precision: 10, scale: 2, default: 0, name: 'travel_allowance' })
     travelAllowance: number;
 
-    @Column({ type: 'jsonb', nullable: true, default: [] })
+    @Column({ type: 'jsonb', nullable: true, default: [], name: 'other_allowances' })
     otherAllowances: { name: string; amount: number }[];
 
-    @Column({ type: 'jsonb', nullable: true, default: [] })
-    deductions: { name: string; amount: number }[]; // e.g., PF, Tax
+    @Column({ type: 'jsonb', nullable: true, default: [], name: 'deductions' })
+    deductions: { name: string; amount: number }[];
 
-    @Column({ type: 'decimal', precision: 10, scale: 2, name: 'net_salary' })
-    netSalary: number; // Cached calculation
+    @Column({ type: 'jsonb', nullable: true, default: [], name: 'allowances' })
+    allowances: { name: string; amount: number }[];
+
+    @Column({ type: 'date', nullable: true, name: 'effective_from' })
+    effectiveFrom: Date | null;
+
+    @Column({ type: 'date', nullable: true, name: 'effective_to' })
+    effectiveTo: Date | null;
 
     @CreateDateColumn({ name: 'created_at' })
     createdAt: Date;

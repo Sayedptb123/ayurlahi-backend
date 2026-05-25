@@ -8,7 +8,6 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Patient } from './entities/patient.entity';
-import { User } from '../users/entities/user.entity';
 import { CreatePatientDto } from './dto/create-patient.dto';
 import { UpdatePatientDto } from './dto/update-patient.dto';
 import { GetPatientsDto } from './dto/get-patients.dto';
@@ -18,9 +17,7 @@ export class PatientsService {
   constructor(
     @InjectRepository(Patient)
     private patientsRepository: Repository<Patient>,
-    @InjectRepository(User)
-    private usersRepository: Repository<User>,
-  ) { }
+  ) {}
 
   async create(
     userId: string,
@@ -29,7 +26,6 @@ export class PatientsService {
     organisationType: string | undefined,
     createDto: CreatePatientDto,
   ) {
-    // Only clinic users and admin can create patients
     if (
       organisationType !== 'CLINIC' &&
       userRole !== 'SUPER_ADMIN' &&
@@ -40,17 +36,16 @@ export class PatientsService {
       );
     }
 
-    // Get clinicId from organisationId (in new structure, clinic is an organisation)
     const clinicId = organisationId;
     if (!clinicId && userRole !== 'SUPER_ADMIN' && userRole !== 'SUPPORT') {
       throw new BadRequestException('Clinic not associated with user');
     }
 
-    // Check if patientId is unique within the clinic
+    // patientId from DTO maps to patientCode in DB
     const existingPatient = await this.patientsRepository.findOne({
       where: {
-        clinicId: clinicId as string,
-        patientId: createDto.patientId,
+        organisationId: clinicId as string,
+        patientCode: createDto.patientId,
       },
     });
 
@@ -61,11 +56,19 @@ export class PatientsService {
     }
 
     const patient = this.patientsRepository.create({
-      ...createDto,
-      clinicId: clinicId as string,
-      dateOfBirth: createDto.dateOfBirth
-        ? new Date(createDto.dateOfBirth)
-        : null,
+      organisationId: clinicId as string,
+      patientCode: createDto.patientId,
+      firstName: createDto.firstName,
+      lastName: createDto.lastName,
+      dateOfBirth: createDto.dateOfBirth ? new Date(createDto.dateOfBirth) : null,
+      gender: createDto.gender,
+      phone: createDto.phone,
+      email: createDto.email,
+      address: createDto.address,
+      emergencyContact: createDto.emergencyContact,
+      bloodGroup: createDto.bloodGroup,
+      allergies: createDto.allergies,
+      medicalHistory: createDto.medicalHistory,
     });
 
     return this.patientsRepository.save(patient);
@@ -81,7 +84,6 @@ export class PatientsService {
     const { page = 1, limit = 20, search, bloodGroup } = query;
     const skip = (page - 1) * limit;
 
-    // Only clinic users and admin can view patients
     if (
       organisationType !== 'CLINIC' &&
       userRole !== 'SUPER_ADMIN' &&
@@ -92,41 +94,28 @@ export class PatientsService {
       );
     }
 
-    // Build query using query builder for complex search
     const queryBuilder = this.patientsRepository.createQueryBuilder('patient');
 
-    // Clinic users can only see their clinic's patients
     if (organisationType === 'CLINIC') {
       if (!organisationId) {
-        return {
-          data: [],
-          total: 0,
-          page,
-          limit,
-          totalPages: 0,
-        };
+        return { data: [], total: 0, page, limit, totalPages: 0 };
       }
-      queryBuilder.where('patient.clinicId = :clinicId', {
-        clinicId: organisationId,
+      queryBuilder.where('patient.organisationId = :organisationId', {
+        organisationId,
       });
     }
 
-    // Search filter - search across multiple fields
     if (search) {
       queryBuilder.andWhere(
-        '(patient.firstName ILIKE :search OR patient.lastName ILIKE :search OR patient.patientId ILIKE :search OR patient.phone ILIKE :search OR patient.email ILIKE :search)',
+        '(patient.firstName ILIKE :search OR patient.lastName ILIKE :search OR patient.patientCode ILIKE :search OR patient.phone ILIKE :search OR patient.email ILIKE :search)',
         { search: `%${search}%` },
       );
     }
 
-    // Blood group filter
     if (bloodGroup) {
-      queryBuilder.andWhere('patient.bloodGroup = :bloodGroup', {
-        bloodGroup,
-      });
+      queryBuilder.andWhere('patient.bloodGroup = :bloodGroup', { bloodGroup });
     }
 
-    // Order and pagination
     queryBuilder.orderBy('patient.createdAt', 'DESC').skip(skip).take(limit);
 
     const [data, total] = await queryBuilder.getManyAndCount();
@@ -151,16 +140,14 @@ export class PatientsService {
   ) {
     const patient = await this.patientsRepository.findOne({
       where: { id },
-      relations: ['clinic'],
     });
 
     if (!patient) {
       throw new NotFoundException(`Patient with ID ${id} not found`);
     }
 
-    // Access control
     if (organisationType === 'CLINIC') {
-      if (!organisationId || organisationId !== patient.clinicId) {
+      if (!organisationId || organisationId !== patient.organisationId) {
         throw new ForbiddenException('You do not have access to this patient');
       }
     }
@@ -176,20 +163,22 @@ export class PatientsService {
     organisationType: string | undefined,
     updateDto: UpdatePatientDto,
   ) {
-    const patient = await this.findOne(
-      id,
-      userId,
-      userRole,
-      organisationId,
-      organisationType,
-    );
+    const patient = await this.patientsRepository.findOne({ where: { id } });
+    if (!patient) {
+      throw new NotFoundException(`Patient with ID ${id} not found`);
+    }
+    if (organisationType === 'CLINIC') {
+      if (!organisationId || organisationId !== patient.organisationId) {
+        throw new ForbiddenException('You do not have access to this patient');
+      }
+    }
 
-    // Check patientId uniqueness if being updated
-    if (updateDto.patientId && updateDto.patientId !== patient.patientId) {
+    // Check patientCode uniqueness if patientId (code) is being updated
+    if (updateDto.patientId && updateDto.patientId !== patient.patientCode) {
       const existingPatient = await this.patientsRepository.findOne({
         where: {
-          clinicId: patient.clinicId,
-          patientId: updateDto.patientId,
+          organisationId: patient.organisationId,
+          patientCode: updateDto.patientId,
         },
       });
 
@@ -200,12 +189,11 @@ export class PatientsService {
       }
     }
 
-    // Update fields
     if (updateDto.firstName !== undefined)
       patient.firstName = updateDto.firstName;
     if (updateDto.lastName !== undefined) patient.lastName = updateDto.lastName;
     if (updateDto.patientId !== undefined)
-      patient.patientId = updateDto.patientId;
+      patient.patientCode = updateDto.patientId;
     if (updateDto.dateOfBirth !== undefined)
       patient.dateOfBirth = updateDto.dateOfBirth
         ? new Date(updateDto.dateOfBirth)
@@ -240,7 +228,7 @@ export class PatientsService {
       organisationId,
       organisationType,
     );
-    await this.patientsRepository.remove(patient);
+    await this.patientsRepository.softDelete(patient.id);
     return { message: 'Patient deleted successfully' };
   }
 }

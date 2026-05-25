@@ -7,9 +7,9 @@ import {
   ManyToOne,
   JoinColumn,
 } from 'typeorm';
-import { Clinic } from '../../clinics/entities/clinic.entity';
+import { Organisation } from '../../organisations/entities/organisation.entity';
 import { Patient } from '../../patients/entities/patient.entity';
-import { Doctor } from '../../doctors/entities/doctor.entity';
+import { Staff } from '../../staff/entities/staff.entity';
 import { Appointment } from '../../appointments/entities/appointment.entity';
 
 @Entity('medical_records')
@@ -17,22 +17,22 @@ export class MedicalRecord {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column({ type: 'uuid', name: 'clinicId' })
-  clinicId: string;
+  @Column({ type: 'uuid', name: 'organisation_id' })
+  organisationId: string;
 
-  @Column({ type: 'uuid', name: 'patientId' })
+  @Column({ type: 'uuid', name: 'patient_id' })
   patientId: string;
 
-  @Column({ type: 'uuid', nullable: true, name: 'appointmentId' })
+  @Column({ type: 'uuid', nullable: true, name: 'appointment_id' })
   appointmentId: string | null;
 
-  @Column({ type: 'uuid', name: 'doctorId' })
+  @Column({ type: 'uuid', name: 'doctor_id' })
   doctorId: string;
 
-  @Column({ type: 'date', name: 'visitDate' })
+  @Column({ type: 'date', name: 'visit_date' })
   visitDate: Date;
 
-  @Column({ type: 'text', name: 'chiefComplaint' })
+  @Column({ type: 'text', name: 'chief_complaint' })
   chiefComplaint: string;
 
   @Column({ type: 'text', name: 'diagnosis' })
@@ -43,43 +43,46 @@ export class MedicalRecord {
 
   @Column({ type: 'jsonb', nullable: true, name: 'vitals' })
   vitals: {
-    bloodPressure?: string; // e.g., "120/80"
-    temperature?: number; // in Celsius or Fahrenheit
-    pulse?: number; // beats per minute
-    respiratoryRate?: number; // breaths per minute
-    weight?: number; // in kg
-    height?: number; // in cm
+    bloodPressure?: string;
+    temperature?: number;
+    pulse?: number;
+    respiratoryRate?: number;
+    weight?: number;
+    height?: number;
     bmi?: number;
-    oxygenSaturation?: number; // SpO2 percentage
-    glucose?: number; // blood glucose level
-    [key: string]: any; // Allow additional vitals
+    oxygenSaturation?: number;
+    glucose?: number;
+    [key: string]: any;
   } | null;
 
   @Column({ type: 'text', nullable: true, name: 'notes' })
   notes: string | null;
 
   @Column({ type: 'jsonb', nullable: true, name: 'attachments' })
-  attachments: string[] | null; // Array of file URLs
+  attachments: string[] | null;
 
-  @ManyToOne(() => Clinic)
-  @JoinColumn({ name: 'clinicId' })
-  clinic: Clinic;
+  @Column({ type: 'timestamp', nullable: true, name: 'deleted_at' })
+  deletedAt: Date | null;
+
+  @ManyToOne(() => Organisation)
+  @JoinColumn({ name: 'organisation_id' })
+  organisation: Organisation;
 
   @ManyToOne(() => Patient)
-  @JoinColumn({ name: 'patientId' })
+  @JoinColumn({ name: 'patient_id' })
   patient: Patient;
 
   @ManyToOne(() => Appointment, { nullable: true })
-  @JoinColumn({ name: 'appointmentId' })
+  @JoinColumn({ name: 'appointment_id' })
   appointment: Appointment | null;
 
-  @ManyToOne(() => Doctor)
-  @JoinColumn({ name: 'doctorId' })
-  doctor: Doctor;
+  @ManyToOne(() => Staff)
+  @JoinColumn({ name: 'doctor_id' })
+  doctor: Staff;
 
-  @CreateDateColumn({ name: 'createdAt' })
+  @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 
-  @UpdateDateColumn({ name: 'updatedAt' })
+  @UpdateDateColumn({ name: 'updated_at' })
   updatedAt: Date;
 }

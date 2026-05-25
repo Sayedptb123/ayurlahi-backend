@@ -7,7 +7,7 @@ import {
     ManyToOne,
     JoinColumn,
 } from 'typeorm';
-import { Clinic } from '../../clinics/entities/clinic.entity';
+import { Organisation } from '../../organisations/entities/organisation.entity';
 import { Patient } from '../../patients/entities/patient.entity';
 import { Room } from './room.entity';
 import { TreatmentPackage } from './treatment-package.entity';
@@ -24,59 +24,60 @@ export class Admission {
     @PrimaryGeneratedColumn('uuid')
     id: string;
 
-    @Column({ type: 'uuid', name: 'clinicId' })
-    clinicId: string;
+    @Column({ type: 'uuid', name: 'organisation_id' })
+    organisationId: string;
 
-    @ManyToOne(() => Clinic)
-    @JoinColumn({ name: 'clinicId' })
-    clinic: Clinic;
+    @ManyToOne(() => Organisation)
+    @JoinColumn({ name: 'organisation_id' })
+    organisation: Organisation;
 
-    // Patient Link
-    @Column({ type: 'uuid', name: 'patientId' })
+    @Column({ type: 'uuid', name: 'patient_id' })
     patientId: string;
 
     @ManyToOne(() => Patient)
-    @JoinColumn({ name: 'patientId' })
+    @JoinColumn({ name: 'patient_id' })
     patient: Patient;
 
-    // Room Link
-    @Column({ type: 'uuid', name: 'roomId' })
+    @Column({ type: 'uuid', name: 'room_id' })
     roomId: string;
 
     @ManyToOne(() => Room)
-    @JoinColumn({ name: 'roomId' })
+    @JoinColumn({ name: 'room_id' })
     room: Room;
 
-    // Package Link (Optional - could be custom stay)
-    @Column({ type: 'uuid', name: 'packageId', nullable: true })
+    @Column({ type: 'uuid', name: 'package_id', nullable: true })
     packageId: string | null;
 
     @ManyToOne(() => TreatmentPackage, { nullable: true })
-    @JoinColumn({ name: 'packageId' })
+    @JoinColumn({ name: 'package_id' })
     treatmentPackage: TreatmentPackage | null;
 
-    @Column({ type: 'timestamp' })
+    @Column({ type: 'timestamp', name: 'check_in_date' })
     checkInDate: Date;
 
-    @Column({ type: 'timestamp', nullable: true })
-    expectedCheckOutDate: Date;
+    @Column({ type: 'timestamp', nullable: true, name: 'expected_check_out_date' })
+    expectedCheckOutDate: Date | null;
 
-    @Column({ type: 'timestamp', nullable: true })
+    @Column({ type: 'timestamp', nullable: true, name: 'actual_check_out_date' })
     actualCheckOutDate: Date | null;
 
     @Column({
         type: 'enum',
         enum: AdmissionStatus,
         default: AdmissionStatus.ACTIVE,
+        name: 'status',
     })
     status: AdmissionStatus;
 
-    @Column({ type: 'text', nullable: true })
-    notes: string;
+    @Column({ type: 'text', nullable: true, name: 'notes' })
+    notes: string | null;
 
-    @CreateDateColumn()
+    @Column({ type: 'timestamp', nullable: true, name: 'deleted_at' })
+    deletedAt: Date | null;
+
+    @CreateDateColumn({ name: 'created_at' })
     createdAt: Date;
 
-    @UpdateDateColumn()
+    @UpdateDateColumn({ name: 'updated_at' })
     updatedAt: Date;
 }

@@ -8,7 +8,7 @@ import {
   OneToMany,
   JoinColumn,
 } from 'typeorm';
-import { Clinic } from '../../clinics/entities/clinic.entity';
+import { Organisation } from '../../organisations/entities/organisation.entity';
 import { Patient } from '../../patients/entities/patient.entity';
 import { Appointment } from '../../appointments/entities/appointment.entity';
 import { BillItem } from './bill-item.entity';
@@ -24,6 +24,7 @@ export enum BillStatus {
 export enum PaymentMethod {
   CASH = 'cash',
   CARD = 'card',
+  UPI = 'upi',
   ONLINE = 'online',
   CHEQUE = 'cheque',
 }
@@ -33,115 +34,81 @@ export class PatientBill {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column({ type: 'uuid', name: 'clinicId' })
-  clinicId: string;
+  @Column({ type: 'uuid', name: 'organisation_id' })
+  organisationId: string;
 
-  @Column({ type: 'uuid', name: 'patientId' })
+  @Column({ type: 'uuid', name: 'patient_id' })
   patientId: string;
 
-  @Column({ type: 'uuid', nullable: true, name: 'appointmentId' })
+  @Column({ type: 'uuid', nullable: true, name: 'appointment_id' })
   appointmentId: string | null;
 
-  @Column({ type: 'varchar', length: 100, unique: true, name: 'billNumber' })
+  @Column({ type: 'varchar', length: 100, name: 'bill_number' })
   billNumber: string;
 
-  @Column({ type: 'date', name: 'billDate' })
+  @Column({ type: 'date', name: 'bill_date' })
   billDate: Date;
 
-  @Column({ type: 'date', nullable: true, name: 'dueDate' })
+  @Column({ type: 'date', nullable: true, name: 'due_date' })
   dueDate: Date | null;
 
-  @Column({
-    type: 'decimal',
-    precision: 12,
-    scale: 2,
-    name: 'subtotal',
-  })
+  @Column({ type: 'decimal', precision: 12, scale: 2, name: 'subtotal' })
   subtotal: number;
 
-  @Column({
-    type: 'decimal',
-    precision: 12,
-    scale: 2,
-    default: 0,
-    name: 'discount',
-  })
+  @Column({ type: 'decimal', precision: 12, scale: 2, default: 0, name: 'discount' })
   discount: number;
 
-  @Column({
-    type: 'decimal',
-    precision: 12,
-    scale: 2,
-    default: 0,
-    name: 'tax',
-  })
+  @Column({ type: 'decimal', precision: 12, scale: 2, default: 0, name: 'tax' })
   tax: number;
 
-  @Column({
-    type: 'decimal',
-    precision: 12,
-    scale: 2,
-    name: 'total',
-  })
+  // total = subtotal - discount + tax (compute in app, do not set independently)
+  @Column({ type: 'decimal', precision: 12, scale: 2, name: 'total' })
   total: number;
 
-  @Column({
-    type: 'decimal',
-    precision: 12,
-    scale: 2,
-    default: 0,
-    name: 'paidAmount',
-  })
+  @Column({ type: 'decimal', precision: 12, scale: 2, default: 0, name: 'paid_amount' })
   paidAmount: number;
 
-  @Column({
-    type: 'decimal',
-    precision: 12,
-    scale: 2,
-    name: 'balance',
-  })
-  balance: number;
+  // balance is NOT stored — always compute as: total - paidAmount
+  get balance(): number {
+    return this.total - this.paidAmount;
+  }
 
-  @Column({
-    type: 'enum',
-    enum: BillStatus,
-    default: BillStatus.DRAFT,
-    name: 'status',
-  })
+  @Column({ type: 'varchar', length: 20, default: BillStatus.DRAFT, name: 'status' })
   status: BillStatus;
 
-  @Column({
-    type: 'enum',
-    enum: PaymentMethod,
-    nullable: true,
-    name: 'paymentMethod',
-  })
+  @Column({ type: 'varchar', length: 20, nullable: true, name: 'payment_method' })
   paymentMethod: PaymentMethod | null;
 
   @Column({ type: 'text', nullable: true, name: 'notes' })
   notes: string | null;
 
-  @ManyToOne(() => Clinic)
-  @JoinColumn({ name: 'clinicId' })
-  clinic: Clinic;
+  @Column({ type: 'uuid', nullable: true, name: 'created_by' })
+  createdBy: string | null;
+
+  @Column({ type: 'uuid', nullable: true, name: 'updated_by' })
+  updatedBy: string | null;
+
+  @Column({ type: 'timestamp', nullable: true, name: 'deleted_at' })
+  deletedAt: Date | null;
+
+  @ManyToOne(() => Organisation)
+  @JoinColumn({ name: 'organisation_id' })
+  organisation: Organisation;
 
   @ManyToOne(() => Patient)
-  @JoinColumn({ name: 'patientId' })
+  @JoinColumn({ name: 'patient_id' })
   patient: Patient;
 
   @ManyToOne(() => Appointment, { nullable: true })
-  @JoinColumn({ name: 'appointmentId' })
+  @JoinColumn({ name: 'appointment_id' })
   appointment: Appointment | null;
 
-  @OneToMany(() => BillItem, (item) => item.bill, {
-    cascade: true,
-    eager: true,
-  })
+  @OneToMany(() => BillItem, (item) => item.bill, { cascade: true, eager: true })
   items: BillItem[];
 
-  @CreateDateColumn({ name: 'createdAt' })
+  @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 
-  @UpdateDateColumn({ name: 'updatedAt' })
+  @UpdateDateColumn({ name: 'updated_at' })
   updatedAt: Date;
 }

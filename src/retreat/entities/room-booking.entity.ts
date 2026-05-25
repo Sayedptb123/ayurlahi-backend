@@ -25,73 +25,69 @@ export class RoomBooking {
     @PrimaryGeneratedColumn('uuid')
     id: string;
 
-    @Column({ type: 'uuid', name: 'clinicId' })
-    clinicId: string;
+    @Column({ type: 'uuid', name: 'organisation_id' })
+    organisationId: string;
 
     @ManyToOne(() => Organisation)
-    @JoinColumn({ name: 'clinicId' })
-    clinic: Organisation;
+    @JoinColumn({ name: 'organisation_id' })
+    organisation: Organisation;
 
-    // Patient Link
-    @Column({ type: 'uuid', name: 'patientId' })
+    @Column({ type: 'uuid', name: 'patient_id' })
     patientId: string;
 
     @ManyToOne(() => Patient)
-    @JoinColumn({ name: 'patientId' })
+    @JoinColumn({ name: 'patient_id' })
     patient: Patient;
 
-    // Room Link
-    @Column({ type: 'uuid', name: 'roomId' })
+    @Column({ type: 'uuid', name: 'room_id' })
     roomId: string;
 
     @ManyToOne(() => Room)
-    @JoinColumn({ name: 'roomId' })
+    @JoinColumn({ name: 'room_id' })
     room: Room;
 
-    // Package Link (Optional)
-    @Column({ type: 'uuid', name: 'packageId', nullable: true })
+    @Column({ type: 'uuid', name: 'package_id', nullable: true })
     packageId: string | null;
 
     @ManyToOne(() => TreatmentPackage, { nullable: true })
-    @JoinColumn({ name: 'packageId' })
+    @JoinColumn({ name: 'package_id' })
     treatmentPackage: TreatmentPackage | null;
 
-    // Booking Dates
-    @Column({ type: 'date', name: 'checkInDate' })
+    @Column({ type: 'date', name: 'check_in_date' })
     checkInDate: Date;
 
-    @Column({ type: 'date', name: 'checkOutDate' })
+    @Column({ type: 'date', name: 'check_out_date' })
     checkOutDate: Date;
 
-    // Pricing
-    @Column({ type: 'decimal', precision: 10, scale: 2, name: 'totalPrice' })
+    @Column({ type: 'decimal', precision: 10, scale: 2, name: 'total_price' })
     totalPrice: number;
 
-    @Column({ type: 'decimal', precision: 10, scale: 2, default: 0, name: 'advancePaid' })
+    @Column({ type: 'decimal', precision: 10, scale: 2, default: 0, name: 'advance_paid' })
     advancePaid: number;
 
-    // Status
     @Column({
         type: 'enum',
         enum: BookingStatus,
         default: BookingStatus.PENDING,
+        name: 'status',
     })
     status: BookingStatus;
 
-    // Additional Info
-    @Column({ type: 'text', nullable: true })
-    notes: string;
+    @Column({ type: 'text', nullable: true, name: 'notes' })
+    notes: string | null;
 
-    @Column({ type: 'timestamp', nullable: true, name: 'bookingDate' })
-    bookingDate: Date;
+    @Column({ type: 'timestamp', nullable: true, name: 'booking_date' })
+    bookingDate: Date | null;
 
-    // Link to admission (when checked in)
-    @Column({ type: 'uuid', nullable: true, name: 'admissionId' })
+    @Column({ type: 'uuid', nullable: true, name: 'admission_id' })
     admissionId: string | null;
 
-    @CreateDateColumn({ name: 'createdAt' })
+    @Column({ type: 'timestamp', nullable: true, name: 'deleted_at' })
+    deletedAt: Date | null;
+
+    @CreateDateColumn({ name: 'created_at' })
     createdAt: Date;
 
-    @UpdateDateColumn({ name: 'updatedAt' })
+    @UpdateDateColumn({ name: 'updated_at' })
     updatedAt: Date;
 }

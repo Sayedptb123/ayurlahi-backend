@@ -1,6 +1,8 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
+import { APP_GUARD } from '@nestjs/core';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { ProductsModule } from './products/products.module';
@@ -15,7 +17,6 @@ import { PayoutsModule } from './payouts/payouts.module';
 import { AnalyticsModule } from './analytics/analytics.module';
 import { StaffModule } from './staff/staff.module';
 import { PatientsModule } from './patients/patients.module';
-import { DoctorsModule } from './doctors/doctors.module';
 import { AppointmentsModule } from './appointments/appointments.module';
 import { MedicalRecordsModule } from './medical-records/medical-records.module';
 import { PrescriptionsModule } from './prescriptions/prescriptions.module';
@@ -36,6 +37,11 @@ import { ExpensesModule } from './expenses/expenses.module';
 import { BudgetsModule } from './budgets/budgets.module';
 import { PayrollModule } from './payroll/payroll.module';
 import { ManufacturingModule } from './manufacturing/manufacturing.module';
+import { FileUploadModule } from './file-upload/file-upload.module';
+import { NotificationsModule } from './notifications/notifications.module';
+import { EmailModule } from './email/email.module';
+import { ScraperModule } from './scraper/scraper.module';
+import { PushToken } from './notifications/entities/push-token.entity';
 import { User } from './users/entities/user.entity';
 import { Organisation } from './organisations/entities/organisation.entity';
 import { OrganisationUser } from './organisation-users/entities/organisation-user.entity';
@@ -58,7 +64,6 @@ import { Invoice } from './invoices/entities/invoice.entity';
 import { Dispute } from './disputes/entities/dispute.entity';
 import { Staff } from './staff/entities/staff.entity';
 import { Patient } from './patients/entities/patient.entity';
-import { Doctor } from './doctors/entities/doctor.entity';
 import { Appointment } from './appointments/entities/appointment.entity';
 import { MedicalRecord } from './medical-records/entities/medical-record.entity';
 import { Prescription } from './prescriptions/entities/prescription.entity';
@@ -82,6 +87,15 @@ import { Room } from './retreat/entities/room.entity';
 import { TreatmentPackage } from './retreat/entities/treatment-package.entity';
 import { Admission } from './retreat/entities/admission.entity';
 import { RoomBooking } from './retreat/entities/room-booking.entity';
+import { VitalsModule } from './vitals/vitals.module';
+import { Vital } from './vitals/entities/vital.entity';
+import { FeedingLogsModule } from './feeding-logs/feeding-logs.module';
+import { FeedingLog } from './feeding-logs/entities/feeding-log.entity';
+import { NewbornAssessmentsModule } from './newborn-assessments/newborn-assessments.module';
+import { NewbornAssessment } from './newborn-assessments/entities/newborn-assessment.entity';
+import { TasksModule } from './tasks/tasks.module';
+import { StaffTask } from './tasks/entities/staff-task.entity';
+import { UserNotification } from './notifications/entities/user-notification.entity';
 
 @Module({
   imports: [
@@ -89,6 +103,10 @@ import { RoomBooking } from './retreat/entities/room-booking.entity';
       isGlobal: true,
       envFilePath: '.env',
     }),
+    ThrottlerModule.forRoot([
+      { name: 'short', ttl: 1000, limit: 10 },   // 10 req/sec burst
+      { name: 'medium', ttl: 60000, limit: 200 }, // 200 req/min sustained
+    ]),
     TypeOrmModule.forRootAsync({
       imports: [ConfigModule],
       useFactory: (configService: ConfigService) => ({
@@ -121,7 +139,6 @@ import { RoomBooking } from './retreat/entities/room-booking.entity';
           Dispute,
           Staff,
           Patient,
-          Doctor,
           Appointment,
           MedicalRecord,
           Prescription,
@@ -143,6 +160,12 @@ import { RoomBooking } from './retreat/entities/room-booking.entity';
           TreatmentPackage,
           Admission,
           RoomBooking,
+          Vital,
+          FeedingLog,
+          NewbornAssessment,
+          StaffTask,
+          PushToken,
+          UserNotification,
         ],
         synchronize: false, // Disabled - synchronize causes issues
         logging: configService.get<string>('NODE_ENV') === 'development',
@@ -162,7 +185,6 @@ import { RoomBooking } from './retreat/entities/room-booking.entity';
     AnalyticsModule,
     StaffModule,
     PatientsModule,
-    DoctorsModule,
     AppointmentsModule,
     MedicalRecordsModule,
     PrescriptionsModule,
@@ -184,8 +206,19 @@ import { RoomBooking } from './retreat/entities/room-booking.entity';
     PayrollModule,
     ManufacturingModule,
     RetreatModule,
+    VitalsModule,
+    FeedingLogsModule,
+    NewbornAssessmentsModule,
+    TasksModule,
+    FileUploadModule,
+    NotificationsModule,
+    EmailModule,
+    ScraperModule,
   ],
   controllers: [AppController],
-  providers: [AppService],
+  providers: [
+    AppService,
+    { provide: APP_GUARD, useClass: ThrottlerGuard }, // global rate limiting
+  ],
 })
 export class AppModule { }

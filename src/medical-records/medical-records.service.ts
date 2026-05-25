@@ -5,11 +5,10 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, Between } from 'typeorm';
+import { Repository } from 'typeorm';
 import { MedicalRecord } from './entities/medical-record.entity';
-import { User } from '../users/entities/user.entity';
 import { Patient } from '../patients/entities/patient.entity';
-import { Doctor } from '../doctors/entities/doctor.entity';
+import { Staff } from '../staff/entities/staff.entity';
 import { Appointment } from '../appointments/entities/appointment.entity';
 import { CreateMedicalRecordDto } from './dto/create-medical-record.dto';
 import { UpdateMedicalRecordDto } from './dto/update-medical-record.dto';
@@ -20,12 +19,10 @@ export class MedicalRecordsService {
   constructor(
     @InjectRepository(MedicalRecord)
     private medicalRecordsRepository: Repository<MedicalRecord>,
-    @InjectRepository(User)
-    private usersRepository: Repository<User>,
     @InjectRepository(Patient)
     private patientsRepository: Repository<Patient>,
-    @InjectRepository(Doctor)
-    private doctorsRepository: Repository<Doctor>,
+    @InjectRepository(Staff)
+    private staffRepository: Repository<Staff>,
     @InjectRepository(Appointment)
     private appointmentsRepository: Repository<Appointment>,
   ) {}
@@ -37,7 +34,6 @@ export class MedicalRecordsService {
     organisationType: string | undefined,
     createDto: CreateMedicalRecordDto,
   ) {
-    // Only clinic users and admin can create medical records
     if (
       organisationType !== 'CLINIC' &&
       userRole !== 'SUPER_ADMIN' &&
@@ -53,29 +49,26 @@ export class MedicalRecordsService {
       throw new BadRequestException('Clinic not associated with user');
     }
 
-    // Verify patient exists and belongs to clinic
     const patient = await this.patientsRepository.findOne({
       where: { id: createDto.patientId },
     });
     if (!patient) {
       throw new NotFoundException('Patient not found');
     }
-    if (patient.clinicId !== clinicId) {
+    if (patient.organisationId !== clinicId) {
       throw new ForbiddenException('Patient does not belong to this clinic');
     }
 
-    // Verify doctor exists and belongs to clinic
-    const doctor = await this.doctorsRepository.findOne({
+    const doctor = await this.staffRepository.findOne({
       where: { id: createDto.doctorId },
     });
     if (!doctor) {
       throw new NotFoundException('Doctor not found');
     }
-    if (doctor.clinicId !== clinicId) {
+    if (doctor.organisationId !== clinicId) {
       throw new ForbiddenException('Doctor does not belong to this clinic');
     }
 
-    // If appointmentId is provided, verify it exists and belongs to clinic
     if (createDto.appointmentId) {
       const appointment = await this.appointmentsRepository.findOne({
         where: { id: createDto.appointmentId },
@@ -83,7 +76,7 @@ export class MedicalRecordsService {
       if (!appointment) {
         throw new NotFoundException('Appointment not found');
       }
-      if (appointment.clinicId !== clinicId) {
+      if (appointment.organisationId !== clinicId) {
         throw new ForbiddenException(
           'Appointment does not belong to this clinic',
         );
@@ -97,7 +90,7 @@ export class MedicalRecordsService {
 
     const medicalRecord = this.medicalRecordsRepository.create({
       ...createDto,
-      clinicId,
+      organisationId: clinicId,
       visitDate: new Date(createDto.visitDate),
     });
 
@@ -122,7 +115,6 @@ export class MedicalRecordsService {
     } = query;
     const skip = (page - 1) * limit;
 
-    // Only clinic users and admin can view medical records
     if (
       organisationType !== 'CLINIC' &&
       userRole !== 'SUPER_ADMIN' &&
@@ -133,30 +125,21 @@ export class MedicalRecordsService {
       );
     }
 
-    // Build query
     const queryBuilder = this.medicalRecordsRepository
       .createQueryBuilder('medicalRecord')
       .leftJoinAndSelect('medicalRecord.patient', 'patient')
       .leftJoinAndSelect('medicalRecord.doctor', 'doctor')
       .leftJoinAndSelect('medicalRecord.appointment', 'appointment');
 
-    // Clinic users can only see their clinic's medical records
     if (organisationType === 'CLINIC') {
       if (!organisationId) {
-        return {
-          data: [],
-          total: 0,
-          page,
-          limit,
-          totalPages: 0,
-        };
+        return { data: [], total: 0, page, limit, totalPages: 0 };
       }
-      queryBuilder.where('medicalRecord.clinicId = :clinicId', {
-        clinicId: organisationId,
+      queryBuilder.where('medicalRecord.organisationId = :organisationId', {
+        organisationId,
       });
     }
 
-    // Filters
     if (patientId) {
       queryBuilder.andWhere('medicalRecord.patientId = :patientId', {
         patientId,
@@ -164,9 +147,7 @@ export class MedicalRecordsService {
     }
 
     if (doctorId) {
-      queryBuilder.andWhere('medicalRecord.doctorId = :doctorId', {
-        doctorId,
-      });
+      queryBuilder.andWhere('medicalRecord.doctorId = :doctorId', { doctorId });
     }
 
     if (appointmentId) {
@@ -185,12 +166,9 @@ export class MedicalRecordsService {
         startDate,
       });
     } else if (endDate) {
-      queryBuilder.andWhere('medicalRecord.visitDate <= :endDate', {
-        endDate,
-      });
+      queryBuilder.andWhere('medicalRecord.visitDate <= :endDate', { endDate });
     }
 
-    // Order and pagination
     queryBuilder
       .orderBy('medicalRecord.visitDate', 'DESC')
       .addOrderBy('medicalRecord.createdAt', 'DESC')
@@ -217,16 +195,15 @@ export class MedicalRecordsService {
   ) {
     const medicalRecord = await this.medicalRecordsRepository.findOne({
       where: { id },
-      relations: ['clinic', 'patient', 'doctor', 'appointment'],
+      relations: ['patient', 'doctor', 'appointment'],
     });
 
     if (!medicalRecord) {
       throw new NotFoundException(`Medical record with ID ${id} not found`);
     }
 
-    // Access control
     if (organisationType === 'CLINIC') {
-      if (!organisationId || organisationId !== medicalRecord.clinicId) {
+      if (!organisationId || organisationId !== medicalRecord.organisationId) {
         throw new ForbiddenException(
           'You do not have access to this medical record',
         );
@@ -244,15 +221,25 @@ export class MedicalRecordsService {
     organisationType: string | undefined,
     updateDto: UpdateMedicalRecordDto,
   ) {
-    const medicalRecord = await this.findOne(
-      id,
-      userId,
-      userRole,
-      organisationId,
-      organisationType,
-    );
+    const medicalRecord = await this.medicalRecordsRepository.findOne({
+      where: { id },
+    });
 
-    // If updating patient, doctor, or appointment, verify they belong to clinic
+    if (!medicalRecord) {
+      throw new NotFoundException(`Medical record with ID ${id} not found`);
+    }
+
+    if (organisationType === 'CLINIC') {
+      if (
+        !organisationId ||
+        organisationId !== medicalRecord.organisationId
+      ) {
+        throw new ForbiddenException(
+          'You do not have access to this medical record',
+        );
+      }
+    }
+
     if (
       updateDto.patientId &&
       updateDto.patientId !== medicalRecord.patientId
@@ -260,16 +247,19 @@ export class MedicalRecordsService {
       const patient = await this.patientsRepository.findOne({
         where: { id: updateDto.patientId },
       });
-      if (!patient || patient.clinicId !== medicalRecord.clinicId) {
+      if (!patient || patient.organisationId !== medicalRecord.organisationId) {
         throw new ForbiddenException('Patient does not belong to this clinic');
       }
     }
 
     if (updateDto.doctorId && updateDto.doctorId !== medicalRecord.doctorId) {
-      const doctor = await this.doctorsRepository.findOne({
+      const doctor = await this.staffRepository.findOne({
         where: { id: updateDto.doctorId },
       });
-      if (!doctor || doctor.clinicId !== medicalRecord.clinicId) {
+      if (
+        !doctor ||
+        doctor.organisationId !== medicalRecord.organisationId
+      ) {
         throw new ForbiddenException('Doctor does not belong to this clinic');
       }
     }
@@ -281,14 +271,16 @@ export class MedicalRecordsService {
       const appointment = await this.appointmentsRepository.findOne({
         where: { id: updateDto.appointmentId },
       });
-      if (!appointment || appointment.clinicId !== medicalRecord.clinicId) {
+      if (
+        !appointment ||
+        appointment.organisationId !== medicalRecord.organisationId
+      ) {
         throw new ForbiddenException(
           'Appointment does not belong to this clinic',
         );
       }
     }
 
-    // Update fields
     if (updateDto.patientId !== undefined)
       medicalRecord.patientId = updateDto.patientId;
     if (updateDto.appointmentId !== undefined)
@@ -325,7 +317,7 @@ export class MedicalRecordsService {
       organisationId,
       organisationType,
     );
-    await this.medicalRecordsRepository.remove(medicalRecord);
+    await this.medicalRecordsRepository.softDelete(medicalRecord.id);
     return { message: 'Medical record deleted successfully' };
   }
 }

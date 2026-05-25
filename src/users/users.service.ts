@@ -68,33 +68,15 @@ export class UsersService {
     queryBuilder.skip(skip).take(limit);
     queryBuilder.orderBy('user.createdAt', 'DESC');
 
-    // Join with organisations to get names
-    // We map to virtual properties since relations aren't explicitly defined in User entity
-    queryBuilder.leftJoinAndMapOne(
-      'user.manufacturer',
-      Organisation,
-      'manufacturer',
-      'manufacturer.id = user.manufacturerId'
-    );
-    queryBuilder.leftJoinAndMapOne(
-      'user.clinic',
-      Organisation,
-      'clinic',
-      'clinic.id = user.clinicId'
-    );
+    // Note: user no longer has manufacturerId/clinicId columns; org membership via organisation_users
 
     const data = await queryBuilder.getMany();
 
-    // Map to frontend expected format
     const users = data.map((user: any) => {
       const { passwordHash, ...userWithoutPassword } = user;
       return {
         ...userWithoutPassword,
         name: `${user.firstName} ${user.lastName}`,
-        organizationName: user.manufacturer?.name || user.clinic?.name || null,
-        // Include full objects if needed by frontend types
-        manufacturer: user.manufacturer,
-        clinic: user.clinic,
       };
     });
 
@@ -149,7 +131,6 @@ export class UsersService {
       throw new BadRequestException('Phone number is required');
     }
 
-    // Create user
     const user = this.usersRepository.create({
       email: createUserDto.email || null,
       passwordHash,
@@ -159,8 +140,6 @@ export class UsersService {
       isActive:
         createUserDto.isActive !== undefined ? createUserDto.isActive : true,
       isEmailVerified: false,
-      role: createUserDto.role, // Fix: Assign role
-      whatsappNumber: createUserDto.whatsappNumber,
     });
 
     const savedUser = await this.usersRepository.save(user);
@@ -172,14 +151,10 @@ export class UsersService {
     ) {
       const orgType = createUserDto.role === 'manufacturer' ? 'MANUFACTURER' : 'CLINIC';
 
-      // Create Organisation
       const org = this.organisationsRepository.create({
         name: createUserDto.organizationName,
-        companyName: createUserDto.organizationName, // Use same name for company name
         type: orgType as any,
-        status: 'active',
-        approvalStatus: 'approved', // Auto-approve for manual creation by admin
-        isVerified: true,
+        approvalStatus: 'approved',
         isActive: true,
       });
 
@@ -194,14 +169,6 @@ export class UsersService {
       });
 
       await this.organisationUsersRepository.save(orgUser);
-
-      // Update User legacy fields
-      if (createUserDto.role === 'manufacturer') {
-        savedUser.manufacturerId = savedOrg.id;
-      } else if (createUserDto.role === 'clinic') {
-        savedUser.clinicId = savedOrg.id;
-      }
-      await this.usersRepository.save(savedUser);
     }
 
     // Remove password hash from response

@@ -3,6 +3,7 @@ import {
   UnauthorizedException,
   ConflictException,
   BadRequestException,
+  NotFoundException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -11,8 +12,11 @@ import * as bcrypt from 'bcryptjs';
 import { User } from '../users/entities/user.entity';
 import { OrganisationUser } from '../organisation-users/entities/organisation-user.entity';
 import { Organisation } from '../organisations/entities/organisation.entity';
+import { Staff } from '../staff/entities/staff.entity';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
+import { RegisterOrganisationDto } from './dto/register-organisation.dto';
+import { UpdateMeDto } from './dto/update-me.dto';
 
 export interface JwtPayload {
   sub: string; // userId
@@ -31,6 +35,8 @@ export class AuthService {
     private organisationUsersRepository: Repository<OrganisationUser>,
     @InjectRepository(Organisation)
     private organisationsRepository: Repository<Organisation>,
+    @InjectRepository(Staff)
+    private staffRepository: Repository<Staff>,
     private jwtService: JwtService,
   ) { }
 
@@ -119,7 +125,6 @@ export class AuthService {
         type: ou.organisation.type,
         role: ou.role,
         isPrimary: ou.isPrimary,
-        discountPercentage: ou.organisation.discountPercentage,
       }));
 
       // JWT payload with current organisation context
@@ -158,7 +163,8 @@ export class AuthService {
             name: currentOrg.organisation.name,
             type: currentOrg.organisation.type,
             role: currentOrg.role,
-            discountPercentage: currentOrg.organisation.discountPercentage,
+            approvalStatus: currentOrg.organisation.approvalStatus,
+            permissions: currentOrg.permissions ?? null,
           }
           : null,
         organisations,
@@ -222,6 +228,79 @@ export class AuthService {
     };
   }
 
+  async registerOrganisation(dto: RegisterOrganisationDto) {
+    // Check for existing user
+    const existing = await this.usersRepository.findOne({
+      where: [{ email: dto.email }, { phone: dto.phone }],
+    });
+    if (existing) {
+      throw new ConflictException('An account with this email or phone already exists');
+    }
+
+    const hashedPassword = await bcrypt.hash(dto.password, 10);
+
+    // Create user
+    const user = this.usersRepository.create({
+      email: dto.email,
+      passwordHash: hashedPassword,
+      firstName: dto.firstName,
+      lastName: dto.lastName,
+      phone: dto.phone,
+      isActive: true,
+      isEmailVerified: false,
+    });
+    const savedUser = await this.usersRepository.save(user);
+
+    // Create organisation (pending approval)
+    const org = this.organisationsRepository.create({
+      name: dto.orgName,
+      type: dto.orgType,
+      approvalStatus: 'pending',
+      isActive: true,
+    });
+    const savedOrg = await this.organisationsRepository.save(org);
+
+    // Link user to org as OWNER
+    const orgUser = this.organisationUsersRepository.create({
+      userId: savedUser.id,
+      organisationId: savedOrg.id,
+      role: 'OWNER',
+      isPrimary: true,
+    });
+    await this.organisationUsersRepository.save(orgUser);
+
+    // Issue token so user can see pending screen without logging in again
+    const payload: JwtPayload = {
+      sub: savedUser.id,
+      email: savedUser.email,
+      organisationId: savedOrg.id,
+      organisationType: savedOrg.type,
+      role: 'OWNER',
+    };
+    const accessToken = this.jwtService.sign(payload);
+
+    return {
+      accessToken,
+      user: {
+        id: savedUser.id,
+        email: savedUser.email,
+        firstName: savedUser.firstName,
+        lastName: savedUser.lastName,
+        phone: savedUser.phone,
+        isActive: savedUser.isActive,
+        isEmailVerified: savedUser.isEmailVerified,
+      },
+      currentOrganisation: {
+        id: savedOrg.id,
+        name: savedOrg.name,
+        type: savedOrg.type,
+        role: 'OWNER' as const,
+        approvalStatus: savedOrg.approvalStatus,
+        permissions: null,
+      },
+    };
+  }
+
   async getCurrentUser(userId: string, organisationId?: string) {
     const user = await this.usersRepository.findOne({
       where: { id: userId },
@@ -248,7 +327,6 @@ export class AuthService {
       type: ou.organisation.type,
       role: ou.role,
       isPrimary: ou.isPrimary,
-      discountPercentage: ou.organisation.discountPercentage,
     }));
 
     return {
@@ -265,7 +343,7 @@ export class AuthService {
           name: currentOrgUser.organisation.name,
           type: currentOrgUser.organisation.type,
           role: currentOrgUser.role,
-          discountPercentage: currentOrgUser.organisation.discountPercentage,
+          permissions: currentOrgUser.permissions ?? null,
         }
         : null,
       organisations,
@@ -317,7 +395,6 @@ export class AuthService {
         type: ou.organisation.type,
         role: ou.role,
         isPrimary: ou.isPrimary,
-        discountPercentage: ou.organisation.discountPercentage,
       }));
 
       return {
@@ -338,7 +415,8 @@ export class AuthService {
             name: currentOrg.organisation.name,
             type: currentOrg.organisation.type,
             role: currentOrg.role,
-            discountPercentage: currentOrg.organisation.discountPercentage,
+            approvalStatus: currentOrg.organisation.approvalStatus,
+            permissions: currentOrg.permissions ?? null,
           }
           : null,
         organisations,
@@ -394,5 +472,41 @@ export class AuthService {
         role: orgUser.role,
       },
     };
+  }
+
+  async updateMe(userId: string, dto: UpdateMeDto) {
+    const user = await this.usersRepository.findOne({ where: { id: userId } });
+    if (!user) throw new NotFoundException('User not found');
+
+    if (dto.newPassword) {
+      if (!dto.currentPassword) {
+        throw new BadRequestException('Current password is required to set a new password');
+      }
+      if (!user.passwordHash) {
+        throw new BadRequestException('No password set on this account');
+      }
+      const match = await bcrypt.compare(dto.currentPassword, user.passwordHash);
+      if (!match) {
+        throw new BadRequestException('Current password is incorrect');
+      }
+      user.passwordHash = await bcrypt.hash(dto.newPassword, 10);
+    }
+
+    if (dto.firstName !== undefined) user.firstName = dto.firstName;
+    if (dto.lastName !== undefined) user.lastName = dto.lastName;
+    if (dto.phone !== undefined) user.phone = dto.phone;
+    await this.usersRepository.save(user);
+
+    // Keep staff record in sync
+    const staffRecord = await this.staffRepository.findOne({ where: { userId: userId } });
+    if (staffRecord) {
+      if (dto.firstName !== undefined) staffRecord.firstName = dto.firstName;
+      if (dto.lastName !== undefined) staffRecord.lastName = dto.lastName;
+      if (dto.phone !== undefined) staffRecord.phone = dto.phone;
+      await this.staffRepository.save(staffRecord);
+    }
+
+    const { passwordHash, ...result } = user as any;
+    return result;
   }
 }

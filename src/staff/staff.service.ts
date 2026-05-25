@@ -9,7 +9,6 @@ import { Repository } from 'typeorm';
 import {
   Staff,
   StaffPosition,
-  OrganizationType,
 } from './entities/staff.entity';
 import { User } from '../users/entities/user.entity';
 import { OrganisationUser } from '../organisation-users/entities/organisation-user.entity';
@@ -68,12 +67,7 @@ export class StaffService {
   ];
 
   private async getOrganizationId(userId: string): Promise<string> {
-    const user = await this.usersRepository.findOne({ where: { id: userId } });
-    if (user?.clinicId || user?.manufacturerId) {
-      // Cast to string as we checked for existence
-      return (user.clinicId || user.manufacturerId) as string;
-    }
-
+    // organisation_users is the authoritative source for org membership
     const orgUser = await this.organisationUsersRepository.findOne({
       where: { userId },
     });
@@ -87,7 +81,7 @@ export class StaffService {
 
   async findAll(userId: string, userRole: string, query: GetStaffDto) {
     console.log('[Staff Service] findAll called:', { userId, userRole, query });
-    const { page = 1, limit = 20, position, isActive, organizationId } = query;
+    const { page = 1, limit = 20, position, isActive, organizationId: organisationId } = query;
     const skip = (page - 1) * limit;
 
     // Only clinic, manufacturer and admin users can access staff
@@ -98,29 +92,29 @@ export class StaffService {
     // Determine which organization to filter by
     let targetOrganizationId: string | null = null;
 
-    if (organizationId && ['admin', 'SUPER_ADMIN'].includes(userRole)) {
-      // Admin provided specific organizationId in query - use that
-      targetOrganizationId = organizationId;
-      console.log('[Staff Service] Admin filtering by provided organizationId:', targetOrganizationId);
+    if (organisationId && ['admin', 'SUPER_ADMIN'].includes(userRole)) {
+      // Admin provided specific organisationId in query - use that
+      targetOrganizationId = organisationId;
+      console.log('[Staff Service] Admin filtering by provided organisationId:', targetOrganizationId);
     } else if (!['admin', 'SUPER_ADMIN'].includes(userRole)) {
       // Non-admin users: filter by their own organization
       try {
         targetOrganizationId = await this.getOrganizationId(userId);
-        console.log('[Staff Service] Non-admin user, filtering by their organizationId:', targetOrganizationId);
+        console.log('[Staff Service] Non-admin user, filtering by their organisationId:', targetOrganizationId);
       } catch (e) {
         console.log('[Staff Service] Organization check failed:', e.message);
         throw new ForbiddenException('User organization not found');
       }
     }
-    // If admin and no organizationId provided, targetOrganizationId stays null (show all)
+    // If admin and no organisationId provided, targetOrganizationId stays null (show all)
 
     // Build query
     const queryBuilder = this.staffRepository.createQueryBuilder('staff');
 
     if (targetOrganizationId) {
-      console.log('[Staff Service] Filtering by organizationId:', targetOrganizationId);
-      queryBuilder.where('staff.organizationId = :organizationId', {
-        organizationId: targetOrganizationId,
+      console.log('[Staff Service] Filtering by organisationId:', targetOrganizationId);
+      queryBuilder.where('staff.organisationId = :organisationId', {
+        organisationId: targetOrganizationId,
       });
     }
 
@@ -160,8 +154,8 @@ export class StaffService {
 
     // Verify user belongs to same organization (unless admin)
     if (!['admin', 'SUPER_ADMIN'].includes(userRole)) {
-      const organizationId = await this.getOrganizationId(userId);
-      if (staff.organizationId !== organizationId) {
+      const organisationId = await this.getOrganizationId(userId);
+      if (staff.organisationId !== organisationId) {
         throw new ForbiddenException(
           'You do not have access to this staff member',
         );
@@ -179,11 +173,11 @@ export class StaffService {
       );
     }
 
-    const organizationId = await this.getOrganizationId(userId);
+    const organisationId = await this.getOrganizationId(userId);
 
     // Validate position matches organization type
     // We assume clinic for now if checking organization users, or logic needs to be smarter
-    // For now, let's allow all positions if we found valid organizationId
+    // For now, let's allow all positions if we found valid organisationId
     const allowedPositions = [...this.clinicPositions, ...this.manufacturerPositions];
 
     if (!allowedPositions.includes(createDto.position)) {
@@ -201,7 +195,7 @@ export class StaffService {
     }
 
     const staff = this.staffRepository.create({
-      organizationId,
+      organisationId,
       firstName: createDto.firstName,
       lastName: createDto.lastName,
       position: createDto.position,
@@ -209,18 +203,9 @@ export class StaffService {
       email: createDto.email || null,
       phone: createDto.phone || null,
       whatsappNumber: createDto.whatsappNumber || null,
-      addressStreet: createDto.address?.street || null,
-      addressCity: createDto.address?.city || null,
-      addressDistrict: createDto.address?.district || null,
-      addressState: createDto.address?.state || null,
-      addressZipCode: createDto.address?.zipCode || null,
-      addressCountry: createDto.address?.country || null,
-      dateOfBirth: createDto.dateOfBirth
-        ? new Date(createDto.dateOfBirth)
-        : null,
-      dateOfJoining: createDto.dateOfJoining
-        ? new Date(createDto.dateOfJoining)
-        : null,
+      address: (createDto.address as Record<string, any>) || null,
+      dateOfBirth: createDto.dateOfBirth ? new Date(createDto.dateOfBirth) : null,
+      dateOfJoining: createDto.dateOfJoining ? new Date(createDto.dateOfJoining) : null,
       salary: createDto.salary || null,
       qualifications: createDto.qualifications || null,
       specialization: createDto.specialization || null,
@@ -228,7 +213,7 @@ export class StaffService {
       notes: createDto.notes || null,
     });
 
-    const savedStaff = await this.staffRepository.save(staff);
+    const savedStaff = await this.staffRepository.save(staff) as Staff;
 
     // Create user account if requested
     if (createDto.createUserAccount && createDto.password) {
@@ -261,9 +246,10 @@ export class StaffService {
       // Create organisation_users entry
       const orgUser = this.organisationUsersRepository.create({
         userId: savedUser.id,
-        organisationId: organizationId,
+        organisationId: organisationId,
         role: role as any,
         isPrimary: false,
+        permissions: this.getDefaultPermissions(role),
       });
 
       await this.organisationUsersRepository.save(orgUser);
@@ -292,8 +278,8 @@ export class StaffService {
 
     // Verify user belongs to same organization (unless admin)
     if (!['admin', 'SUPER_ADMIN'].includes(userRole)) {
-      const organizationId = await this.getOrganizationId(userId);
-      if (staff.organizationId !== organizationId) {
+      const organisationId = await this.getOrganizationId(userId);
+      if (staff.organisationId !== organisationId) {
         throw new ForbiddenException(
           'You do not have access to this staff member',
         );
@@ -322,12 +308,7 @@ export class StaffService {
     if (updateDto.whatsappNumber !== undefined)
       staff.whatsappNumber = updateDto.whatsappNumber;
     if (updateDto.address !== undefined) {
-      staff.addressStreet = updateDto.address?.street || null;
-      staff.addressCity = updateDto.address?.city || null;
-      staff.addressDistrict = updateDto.address?.district || null;
-      staff.addressState = updateDto.address?.state || null;
-      staff.addressZipCode = updateDto.address?.zipCode || null;
-      staff.addressCountry = updateDto.address?.country || null;
+      staff.address = (updateDto.address as Record<string, any>) || null;
     }
     if (updateDto.dateOfBirth !== undefined)
       staff.dateOfBirth = updateDto.dateOfBirth
@@ -378,9 +359,10 @@ export class StaffService {
       // Create organisation_users entry
       const orgUser = this.organisationUsersRepository.create({
         userId: savedUser.id,
-        organisationId: updatedStaff.organizationId,
+        organisationId: updatedStaff.organisationId,
         role: role as any,
         isPrimary: false,
+        permissions: this.getDefaultPermissions(role),
       });
 
       await this.organisationUsersRepository.save(orgUser);
@@ -404,8 +386,8 @@ export class StaffService {
 
     // Verify user belongs to same organization (unless admin)
     if (!['admin', 'SUPER_ADMIN'].includes(userRole)) {
-      const organizationId = await this.getOrganizationId(userId);
-      if (staff.organizationId !== organizationId) {
+      const organisationId = await this.getOrganizationId(userId);
+      if (staff.organisationId !== organisationId) {
         throw new ForbiddenException(
           'You do not have access to this staff member',
         );
@@ -425,8 +407,8 @@ export class StaffService {
 
     // Verify user belongs to same organization (unless admin)
     if (!['admin', 'SUPER_ADMIN'].includes(userRole)) {
-      const organizationId = await this.getOrganizationId(userId);
-      if (staff.organizationId !== organizationId) {
+      const organisationId = await this.getOrganizationId(userId);
+      if (staff.organisationId !== organisationId) {
         throw new ForbiddenException(
           'You do not have access to this staff member',
         );
@@ -467,7 +449,7 @@ export class StaffService {
       console.log('[Staff Service] Staff found:', {
         id: staff.id,
         name: `${staff.firstName} ${staff.lastName}`,
-        organizationId: staff.organizationId,
+        organisationId: staff.organisationId,
         email: staff.email,
         phone: staff.phone
       });
@@ -475,10 +457,10 @@ export class StaffService {
       // Verify user belongs to same organization
       if (!['SUPER_ADMIN'].includes(userRole)) {
         console.log('[Staff Service] Verifying organization access...');
-        const organizationId = await this.getOrganizationId(userId);
-        console.log('[Staff Service] User organizationId:', organizationId);
+        const organisationId = await this.getOrganizationId(userId);
+        console.log('[Staff Service] User organisationId:', organisationId);
 
-        if (staff.organizationId !== organizationId) {
+        if (staff.organisationId !== organisationId) {
           throw new ForbiddenException(
             'You do not have access to this staff member',
           );
@@ -531,9 +513,10 @@ export class StaffService {
       console.log('[Staff Service] Creating organisation_users entry...');
       const orgUserData = {
         userId: savedUser.id,
-        organisationId: staff.organizationId,
+        organisationId: staff.organisationId,
         role: role as any,
-        isPrimary: false, // Set to false to avoid unique constraint on organisation_id
+        isPrimary: false,
+        permissions: this.getDefaultPermissions(role),
       };
       console.log('[Staff Service] OrgUser data:', orgUserData);
 
@@ -653,8 +636,8 @@ export class StaffService {
 
     // Verify user belongs to same organization
     if (!['SUPER_ADMIN'].includes(userRole)) {
-      const organizationId = await this.getOrganizationId(userId);
-      if (staff.organizationId !== organizationId) {
+      const organisationId = await this.getOrganizationId(userId);
+      if (staff.organisationId !== organisationId) {
         throw new ForbiddenException(
           'You do not have access to this staff member',
         );
@@ -696,6 +679,13 @@ export class StaffService {
   // HELPER METHODS
   // ============================================================================
 
+  private getDefaultPermissions(role: string): Record<string, boolean> {
+    const base = { dashboard: true, patients: true, appointments: true, admissions: true, doctors: false, ipd: false, duty: false, billing: false, staff: false, marketplace: false };
+    if (role === 'MANAGER') return Object.fromEntries(Object.keys(base).map(k => [k, true])) as Record<string, boolean>;
+    if (role === 'DOCTOR') return { ...base, doctors: true };
+    return base;
+  }
+
   private mapPositionToRole(position: StaffPosition): string {
     const roleMapping = {
       [StaffPosition.DOCTOR]: 'DOCTOR',
@@ -718,7 +708,7 @@ export class StaffService {
   private mapToResponse(staff: Staff) {
     return {
       id: staff.id,
-      organizationId: staff.organizationId,
+      organisationId: staff.organisationId,
       firstName: staff.firstName,
       lastName: staff.lastName,
       position: staff.position,
@@ -726,22 +716,7 @@ export class StaffService {
       email: staff.email,
       phone: staff.phone,
       whatsappNumber: staff.whatsappNumber,
-      address:
-        staff.addressStreet ||
-          staff.addressCity ||
-          staff.addressDistrict ||
-          staff.addressState ||
-          staff.addressZipCode ||
-          staff.addressCountry
-          ? {
-            street: staff.addressStreet,
-            city: staff.addressCity,
-            district: staff.addressDistrict,
-            state: staff.addressState,
-            zipCode: staff.addressZipCode,
-            country: staff.addressCountry,
-          }
-          : null,
+      address: staff.address || null,
       dateOfBirth: staff.dateOfBirth
         ? (typeof staff.dateOfBirth === 'string'
           ? (staff.dateOfBirth as string).split('T')[0]
