@@ -338,7 +338,7 @@ export class PatientBillingService {
       bill.subtotal = subtotal;
       bill.discount = updateDto.discount ?? bill.discount;
       bill.tax = updateDto.tax ?? bill.tax;
-      bill.total = subtotal - Number(bill.discount) + Number(bill.tax);
+      // total is GENERATED ALWAYS AS (subtotal - discount + tax) in PostgreSQL — do not set
     }
 
     if (updateDto.billNumber !== undefined)

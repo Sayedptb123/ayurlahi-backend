@@ -1,25 +1,32 @@
 import {
-    IsEnum,
+    IsString,
     IsNumber,
-    IsBoolean,
     IsDateString,
     Min,
     IsOptional,
+    MaxLength,
 } from 'class-validator';
-import { ExpenseCategory } from '../../expenses/entities/expense.entity';
 
 export class CreateBudgetDto {
-    @IsEnum(ExpenseCategory)
-    category: ExpenseCategory;
+    @IsString()
+    @MaxLength(255)
+    name: string;
+
+    @IsOptional()
+    @IsString()
+    description?: string;
 
     @IsNumber()
     @Min(0)
-    amount: number;
+    totalAmount: number;
 
     @IsDateString()
-    period: string;
+    periodStart: string;
+
+    @IsDateString()
+    periodEnd: string;
 
     @IsOptional()
-    @IsBoolean()
-    alertsEnabled?: boolean;
+    @IsString()
+    status?: string;
 }

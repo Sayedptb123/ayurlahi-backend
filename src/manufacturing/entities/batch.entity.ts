@@ -7,6 +7,7 @@ import {
     CreateDateColumn,
     UpdateDateColumn,
     OneToMany,
+    Index,
 } from 'typeorm';
 import { Organisation } from '../../organisations/entities/organisation.entity';
 import { ManufacturingFormula } from './manufacturing-formula.entity';
@@ -22,6 +23,8 @@ export enum BatchStatus {
     FAILED = 'FAILED', // Process failure or QC reject
 }
 
+// DB has UNIQUE(manufacturer_id, batch_number) WHERE deleted_at IS NULL (partial index)
+@Index(['manufacturerId', 'batchNumber'], { unique: true, where: '"deleted_at" IS NULL' })
 @Entity('batches')
 export class Batch {
     @PrimaryGeneratedColumn('uuid')
@@ -34,7 +37,7 @@ export class Batch {
     @JoinColumn({ name: 'manufacturer_id' })
     manufacturer: Organisation;
 
-    @Column({ type: 'varchar', length: 50, unique: true, name: 'batch_number' })
+    @Column({ type: 'varchar', length: 50, name: 'batch_number' })
     batchNumber: string;
 
     @Column({ type: 'uuid', name: 'formula_id', nullable: true })
@@ -87,4 +90,7 @@ export class Batch {
 
     @UpdateDateColumn({ name: 'updated_at' })
     updatedAt: Date;
+
+    @Column({ type: 'timestamp', nullable: true, name: 'deleted_at' })
+    deletedAt: Date | null;
 }

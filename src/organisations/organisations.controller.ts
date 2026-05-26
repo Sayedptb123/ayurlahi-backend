@@ -9,12 +9,19 @@ import {
   Query,
   UseGuards,
   Request,
+  ForbiddenException,
 } from '@nestjs/common';
 import { OrganisationsService } from './organisations.service';
 import { CreateOrganisationDto } from './dto/create-organisation.dto';
 import { UpdateOrganisationDto } from './dto/update-organisation.dto';
 import { GetOrganisationsDto } from './dto/get-organisations.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+
+function requireTeam(req: any) {
+  if (req.user?.organisationType !== 'AYURLAHI_TEAM') {
+    throw new ForbiddenException('Only Ayurlahi Team members can perform this action');
+  }
+}
 
 @Controller('organisations')
 @UseGuards(JwtAuthGuard)
@@ -27,27 +34,36 @@ export class OrganisationsController {
   }
 
   @Get()
-  findAll(@Query() query: GetOrganisationsDto) {
+  findAll(@Query() query: GetOrganisationsDto, @Request() req) {
+    requireTeam(req);
     return this.organisationsService.findAll(query);
   }
 
   @Get(':id')
-  findOne(@Param('id') id: string) {
+  findOne(@Param('id') id: string, @Request() req) {
+    const isTeam = req.user?.organisationType === 'AYURLAHI_TEAM';
+    const isOwnOrg = req.user?.organisationId === id;
+    if (!isTeam && !isOwnOrg) {
+      throw new ForbiddenException('You can only view your own organisation');
+    }
     return this.organisationsService.findOne(id);
   }
 
   @Patch(':id')
-  update(@Param('id') id: string, @Body() updateDto: UpdateOrganisationDto) {
+  update(@Param('id') id: string, @Body() updateDto: UpdateOrganisationDto, @Request() req) {
+    requireTeam(req);
     return this.organisationsService.update(id, updateDto);
   }
 
   @Delete(':id')
-  remove(@Param('id') id: string) {
+  remove(@Param('id') id: string, @Request() req) {
+    requireTeam(req);
     return this.organisationsService.remove(id);
   }
 
   @Post(':id/approve')
   approve(@Param('id') id: string, @Request() req) {
+    requireTeam(req);
     return this.organisationsService.approve(id, req.user?.userId);
   }
 
@@ -57,10 +73,7 @@ export class OrganisationsController {
     @Body('rejectionReason') rejectionReason: string,
     @Request() req,
   ) {
-    return this.organisationsService.reject(
-      id,
-      rejectionReason,
-      req.user?.userId,
-    );
+    requireTeam(req);
+    return this.organisationsService.reject(id, rejectionReason, req.user?.userId);
   }
 }

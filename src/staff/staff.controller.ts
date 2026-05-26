@@ -13,6 +13,7 @@ import {
   HttpCode,
   HttpStatus,
 } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { StaffService } from './staff.service';
 import { CreateStaffDto } from './dto/create-staff.dto';
 import { UpdateStaffDto } from './dto/update-staff.dto';
@@ -105,6 +106,7 @@ export class StaffPublicController {
 
   @Post('accept-invitation')
   @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { ttl: 900000, limit: 5 } })
   async acceptInvitation(
     @Body() acceptDto: { token: string; password: string; confirmPassword: string },
   ) {

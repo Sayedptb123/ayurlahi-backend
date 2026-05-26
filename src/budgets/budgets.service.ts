@@ -31,7 +31,7 @@ export class BudgetsService {
 
         return this.budgetRepository.find({
             where: { organisationId: orgId },
-            order: { period: 'DESC' },
+            order: { periodStart: 'DESC' },
         });
     }
 

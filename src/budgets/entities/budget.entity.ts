@@ -5,13 +5,14 @@ import {
     CreateDateColumn,
     UpdateDateColumn,
     Index,
+    ManyToOne,
+    JoinColumn,
 } from 'typeorm';
-import { ExpenseCategory } from '../../expenses/entities/expense.entity';
+import { Organisation } from '../../organisations/entities/organisation.entity';
 
+// DB enforces UNIQUE(organisation_id, name, period_start) WHERE deleted_at IS NULL
+@Index(['organisationId', 'status'])
 @Entity('budgets')
-@Index(['organisationId'])
-@Index(['category'])
-@Index(['period'])
 export class Budget {
     @PrimaryGeneratedColumn('uuid')
     id: string;
@@ -19,27 +20,39 @@ export class Budget {
     @Column({ type: 'uuid', name: 'organisation_id' })
     organisationId: string;
 
-    @Column({
-        type: 'enum',
-        enum: ExpenseCategory,
-        name: 'category',
-    })
-    category: ExpenseCategory;
+    @ManyToOne(() => Organisation)
+    @JoinColumn({ name: 'organisation_id' })
+    organisation: Organisation;
 
-    @Column({ type: 'decimal', precision: 10, scale: 2, name: 'amount' })
-    amount: number;
+    @Column({ type: 'varchar', length: 255, name: 'name' })
+    name: string;
 
-    @Column({ type: 'date', name: 'period' })
-    period: Date;
+    @Column({ type: 'text', nullable: true, name: 'description' })
+    description: string | null;
 
-    @Column({ type: 'boolean', default: true, name: 'alerts_enabled' })
-    alertsEnabled: boolean;
+    @Column({ type: 'decimal', precision: 12, scale: 2, name: 'total_amount' })
+    totalAmount: number;
 
-    @Column({ type: 'timestamp', nullable: true, name: 'deleted_at' })
-    deletedAt: Date | null;
+    @Column({ type: 'decimal', precision: 12, scale: 2, default: 0, name: 'spent_amount' })
+    spentAmount: number;
+
+    @Column({ type: 'date', name: 'period_start' })
+    periodStart: Date;
+
+    @Column({ type: 'date', name: 'period_end' })
+    periodEnd: Date;
+
+    @Column({ type: 'varchar', length: 50, default: 'active', name: 'status' })
+    status: string;
+
+    @Column({ type: 'uuid', nullable: true, name: 'created_by' })
+    createdBy: string | null;
 
     @Column({ type: 'uuid', nullable: true, name: 'updated_by' })
     updatedBy: string | null;
+
+    @Column({ type: 'timestamp', nullable: true, name: 'deleted_at' })
+    deletedAt: Date | null;
 
     @CreateDateColumn({ name: 'created_at' })
     createdAt: Date;

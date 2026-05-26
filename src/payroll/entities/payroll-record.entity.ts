@@ -65,6 +65,12 @@ export class PayrollRecord {
     @Column({ type: 'text', nullable: true, name: 'transaction_ref' })
     transactionRef: string | null;
 
+    @Column({ type: 'uuid', nullable: true, name: 'created_by' })
+    createdBy: string | null;
+
+    @Column({ type: 'uuid', nullable: true, name: 'updated_by' })
+    updatedBy: string | null;
+
     @CreateDateColumn({ name: 'created_at' })
     createdAt: Date;
 

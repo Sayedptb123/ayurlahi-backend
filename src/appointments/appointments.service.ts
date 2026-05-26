@@ -328,7 +328,25 @@ export class AppointmentsService {
       }
     }
 
-    // If cancelling, set cancelledAt and cancellationReason
+    // State machine — enforce valid transitions
+    if (updateDto.status && updateDto.status !== appointment.status) {
+      const TRANSITIONS: Record<AppointmentStatus, AppointmentStatus[]> = {
+        [AppointmentStatus.SCHEDULED]:   [AppointmentStatus.CONFIRMED, AppointmentStatus.CANCELLED, AppointmentStatus.NO_SHOW],
+        [AppointmentStatus.CONFIRMED]:   [AppointmentStatus.IN_PROGRESS, AppointmentStatus.COMPLETED, AppointmentStatus.CANCELLED, AppointmentStatus.NO_SHOW],
+        [AppointmentStatus.IN_PROGRESS]: [AppointmentStatus.COMPLETED, AppointmentStatus.CANCELLED, AppointmentStatus.NO_SHOW],
+        [AppointmentStatus.COMPLETED]:   [],
+        [AppointmentStatus.CANCELLED]:   [],
+        [AppointmentStatus.NO_SHOW]:     [],
+      };
+      const allowed = TRANSITIONS[appointment.status] ?? [];
+      if (!allowed.includes(updateDto.status)) {
+        throw new BadRequestException(
+          `Cannot transition appointment from '${appointment.status}' to '${updateDto.status}'`,
+        );
+      }
+    }
+
+    // Set cancelledAt when moving to CANCELLED
     if (
       updateDto.status === AppointmentStatus.CANCELLED &&
       appointment.status !== AppointmentStatus.CANCELLED
@@ -401,7 +419,7 @@ export class AppointmentsService {
       organisationId,
       organisationType,
     );
-    await this.appointmentsRepository.remove(appointment);
+    await this.appointmentsRepository.softDelete(appointment.id);
     return { message: 'Appointment deleted successfully' };
   }
 }

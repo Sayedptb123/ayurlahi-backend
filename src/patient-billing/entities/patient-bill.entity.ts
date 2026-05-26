@@ -61,8 +61,8 @@ export class PatientBill {
   @Column({ type: 'decimal', precision: 12, scale: 2, default: 0, name: 'tax' })
   tax: number;
 
-  // total = subtotal - discount + tax (compute in app, do not set independently)
-  @Column({ type: 'decimal', precision: 12, scale: 2, name: 'total' })
+  // PostgreSQL GENERATED ALWAYS AS (subtotal - discount + tax) STORED — never set this manually
+  @Column({ type: 'decimal', precision: 12, scale: 2, name: 'total', insert: false, update: false })
   total: number;
 
   @Column({ type: 'decimal', precision: 12, scale: 2, default: 0, name: 'paid_amount' })

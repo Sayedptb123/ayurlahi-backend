@@ -129,51 +129,53 @@ export class OrdersService {
       throw new BadRequestException('Clinic not found');
     }
 
-    // Validate and get products
-    const products = await Promise.all(
-      createOrderDto.items.map(async (item) => {
-        const product = await this.productsRepository.findOne({
+    // Validate, lock, and decrement stock inside a transaction to prevent race conditions
+    type ProductWithItem = { product: Product; itemDto: (typeof createOrderDto.items)[0] };
+    const products: ProductWithItem[] = [];
+    let subtotal = 0;
+    let totalGstAmount = 0;
+    const orderItems: Partial<OrderItem>[] = [];
+
+    await this.productsRepository.manager.transaction(async (manager) => {
+      const productRepo = manager.getRepository(Product);
+
+      for (const item of createOrderDto.items) {
+        // Pessimistic write lock — blocks concurrent reads until this transaction commits
+        const product = await productRepo.findOne({
           where: { id: item.productId, deletedAt: IsNull() },
+          lock: { mode: 'pessimistic_write' },
         });
 
         if (!product) {
-          throw new NotFoundException(
-            `Product with ID ${item.productId} not found`,
-          );
+          throw new NotFoundException(`Product with ID ${item.productId} not found`);
         }
-
         if (product.status !== 'active') {
-          throw new BadRequestException(
-            `Product ${product.name} is not active`,
-          );
+          throw new BadRequestException(`Product ${product.name} is not active`);
         }
-
         if (product.stockQuantity < item.quantity) {
           throw new BadRequestException(
             `Insufficient stock for ${product.name}. Available: ${product.stockQuantity}, Requested: ${item.quantity}`,
           );
         }
-
         if (item.quantity < product.minOrderQuantity) {
           throw new BadRequestException(
             `Minimum order quantity for ${product.name} is ${product.minOrderQuantity}`,
           );
         }
 
-        return { product, itemDto: item };
-      }),
-    );
+        // Decrement inside the transaction while the row is locked
+        await productRepo.decrement({ id: product.id }, 'stockQuantity', item.quantity);
+        product.stockQuantity -= item.quantity;
+        products.push({ product, itemDto: item });
+      }
+    });
 
-    // Calculate totals
-    let subtotal = 0;
-    let totalGstAmount = 0;
-    const orderItems: Partial<OrderItem>[] = [];
-
+    // Calculate totals from locked-and-decremented products
     for (const { product, itemDto } of products) {
       const itemSubtotal = Number(product.price) * itemDto.quantity;
       const itemGstAmount = (itemSubtotal * Number(product.gstRate)) / 100;
       const itemTotal = itemSubtotal + itemGstAmount;
-      const commissionAmount = (itemTotal * 0.05) / 100; // 5% platform commission
+      const commissionAmount = (itemTotal * 0.05) / 100;
 
       subtotal += itemSubtotal;
       totalGstAmount += itemGstAmount;
@@ -194,15 +196,12 @@ export class OrdersService {
       });
     }
 
-    const shippingCharges = 0; // Can be calculated based on address
-    const platformFee = 0; // Can be calculated
-    const totalAmount =
-      subtotal + totalGstAmount + shippingCharges + platformFee;
+    const shippingCharges = 0;
+    const platformFee = 0;
+    const totalAmount = subtotal + totalGstAmount + shippingCharges + platformFee;
 
-    // Generate order number
     const orderNumber = `ORD-${Date.now()}-${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
 
-    // Create order
     const order = this.ordersRepository.create({
       organisationId: clinicId,
       orderNumber,
@@ -227,13 +226,6 @@ export class OrdersService {
     } as any) as unknown as Order;
 
     const savedOrder = (await this.ordersRepository.save(order)) as unknown as Order;
-
-    // Update product stock
-    for (const { product, itemDto } of products) {
-      await this.productsRepository.update(product.id, {
-        stockQuantity: product.stockQuantity - itemDto.quantity,
-      });
-    }
 
     // Reload order with relations
     const orderWithRelations = await this.ordersRepository.findOne({
