@@ -197,7 +197,7 @@ export class PatientBillingService {
 
     if (organisationType === 'CLINIC') {
       if (!organisationId) {
-        return { data: [], total: 0, page, limit, totalPages: 0 };
+        return { data: [], pagination: { total: 0, page, limit, totalPages: 0 } };
       }
       queryBuilder.where('bill.organisationId = :organisationId', {
         organisationId,
@@ -237,7 +237,7 @@ export class PatientBillingService {
 
     const [data, total] = await queryBuilder.getManyAndCount();
 
-    return { data, total, page, limit, totalPages: Math.ceil(total / limit) };
+    return { data, pagination: { total, page, limit, totalPages: Math.ceil(total / limit) } };
   }
 
   async findOne(
