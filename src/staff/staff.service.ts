@@ -3,9 +3,10 @@ import {
   NotFoundException,
   ForbiddenException,
   BadRequestException,
+  ConflictException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, In } from 'typeorm';
 import {
   Staff,
   StaffPosition,
@@ -17,6 +18,7 @@ import { UpdateStaffDto } from './dto/update-staff.dto';
 import { GetStaffDto } from './dto/get-staff.dto';
 import * as bcrypt from 'bcryptjs';
 import * as crypto from 'crypto';
+import { NotificationsService } from '../notifications/notifications.service';
 
 
 @Injectable()
@@ -28,6 +30,7 @@ export class StaffService {
     private usersRepository: Repository<User>,
     @InjectRepository(OrganisationUser)
     private organisationUsersRepository: Repository<OrganisationUser>,
+    private readonly notificationsService: NotificationsService,
   ) { }
 
   // Clinic positions that clinic users can create
@@ -227,18 +230,37 @@ export class StaffService {
       // Hash password
       const hashedPassword = await bcrypt.hash(createDto.password, 10);
 
-      // Create user account
-      const user = this.usersRepository.create({
-        email: savedStaff.email || null,
-        phone: savedStaff.phone || `STAFF_${Date.now()}`,
-        firstName: savedStaff.firstName,
-        lastName: savedStaff.lastName,
-        passwordHash: hashedPassword,
-        isActive: true,
-        isEmailVerified: false,
-      });
+      // Re-use existing user if email/phone already exists, otherwise create
+      const emailPhoneWhere: any[] = [];
+      if (savedStaff.email) emailPhoneWhere.push({ email: savedStaff.email });
+      if (savedStaff.phone) emailPhoneWhere.push({ phone: savedStaff.phone });
+      const existingUser = emailPhoneWhere.length
+        ? await this.usersRepository.findOne({ where: emailPhoneWhere })
+        : null;
 
-      const savedUser = await this.usersRepository.save(user);
+      let savedUser: User;
+      if (existingUser) {
+        const alreadyInOrg = await this.organisationUsersRepository.findOne({
+          where: { userId: existingUser.id, organisationId },
+        });
+        if (alreadyInOrg) {
+          throw new ConflictException(
+            'A user with this email or phone already belongs to this organisation',
+          );
+        }
+        savedUser = existingUser;
+      } else {
+        const user = this.usersRepository.create({
+          email: savedStaff.email || null,
+          phone: savedStaff.phone || `STAFF_${Date.now()}`,
+          firstName: savedStaff.firstName,
+          lastName: savedStaff.lastName,
+          passwordHash: hashedPassword,
+          isActive: true,
+          isEmailVerified: false,
+        });
+        savedUser = await this.usersRepository.save(user);
+      }
 
       // Map staff position to organization role
       const role = this.mapPositionToRole(savedStaff.position);
@@ -254,11 +276,15 @@ export class StaffService {
 
       await this.organisationUsersRepository.save(orgUser);
 
-      // Update staff record with user ID
+      // Update staff record with user ID (use update() to avoid sending null organisationType)
+      await this.staffRepository.update(savedStaff.id, {
+        userId: savedUser.id,
+        hasUserAccount: true,
+        userAccountStatus: 'active' as any,
+      });
       savedStaff.userId = savedUser.id;
       savedStaff.hasUserAccount = true;
-      savedStaff.userAccountStatus = 'active';
-      await this.staffRepository.save(savedStaff);
+      savedStaff.userAccountStatus = 'active' as any;
     }
 
     return this.mapToResponse(savedStaff);
@@ -337,41 +363,67 @@ export class StaffService {
         );
       }
 
-      // Hash password
-      const hashedPassword = await bcrypt.hash(updateDto.password, 10);
+      // Check for an existing user with this email/phone
+      const emailPhoneWhere: any[] = [];
+      if (updatedStaff.email) emailPhoneWhere.push({ email: updatedStaff.email });
+      if (updatedStaff.phone) emailPhoneWhere.push({ phone: updatedStaff.phone });
+      const existingUser = emailPhoneWhere.length
+        ? await this.usersRepository.findOne({ where: emailPhoneWhere })
+        : null;
 
-      // Create user account
-      const user = this.usersRepository.create({
-        email: updatedStaff.email || null,
-        phone: updatedStaff.phone || `STAFF_${Date.now()}`,
-        firstName: updatedStaff.firstName,
-        lastName: updatedStaff.lastName,
-        passwordHash: hashedPassword,
-        isActive: true,
-        isEmailVerified: false,
-      });
-
-      const savedUser = await this.usersRepository.save(user);
+      let savedUser: User;
+      if (existingUser) {
+        const alreadyInOrg = await this.organisationUsersRepository.findOne({
+          where: { userId: existingUser.id, organisationId: updatedStaff.organisationId },
+        });
+        if (alreadyInOrg) {
+          throw new ConflictException(
+            'A user with this email or phone already belongs to this organisation',
+          );
+        }
+        savedUser = existingUser;
+      } else {
+        const hashedPassword = await bcrypt.hash(updateDto.password, 10);
+        const user = this.usersRepository.create({
+          email: updatedStaff.email || null,
+          phone: updatedStaff.phone || `STAFF_${Date.now()}`,
+          firstName: updatedStaff.firstName,
+          lastName: updatedStaff.lastName,
+          passwordHash: hashedPassword,
+          isActive: true,
+          isEmailVerified: false,
+        });
+        savedUser = await (this.usersRepository.save(user) as Promise<User>);
+      }
 
       // Map staff position to organization role
       const role = this.mapPositionToRole(updatedStaff.position);
 
-      // Create organisation_users entry
-      const orgUser = this.organisationUsersRepository.create({
-        userId: savedUser.id,
-        organisationId: updatedStaff.organisationId,
-        role: role as any,
-        isPrimary: false,
-        permissions: this.getDefaultPermissions(role),
+      // Guard: don't create a duplicate org_user if one already exists
+      const existingOrgUser = await this.organisationUsersRepository.findOne({
+        where: { userId: savedUser.id, organisationId: updatedStaff.organisationId },
       });
 
-      await this.organisationUsersRepository.save(orgUser);
+      if (!existingOrgUser) {
+        const orgUser = this.organisationUsersRepository.create({
+          userId: savedUser.id,
+          organisationId: updatedStaff.organisationId,
+          role: role as any,
+          isPrimary: false,
+          permissions: this.getDefaultPermissions(role),
+        });
+        await this.organisationUsersRepository.save(orgUser);
+      }
 
-      // Update staff record with user ID
+      // Use update() to avoid sending null organisationType column
+      await this.staffRepository.update(updatedStaff.id, {
+        userId: savedUser.id,
+        hasUserAccount: true,
+        userAccountStatus: 'active' as any,
+      });
       updatedStaff.userId = savedUser.id;
       updatedStaff.hasUserAccount = true;
-      updatedStaff.userAccountStatus = 'active';
-      await this.staffRepository.save(updatedStaff);
+      updatedStaff.userAccountStatus = 'active' as any;
     }
 
     return this.mapToResponse(updatedStaff);
@@ -617,6 +669,22 @@ export class StaffService {
     staff.userAccountStatus = 'active';
     staff.invitationToken = null; // Clear token after use
     await this.staffRepository.save(staff);
+
+    // Notify org owners and managers that the staff member has joined
+    this.organisationUsersRepository
+      .find({ where: { organisationId: staff.organisationId, role: In(['OWNER', 'MANAGER', 'ADMIN']), isActive: true } })
+      .then((orgUsers) => {
+        const userIds = orgUsers.map((ou) => ou.userId).filter(Boolean) as string[];
+        if (userIds.length > 0) {
+          this.notificationsService.sendToUsers({
+            userIds,
+            title: 'Staff Joined',
+            body: `${staff.firstName} ${staff.lastName} has accepted the invitation and joined as ${staff.position}`,
+            data: { staffId: staff.id, type: 'staff_joined' },
+          }).catch(() => {});
+        }
+      })
+      .catch(() => {});
 
     return {
       message: 'Invitation accepted successfully. You can now log in.',

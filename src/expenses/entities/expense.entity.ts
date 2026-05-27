@@ -7,26 +7,10 @@ import {
     Index,
 } from 'typeorm';
 
-export enum ExpenseCategory {
-    OPERATIONS = 'operations',
-    SALARY = 'salary',
-    INVENTORY = 'inventory',
-    MARKETING = 'marketing',
-    MAINTENANCE = 'maintenance',
-    UTILITIES = 'utilities',
-    OTHER = 'other',
-}
-
-export enum ExpenseStatus {
-    PENDING = 'pending',
-    APPROVED = 'approved',
-    REJECTED = 'rejected',
-}
-
 @Entity('expenses')
 @Index(['organisationId'])
 @Index(['category'])
-@Index(['date'])
+@Index(['expenseDate'])
 export class Expense {
     @PrimaryGeneratedColumn('uuid')
     id: string;
@@ -34,45 +18,45 @@ export class Expense {
     @Column({ type: 'uuid', name: 'organisation_id' })
     organisationId: string;
 
-    @Column({ type: 'decimal', precision: 10, scale: 2, name: 'amount' })
+    @Column({ type: 'decimal', precision: 12, scale: 2, name: 'amount' })
     amount: number;
 
-    @Column({
-        type: 'enum',
-        enum: ExpenseCategory,
-        default: ExpenseCategory.OTHER,
-        name: 'category',
-    })
-    category: ExpenseCategory;
+    @Column({ type: 'varchar', length: 100, name: 'category' })
+    category: string;
 
     @Column({ type: 'text', name: 'description' })
     description: string;
 
-    @Column({ type: 'date', name: 'date' })
-    date: Date;
+    @Column({ type: 'date', name: 'expense_date' })
+    expenseDate: Date;
+
+    @Column({ type: 'uuid', nullable: true, name: 'budget_id' })
+    budgetId: string | null;
+
+    @Column({ type: 'varchar', length: 50, nullable: true, name: 'payment_method' })
+    paymentMethod: string | null;
 
     @Column({ type: 'uuid', nullable: true, name: 'incurred_by' })
     incurredBy: string | null;
 
-    @Column({ type: 'text', nullable: true, name: 'receipt_url' })
+    @Column({ type: 'varchar', length: 500, nullable: true, name: 'receipt_url' })
     receiptUrl: string | null;
 
-    @Column({
-        type: 'enum',
-        enum: ExpenseStatus,
-        default: ExpenseStatus.PENDING,
-        name: 'status',
-    })
-    status: ExpenseStatus;
+    // pending | verified | flagged
+    @Column({ type: 'varchar', length: 20, default: 'pending', name: 'status' })
+    status: string;
 
-    @Column({ type: 'text', nullable: true, name: 'rejection_reason' })
-    rejectionReason: string | null;
+    @Column({ type: 'text', nullable: true, name: 'flag_reason' })
+    flagReason: string | null;
 
     @Column({ type: 'uuid', nullable: true, name: 'approved_by' })
     approvedBy: string | null;
 
     @Column({ type: 'timestamp', nullable: true, name: 'approved_at' })
     approvedAt: Date | null;
+
+    @Column({ type: 'uuid', name: 'created_by' })
+    createdBy: string;
 
     @Column({ type: 'uuid', nullable: true, name: 'updated_by' })
     updatedBy: string | null;

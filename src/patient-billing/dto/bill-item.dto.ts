@@ -6,6 +6,7 @@ import {
   IsNumber,
   Min,
   MaxLength,
+  IsInt,
 } from 'class-validator';
 import { BillItemType } from '../entities/bill-item.entity';
 
@@ -37,4 +38,9 @@ export class BillItemDto {
   @IsOptional()
   @IsString()
   description?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  order?: number;
 }

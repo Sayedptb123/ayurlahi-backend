@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, DataSource, EntityManager } from 'typeorm';
+import { Repository, DataSource, In } from 'typeorm';
 import { RawMaterial } from './entities/raw-material.entity';
 import { InventoryTransaction, TransactionType } from './entities/inventory-transaction.entity';
 import { ManufacturingFormula } from './entities/manufacturing-formula.entity';
@@ -9,6 +9,8 @@ import { Batch, BatchStatus } from './entities/batch.entity';
 import { BatchStage, StageStatus } from './entities/batch-stage.entity';
 import { ProcessStage } from './entities/process-stage.entity';
 import { WastageLog } from './entities/wastage-log.entity';
+import { OrganisationUser } from '../organisation-users/entities/organisation-user.entity';
+import { NotificationsService } from '../notifications/notifications.service';
 
 @Injectable()
 export class ManufacturingService {
@@ -23,7 +25,10 @@ export class ManufacturingService {
         private batchRepository: Repository<Batch>,
         @InjectRepository(ProcessStage)
         private processStageRepository: Repository<ProcessStage>,
+        @InjectRepository(OrganisationUser)
+        private orgUserRepository: Repository<OrganisationUser>,
         private dataSource: DataSource,
+        private notificationsService: NotificationsService,
     ) { }
 
     // --- Raw Materials ---
@@ -258,6 +263,25 @@ export class ManufacturingService {
                 await manager.save(product);
             }
 
+            return batch;
+        }).then((batch) => {
+            // Notify OWNER+MANAGER after batch completes
+            if (batch.manufacturerId) {
+                this.orgUserRepository
+                    .find({ where: { organisationId: batch.manufacturerId, role: In(['OWNER', 'MANAGER']), isActive: true } })
+                    .then((orgUsers) => {
+                        const userIds = orgUsers.map((ou) => ou.userId).filter(Boolean);
+                        if (userIds.length > 0) {
+                            this.notificationsService.sendToUsers({
+                                userIds,
+                                title: 'Batch Completed',
+                                body: `Batch ${batch.batchNumber} completed with ${batch.actualYield} units`,
+                                data: { batchId: batch.id, type: 'batch_completed' },
+                            }).catch(() => {});
+                        }
+                    })
+                    .catch(() => {});
+            }
             return batch;
         });
     }

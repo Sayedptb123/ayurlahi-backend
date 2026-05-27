@@ -15,6 +15,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { NotificationsService } from './notifications.service';
 import { RegisterTokenDto } from './dto/register-token.dto';
 import { SendNotificationDto } from './dto/send-notification.dto';
+import { SendCustomNotificationDto } from './dto/send-custom-notification.dto';
 
 @ApiTags('notifications')
 @ApiBearerAuth('access-token')
@@ -59,5 +60,21 @@ export class NotificationsController {
   @Patch('read-all')
   markAllAsRead(@Request() req) {
     return this.notificationsService.markAllAsRead(req.user.userId);
+  }
+
+  @Post('custom')
+  sendCustomNotification(@Request() req, @Body() dto: SendCustomNotificationDto) {
+    return this.notificationsService.sendCustom(req.user.userId, req.user.role, dto);
+  }
+
+  @Get('custom/history')
+  getCustomHistory(
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.notificationsService.getCustomHistory(
+      page ? parseInt(page) : 1,
+      limit ? parseInt(limit) : 20,
+    );
   }
 }

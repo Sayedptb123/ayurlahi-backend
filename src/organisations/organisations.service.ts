@@ -5,7 +5,7 @@ import {
   ConflictException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, IsNull } from 'typeorm';
+import { Repository, IsNull, In } from 'typeorm';
 import { Organisation } from './entities/organisation.entity';
 import { CreateOrganisationDto } from './dto/create-organisation.dto';
 import { UpdateOrganisationDto } from './dto/update-organisation.dto';
@@ -13,6 +13,7 @@ import { GetOrganisationsDto } from './dto/get-organisations.dto';
 
 import { OrganisationUser } from '../organisation-users/entities/organisation-user.entity';
 import { UsersService } from '../users/users.service';
+import { NotificationsService } from '../notifications/notifications.service';
 
 @Injectable()
 export class OrganisationsService {
@@ -22,20 +23,55 @@ export class OrganisationsService {
     @InjectRepository(OrganisationUser)
     private readonly organisationUserRepository: Repository<OrganisationUser>,
     private readonly usersService: UsersService,
+    private readonly notificationsService: NotificationsService,
   ) { }
+
+  private async getTeamUserIds(): Promise<string[]> {
+    const teamOrg = await this.organisationsRepository.findOne({
+      where: { type: 'AYURLAHI_TEAM' as any },
+    });
+    if (!teamOrg) return [];
+    const members = await this.organisationUserRepository.find({
+      where: { organisationId: teamOrg.id, isActive: true },
+    });
+    return members.map((m) => m.userId).filter(Boolean) as string[];
+  }
+
+  private async getOrgOwnerIds(orgId: string): Promise<string[]> {
+    const owners = await this.organisationUserRepository.find({
+      where: { organisationId: orgId, role: 'OWNER' as any, isActive: true },
+    });
+    return owners.map((o) => o.userId).filter(Boolean) as string[];
+  }
 
   async create(
     createDto: CreateOrganisationDto,
     createdBy?: string,
+    callerOrgType?: string,
   ): Promise<Organisation> {
+    const approvalStatus = callerOrgType === 'AYURLAHI_TEAM' ? 'approved' : 'pending';
     const organisation = this.organisationsRepository.create({
       name: createDto.name,
       type: createDto.type,
-      approvalStatus: 'pending',
+      approvalStatus,
       isActive: true,
     });
 
     const savedOrg = await this.organisationsRepository.save(organisation);
+
+    // Notify team when a new org self-registers and is pending approval
+    if (approvalStatus === 'pending') {
+      this.getTeamUserIds().then((teamUserIds) => {
+        if (teamUserIds.length > 0) {
+          this.notificationsService.sendToUsers({
+            userIds: teamUserIds,
+            title: 'New Registration',
+            body: `${savedOrg.name} has registered and is waiting for approval`,
+            data: { orgId: savedOrg.id, type: 'org_pending' },
+          }).catch(() => {});
+        }
+      }).catch(() => {});
+    }
 
     // Create primary user if provided
     if (createDto.primaryUser) {
@@ -139,6 +175,11 @@ export class OrganisationsService {
       throw new NotFoundException(`Organisation with ID ${id} not found`);
     }
 
+    // Filter out soft-deleted org_user records before returning
+    if (organisation.users) {
+      organisation.users = organisation.users.filter((u) => !u.deletedAt);
+    }
+
     return organisation;
   }
 
@@ -190,7 +231,21 @@ export class OrganisationsService {
     organisation.approvedAt = new Date();
     organisation.approvedBy = approvedBy;
 
-    return await this.organisationsRepository.save(organisation);
+    const saved = await this.organisationsRepository.save(organisation);
+
+    this.getOrgOwnerIds(saved.id).then((ownerIds) => {
+      console.log('[approve] ownerIds resolved:', ownerIds);
+      if (ownerIds.length > 0) {
+        this.notificationsService.sendToUsers({
+          userIds: ownerIds,
+          title: 'Application Approved 🎉',
+          body: `Your organisation ${saved.name} has been approved. You can now access all features.`,
+          data: { orgId: saved.id, type: 'org_approved' },
+        }).catch((err) => console.error('[approve] sendToUsers error:', err));
+      }
+    }).catch((err) => console.error('[approve] getOrgOwnerIds error:', err));
+
+    return saved;
   }
 
   async reject(
@@ -208,6 +263,19 @@ export class OrganisationsService {
     organisation.rejectionReason = rejectionReason;
     organisation.approvedBy = rejectedBy;
 
-    return await this.organisationsRepository.save(organisation);
+    const saved = await this.organisationsRepository.save(organisation);
+
+    this.getOrgOwnerIds(saved.id).then((ownerIds) => {
+      if (ownerIds.length > 0) {
+        this.notificationsService.sendToUsers({
+          userIds: ownerIds,
+          title: 'Application Update',
+          body: `Your application for ${saved.name} was not approved. Reason: ${rejectionReason}`,
+          data: { orgId: saved.id, type: 'org_rejected' },
+        }).catch(() => {});
+      }
+    }).catch(() => {});
+
+    return saved;
   }
 }

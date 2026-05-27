@@ -6,15 +6,17 @@ import {
   ConflictException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, In } from 'typeorm';
 import { PatientBill, BillStatus } from './entities/patient-bill.entity';
 import { BillItem } from './entities/bill-item.entity';
 import { Patient } from '../patients/entities/patient.entity';
 import { Appointment } from '../appointments/entities/appointment.entity';
+import { OrganisationUser } from '../organisation-users/entities/organisation-user.entity';
 import { CreateBillDto } from './dto/create-bill.dto';
 import { UpdateBillDto } from './dto/update-bill.dto';
 import { PaymentDto } from './dto/payment.dto';
 import { GetBillsDto } from './dto/get-bills.dto';
+import { NotificationsService } from '../notifications/notifications.service';
 
 @Injectable()
 export class PatientBillingService {
@@ -27,6 +29,9 @@ export class PatientBillingService {
     private patientsRepository: Repository<Patient>,
     @InjectRepository(Appointment)
     private appointmentsRepository: Repository<Appointment>,
+    @InjectRepository(OrganisationUser)
+    private orgUserRepository: Repository<OrganisationUser>,
+    private notificationsService: NotificationsService,
   ) {}
 
   private calculateBillTotals(items: BillItem[]): { subtotal: number } {
@@ -60,14 +65,21 @@ export class PatientBillingService {
       throw new BadRequestException('Clinic not associated with user');
     }
 
-    // Check billNumber uniqueness within this org
-    const existingBill = await this.billsRepository.findOne({
-      where: { billNumber: createDto.billNumber, organisationId: clinicId },
-    });
-    if (existingBill) {
-      throw new ConflictException(
-        `Bill number ${createDto.billNumber} already exists`,
-      );
+    // Auto-generate billNumber if not provided
+    if (!createDto.billNumber) {
+      const count = await this.billsRepository.count({ where: { organisationId: clinicId } });
+      createDto.billNumber = `BILL-${String(count + 1).padStart(5, '0')}`;
+      console.log(`[Billing] Auto-generated billNumber: ${createDto.billNumber}`);
+    } else {
+      // Check billNumber uniqueness within this org
+      const existingBill = await this.billsRepository.findOne({
+        where: { billNumber: createDto.billNumber, organisationId: clinicId },
+      });
+      if (existingBill) {
+        throw new ConflictException(
+          `Bill number ${createDto.billNumber} already exists`,
+        );
+      }
     }
 
     const patient = await this.patientsRepository.findOne({
@@ -420,7 +432,37 @@ export class PatientBillingService {
         : `Payment: ${paymentDto.notes}`;
     }
 
-    return this.billsRepository.save(bill);
+    const saved = await this.billsRepository.save(bill);
+
+    // Notify OWNER+MANAGER about payment
+    if (saved.organisationId) {
+      this.orgUserRepository
+        .find({ where: { organisationId: saved.organisationId, role: In(['OWNER', 'MANAGER']), isActive: true } })
+        .then((orgUsers) => {
+          const userIds = orgUsers.map((ou) => ou.userId).filter(Boolean);
+          if (userIds.length > 0) {
+            const amount = `₹${paymentDto.amount.toLocaleString('en-IN')}`;
+            if (saved.status === BillStatus.PAID) {
+              this.notificationsService.sendToUsers({
+                userIds,
+                title: 'Bill Fully Paid',
+                body: `Bill ${saved.billNumber} fully paid (${amount})`,
+                data: { billId: saved.id, type: 'bill_paid' },
+              }).catch(() => {});
+            } else {
+              this.notificationsService.sendToUsers({
+                userIds,
+                title: 'Partial Payment Received',
+                body: `Partial payment of ${amount} received for bill ${saved.billNumber}`,
+                data: { billId: saved.id, type: 'payment_received' },
+              }).catch(() => {});
+            }
+          }
+        })
+        .catch(() => {});
+    }
+
+    return saved;
   }
 
   async remove(

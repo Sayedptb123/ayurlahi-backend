@@ -155,7 +155,26 @@ export class RetreatService {
             await this.roomRepo.save(admission.room);
         }
 
-        return this.admissionRepo.save(admission);
+        const saved = await this.admissionRepo.save(admission);
+
+        // Notify OWNER+RECEPTIONIST on discharge
+        this.orgUserRepo
+            .find({ where: { organisationId: clinicId, role: In(['OWNER', 'RECEPTIONIST']), isActive: true } })
+            .then((orgUsers) => {
+                const userIds = orgUsers.map((ou) => ou.userId).filter(Boolean);
+                if (userIds.length > 0) {
+                    const roomInfo = admission.room ? ` from room ${admission.room.roomNumber}` : '';
+                    this.notificationsService.sendToUsers({
+                        userIds,
+                        title: 'Patient Discharged',
+                        body: `Patient discharged${roomInfo}`,
+                        data: { admissionId: saved.id, type: 'patient_discharged' },
+                    }).catch(() => {});
+                }
+            })
+            .catch(() => {});
+
+        return saved;
     }
 
     // --- BOOKINGS ---

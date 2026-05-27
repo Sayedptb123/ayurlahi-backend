@@ -1,16 +1,15 @@
 import { PartialType } from '@nestjs/mapped-types';
 import { CreateExpenseDto } from './create-expense.dto';
-import { IsEnum, IsOptional, IsString, IsUUID } from 'class-validator';
-import { ExpenseStatus } from '../entities/expense.entity';
+import { IsIn, IsOptional, IsString, IsUUID } from 'class-validator';
 
 export class UpdateExpenseDto extends PartialType(CreateExpenseDto) {
     @IsOptional()
-    @IsEnum(ExpenseStatus)
-    status?: ExpenseStatus;
+    @IsIn(['pending', 'verified', 'flagged'])
+    status?: string;
 
     @IsOptional()
     @IsString()
-    rejectionReason?: string;
+    flagReason?: string;
 
     @IsOptional()
     @IsUUID()

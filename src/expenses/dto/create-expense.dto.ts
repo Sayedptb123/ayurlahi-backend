@@ -1,22 +1,19 @@
 import {
-    IsEnum,
     IsNumber,
     IsOptional,
     IsString,
-    IsUUID,
     IsDateString,
     Min,
     MaxLength,
 } from 'class-validator';
-import { ExpenseCategory, ExpenseStatus } from '../entities/expense.entity';
 
 export class CreateExpenseDto {
     @IsNumber()
     @Min(0)
     amount: number;
 
-    @IsEnum(ExpenseCategory)
-    category: ExpenseCategory;
+    @IsString()
+    category: string;
 
     @IsString()
     @MaxLength(500)
@@ -26,10 +23,10 @@ export class CreateExpenseDto {
     date: string;
 
     @IsOptional()
-    @IsString() // URL validation could be added but might be too strict for internal paths
+    @IsString()
     receiptUrl?: string;
 
     @IsOptional()
-    @IsEnum(ExpenseStatus)
-    status?: ExpenseStatus;
+    @IsString()
+    status?: string;
 }

@@ -6,9 +6,10 @@ import { SalaryStructure } from './entities/salary-structure.entity';
 import { PayrollRecord } from './entities/payroll-record.entity';
 import { Staff } from '../staff/entities/staff.entity';
 import { User } from '../users/entities/user.entity';
+import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
-    imports: [TypeOrmModule.forFeature([SalaryStructure, PayrollRecord, Staff, User])],
+    imports: [TypeOrmModule.forFeature([SalaryStructure, PayrollRecord, Staff, User]), NotificationsModule],
     controllers: [PayrollController],
     providers: [PayrollService],
     exports: [PayrollService],

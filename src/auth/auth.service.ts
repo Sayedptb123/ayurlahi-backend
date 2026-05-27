@@ -4,6 +4,7 @@ import {
   ConflictException,
   BadRequestException,
   NotFoundException,
+  ForbiddenException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -17,6 +18,7 @@ import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
 import { RegisterOrganisationDto } from './dto/register-organisation.dto';
 import { UpdateMeDto } from './dto/update-me.dto';
+import { NotificationsService } from '../notifications/notifications.service';
 
 export interface JwtPayload {
   sub: string; // userId
@@ -38,6 +40,7 @@ export class AuthService {
     @InjectRepository(Staff)
     private staffRepository: Repository<Staff>,
     private jwtService: JwtService,
+    private notificationsService: NotificationsService,
   ) { }
 
   async validateUser(email: string, password: string): Promise<User | null> {
@@ -118,6 +121,15 @@ export class AuthService {
       const primaryOrg = organisationUsers.find((ou) => ou.isPrimary);
       const currentOrg = primaryOrg || organisationUsers[0];
 
+      // Block login for deactivated orgs (clinics & manufacturers only)
+      if (
+        currentOrg &&
+        (currentOrg.organisation.type === 'CLINIC' || currentOrg.organisation.type === 'MANUFACTURER') &&
+        currentOrg.organisation.isActive === false
+      ) {
+        throw new ForbiddenException('Your organisation account has been deactivated. Contact support@ayurlahi.com');
+      }
+
       // Build organisations list for response
       const organisations = organisationUsers.map((ou) => ({
         id: ou.organisation.id,
@@ -164,6 +176,7 @@ export class AuthService {
             type: currentOrg.organisation.type,
             role: currentOrg.role,
             approvalStatus: currentOrg.organisation.approvalStatus,
+            isActive: currentOrg.organisation.isActive,
             permissions: currentOrg.permissions ?? null,
           }
           : null,
@@ -269,6 +282,18 @@ export class AuthService {
     });
     await this.organisationUsersRepository.save(orgUser);
 
+    // Notify all SUPER_ADMIN / SUPPORT users in AYURLAHI_TEAM
+    this.notificationsService.getAdminUserIds().then((adminIds) => {
+      if (adminIds.length > 0) {
+        return this.notificationsService.sendToUsers({
+          userIds: adminIds,
+          title: '🔔 New Organisation Request',
+          body: `${savedOrg.name} has submitted an application for review.`,
+          data: { type: 'new_org_request', organisationId: savedOrg.id },
+        });
+      }
+    }).catch((err) => console.error('[registerOrganisation] admin notify error:', err));
+
     // Issue token so user can see pending screen without logging in again
     const payload: JwtPayload = {
       sub: savedUser.id,
@@ -296,6 +321,7 @@ export class AuthService {
         type: savedOrg.type,
         role: 'OWNER' as const,
         approvalStatus: savedOrg.approvalStatus,
+        isActive: savedOrg.isActive,
         permissions: null,
       },
     };
@@ -343,6 +369,8 @@ export class AuthService {
           name: currentOrgUser.organisation.name,
           type: currentOrgUser.organisation.type,
           role: currentOrgUser.role,
+          approvalStatus: currentOrgUser.organisation.approvalStatus,
+          isActive: currentOrgUser.organisation.isActive,
           permissions: currentOrgUser.permissions ?? null,
         }
         : null,
@@ -416,6 +444,7 @@ export class AuthService {
             type: currentOrg.organisation.type,
             role: currentOrg.role,
             approvalStatus: currentOrg.organisation.approvalStatus,
+            isActive: currentOrg.organisation.isActive,
             permissions: currentOrg.permissions ?? null,
           }
           : null,

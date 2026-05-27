@@ -10,10 +10,12 @@ import { User } from '../users/entities/user.entity';
 import { OrganisationUser } from '../organisation-users/entities/organisation-user.entity';
 import { Organisation } from '../organisations/entities/organisation.entity';
 import { Staff } from '../staff/entities/staff.entity';
+import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([User, OrganisationUser, Organisation, Staff]),
+    NotificationsModule,
     PassportModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],

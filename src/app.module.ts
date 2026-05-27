@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
+import { ScheduleModule } from '@nestjs/schedule';
 import { APP_GUARD } from '@nestjs/core';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
@@ -81,6 +82,10 @@ import { Equipment } from './manufacturing/entities/equipment.entity';
 import { Batch } from './manufacturing/entities/batch.entity';
 import { BatchStage } from './manufacturing/entities/batch-stage.entity';
 import { WastageLog } from './manufacturing/entities/wastage-log.entity';
+import { Expense } from './expenses/entities/expense.entity';
+import { Budget } from './budgets/entities/budget.entity';
+import { PayrollRecord } from './payroll/entities/payroll-record.entity';
+import { SalaryStructure } from './payroll/entities/salary-structure.entity';
 import { CustomNamingStrategy } from './common/naming-strategy';
 import { RetreatModule } from './retreat/retreat.module';
 import { Room } from './retreat/entities/room.entity';
@@ -96,6 +101,8 @@ import { NewbornAssessment } from './newborn-assessments/entities/newborn-assess
 import { TasksModule } from './tasks/tasks.module';
 import { StaffTask } from './tasks/entities/staff-task.entity';
 import { UserNotification } from './notifications/entities/user-notification.entity';
+import { CustomNotificationLog } from './notifications/entities/custom-notification-log.entity';
+import { NotificationCronModule } from './notifications/notification-cron.module';
 
 @Module({
   imports: [
@@ -103,6 +110,7 @@ import { UserNotification } from './notifications/entities/user-notification.ent
       isGlobal: true,
       envFilePath: '.env',
     }),
+    ScheduleModule.forRoot(),
     ThrottlerModule.forRoot([
       { name: 'short', ttl: 1000, limit: 10 },   // 10 req/sec burst
       { name: 'medium', ttl: 60000, limit: 200 }, // 200 req/min sustained
@@ -166,6 +174,11 @@ import { UserNotification } from './notifications/entities/user-notification.ent
           StaffTask,
           PushToken,
           UserNotification,
+          CustomNotificationLog,
+          Expense,
+          Budget,
+          PayrollRecord,
+          SalaryStructure,
         ],
         synchronize: false, // Disabled - synchronize causes issues
         logging: configService.get<string>('NODE_ENV') === 'development',
@@ -212,6 +225,7 @@ import { UserNotification } from './notifications/entities/user-notification.ent
     TasksModule,
     FileUploadModule,
     NotificationsModule,
+    NotificationCronModule,
     EmailModule,
     ScraperModule,
   ],

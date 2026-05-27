@@ -59,18 +59,21 @@ export class InventoryService {
     Object.assign(item, updateInventoryItemDto);
     const saved = await this.inventoryRepository.save(item);
 
-    // Send low stock alert if current stock is at or below minimum
+    // Send stock alert if current stock is at or below minimum
     if (saved.currentStock <= saved.minStockLevel) {
       this.orgUserRepository
         .find({ where: { organisationId, role: In(['OWNER', 'MANAGER', 'ADMIN']), isActive: true } })
         .then((orgUsers) => {
           const userIds = orgUsers.map((ou) => ou.userId).filter(Boolean);
           if (userIds.length > 0) {
+            const isOutOfStock = saved.currentStock === 0;
             this.notificationsService.sendToUsers({
               userIds,
-              title: 'Low Stock Alert',
-              body: `${saved.name} is running low (${saved.currentStock} ${saved.unit ?? 'units'} remaining)`,
-              data: { inventoryItemId: saved.id, type: 'low_stock' },
+              title: isOutOfStock ? 'Out of Stock' : 'Low Stock Alert',
+              body: isOutOfStock
+                ? `${saved.name} is completely out of stock. Please reorder immediately.`
+                : `${saved.name} is running low (${saved.currentStock} ${saved.unit ?? 'units'} remaining)`,
+              data: { inventoryItemId: saved.id, type: isOutOfStock ? 'out_of_stock' : 'low_stock' },
             }).catch(() => {});
           }
         })

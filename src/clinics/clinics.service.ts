@@ -11,6 +11,7 @@ import { RejectClinicDto } from './dto/approve-clinic.dto';
 import { User } from '../users/entities/user.entity';
 import { RoleUtils } from '../common/utils/role.utils';
 import { OrganisationUser } from '../organisation-users/entities/organisation-user.entity';
+import { NotificationsService } from '../notifications/notifications.service';
 
 @Injectable()
 export class ClinicsService {
@@ -21,6 +22,7 @@ export class ClinicsService {
     private usersRepository: Repository<User>,
     @InjectRepository(OrganisationUser)
     private organisationUsersRepository: Repository<OrganisationUser>,
+    private notificationsService: NotificationsService,
   ) { }
 
   async findAll(userRole: string, params: { status?: string; page: number; limit: number }) {
@@ -137,7 +139,57 @@ export class ClinicsService {
     clinic.approvedAt = new Date();
     clinic.approvedBy = approvedBy;
 
-    return this.organisationsRepository.save(clinic);
+    const saved = await this.organisationsRepository.save(clinic);
+
+    this.organisationUsersRepository
+      .find({ where: { organisationId: id } })
+      .then((members) => {
+        const userIds = members.map((m) => m.userId);
+        if (userIds.length) {
+          this.notificationsService.sendToUsers({
+            userIds,
+            title: '🎉 Account Approved',
+            body: `${clinic.name} has been approved. You can now access all features.`,
+            data: { type: 'org_approved' },
+          }).catch(() => {});
+        }
+      })
+      .catch(() => {});
+
+    return saved;
+  }
+
+  async toggleActive(id: string) {
+    const clinic = await this.organisationsRepository.findOne({
+      where: { id, type: 'CLINIC', deletedAt: IsNull() },
+    });
+
+    if (!clinic) {
+      throw new NotFoundException(`Clinic with ID ${id} not found`);
+    }
+
+    const newIsActive = !clinic.isActive;
+    clinic.isActive = newIsActive;
+    const saved = await this.organisationsRepository.save(clinic);
+
+    this.organisationUsersRepository
+      .find({ where: { organisationId: id } })
+      .then((members) => {
+        const userIds = members.map((m) => m.userId);
+        if (userIds.length) {
+          return this.notificationsService.sendToUsers({
+            userIds,
+            title: newIsActive ? '✅ Account Reactivated' : '⚠️ Account Deactivated',
+            body: newIsActive
+              ? `${clinic.name}'s account has been reactivated.`
+              : `${clinic.name}'s account has been deactivated. Contact support@ayurlahi.com.`,
+            data: { type: newIsActive ? 'org_reactivated' : 'org_deactivated' },
+          });
+        }
+      })
+      .catch(() => {});
+
+    return saved;
   }
 
   async reject(id: string, rejectDto: RejectClinicDto, rejectedBy: string) {
@@ -153,6 +205,25 @@ export class ClinicsService {
     clinic.rejectionReason = rejectDto.reason;
     clinic.approvedBy = rejectedBy;
 
-    return this.organisationsRepository.save(clinic);
+    const saved = await this.organisationsRepository.save(clinic);
+
+    this.organisationUsersRepository
+      .find({ where: { organisationId: id } })
+      .then((members) => {
+        const userIds = members.map((m) => m.userId);
+        if (userIds.length) {
+          this.notificationsService.sendToUsers({
+            userIds,
+            title: 'Account Rejected',
+            body: rejectDto.reason
+              ? `Your application was rejected: ${rejectDto.reason}`
+              : `${clinic.name}'s application has been rejected.`,
+            data: { type: 'org_rejected' },
+          }).catch(() => {});
+        }
+      })
+      .catch(() => {});
+
+    return saved;
   }
 }

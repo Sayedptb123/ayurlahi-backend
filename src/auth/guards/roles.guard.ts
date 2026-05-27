@@ -32,9 +32,11 @@ export class RolesGuard implements CanActivate {
       // Map organization roles to legacy roles
       if (upperRole === 'SUPER_ADMIN') return UserRole.ADMIN;
       if (upperRole === 'SUPPORT') return UserRole.SUPPORT;
-      if (upperRole === 'OWNER' || upperRole === 'MANAGER' || upperRole === 'STAFF') {
-        // For organization members, check organizationType from JWT
+      const orgMemberRoles = ['OWNER', 'MANAGER', 'STAFF', 'DOCTOR', 'NURSE', 'THERAPIST', 'PHARMACIST', 'RECEPTIONIST', 'LAB_TECHNICIAN'];
+      if (orgMemberRoles.includes(upperRole)) {
+        // For organization members, map to the org-type-level role
         if (user.organisationType === 'CLINIC') return UserRole.CLINIC;
+        if (user.organisationType === 'POSTNATAL_HOSPITAL') return UserRole.CLINIC;
         if (user.organisationType === 'MANUFACTURER') return UserRole.MANUFACTURER;
         if (user.organisationType === 'AYURLAHI_TEAM') return UserRole.ADMIN;
       }

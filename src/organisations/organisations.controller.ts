@@ -30,7 +30,7 @@ export class OrganisationsController {
 
   @Post()
   create(@Body() createDto: CreateOrganisationDto, @Request() req) {
-    return this.organisationsService.create(createDto, req.user?.userId);
+    return this.organisationsService.create(createDto, req.user?.userId, req.user?.organisationType);
   }
 
   @Get()

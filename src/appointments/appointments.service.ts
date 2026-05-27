@@ -328,6 +328,8 @@ export class AppointmentsService {
       }
     }
 
+    const previousStatus = appointment.status;
+
     // State machine — enforce valid transitions
     if (updateDto.status && updateDto.status !== appointment.status) {
       const TRANSITIONS: Record<AppointmentStatus, AppointmentStatus[]> = {
@@ -375,30 +377,64 @@ export class AppointmentsService {
 
     const saved = await this.appointmentsRepository.save(appointment);
 
-    // Send email notifications on status changes (fire-and-forget)
-    if (updateDto.status && updateDto.status !== appointment.status) {
+    // Send notifications on status changes (fire-and-forget)
+    if (updateDto.status && updateDto.status !== previousStatus) {
       const patient = await this.patientsRepository.findOne({ where: { id: saved.patientId } });
       const doctor = await this.staffRepository.findOne({ where: { id: saved.doctorId } });
+      const patientName = patient ? `${patient.firstName} ${patient.lastName}` : 'Patient';
+      const dateStr = saved.appointmentDate?.toLocaleDateString('en-IN') ?? '';
+      const timeStr = saved.appointmentTime ?? '';
 
+      // Email
       if (patient?.email && doctor) {
         const emailData = {
-          patientName: `${patient.firstName} ${patient.lastName}`,
+          patientName,
           patientEmail: patient.email,
           doctorName: `${doctor.firstName} ${doctor.lastName}`,
           clinicName: saved.organisationId ?? '',
-          appointmentDate: saved.appointmentDate?.toLocaleDateString('en-IN') ?? '',
-          appointmentTime: saved.appointmentTime ?? '',
+          appointmentDate: dateStr,
+          appointmentTime: timeStr,
           appointmentType: saved.appointmentType ?? '',
         };
-
         if (updateDto.status === AppointmentStatus.CONFIRMED) {
           this.emailService.sendAppointmentConfirmation(emailData).catch(() => {});
         } else if (updateDto.status === AppointmentStatus.CANCELLED) {
-          this.emailService.sendAppointmentCancellation({
-            ...emailData,
-            reason: updateDto.cancellationReason,
-          }).catch(() => {});
+          this.emailService.sendAppointmentCancellation({ ...emailData, reason: updateDto.cancellationReason }).catch(() => {});
         }
+      }
+
+      // Push notifications per status
+      const notifyIds: string[] = [];
+      if (doctor?.userId) notifyIds.push(doctor.userId);
+
+      if (updateDto.status === AppointmentStatus.CANCELLED) {
+        this.notificationsService.sendToUsers({
+          userIds: notifyIds.filter(Boolean),
+          title: 'Appointment Cancelled',
+          body: `${patientName}'s appointment on ${dateStr} at ${timeStr} has been cancelled`,
+          data: { appointmentId: saved.id, type: 'appointment_cancelled' },
+        }).catch(() => {});
+      } else if (updateDto.status === AppointmentStatus.CONFIRMED) {
+        this.notificationsService.sendToUsers({
+          userIds: notifyIds.filter(Boolean),
+          title: 'Appointment Confirmed',
+          body: `Appointment with ${patientName} on ${dateStr} at ${timeStr} is confirmed`,
+          data: { appointmentId: saved.id, type: 'appointment_confirmed' },
+        }).catch(() => {});
+      } else if (updateDto.status === AppointmentStatus.NO_SHOW) {
+        this.notificationsService.sendToUsers({
+          userIds: notifyIds.filter(Boolean),
+          title: 'Patient No-Show',
+          body: `${patientName} did not show up for the ${timeStr} appointment`,
+          data: { appointmentId: saved.id, type: 'appointment_no_show' },
+        }).catch(() => {});
+      } else if (updateDto.status === AppointmentStatus.COMPLETED) {
+        this.notificationsService.sendToUsers({
+          userIds: notifyIds.filter(Boolean),
+          title: 'Appointment Completed',
+          body: `Appointment with ${patientName} completed. Please generate the bill.`,
+          data: { appointmentId: saved.id, type: 'appointment_completed' },
+        }).catch(() => {});
       }
     }
 

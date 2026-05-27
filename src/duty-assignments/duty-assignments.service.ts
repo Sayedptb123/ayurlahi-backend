@@ -226,16 +226,82 @@ export class DutyAssignmentsService {
       );
     }
 
+    const previousStaffId = assignment.staffId;
+    const previousDate = assignment.dutyDate;
+    const previousStart = assignment.startTime;
+
     Object.assign(assignment, updateDto);
     if (updateDto.dutyDate) {
       assignment.dutyDate = new Date(updateDto.dutyDate);
     }
 
-    return await this.assignmentsRepository.save(assignment);
+    const saved = await this.assignmentsRepository.save(assignment);
+
+    // Notify staff about changes
+    const staffIdChanged = updateDto.staffId && updateDto.staffId !== previousStaffId;
+    const scheduleChanged = updateDto.dutyDate || updateDto.startTime || updateDto.endTime;
+
+    if (staffIdChanged) {
+      // Notify old staff their duty was reassigned away
+      const oldStaff = await this.staffRepository.findOne({ where: { id: previousStaffId } });
+      if (oldStaff?.userId) {
+        const dutyType = await this.dutyTypesRepository.findOne({ where: { id: saved.dutyTypeId } });
+        const dateStr = (previousDate as Date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+        this.notificationsService.sendToUsers({
+          userIds: [oldStaff.userId],
+          title: 'Duty Reassigned',
+          body: `Your ${dutyType?.name ?? 'duty'} shift on ${dateStr} has been reassigned`,
+          data: { dutyId: saved.id, type: 'duty_reassigned' },
+        }).catch(() => {});
+      }
+      // Notify new staff they have a duty
+      const newStaff = await this.staffRepository.findOne({ where: { id: updateDto.staffId } });
+      if (newStaff?.userId) {
+        const dutyType = await this.dutyTypesRepository.findOne({ where: { id: saved.dutyTypeId } });
+        const dateStr = saved.dutyDate.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+        this.notificationsService.sendToUsers({
+          userIds: [newStaff.userId],
+          title: 'New Duty Assigned',
+          body: `You have been assigned ${dutyType?.name ?? 'a duty'} on ${dateStr}`,
+          data: { dutyId: saved.id, type: 'duty_assigned' },
+        }).catch(() => {});
+      }
+    } else if (scheduleChanged) {
+      // Notify current staff that their shift schedule changed
+      const staff = await this.staffRepository.findOne({ where: { id: saved.staffId } });
+      if (staff?.userId) {
+        const dutyType = await this.dutyTypesRepository.findOne({ where: { id: saved.dutyTypeId } });
+        const dateStr = saved.dutyDate.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+        this.notificationsService.sendToUsers({
+          userIds: [staff.userId],
+          title: 'Duty Updated',
+          body: `Your ${dutyType?.name ?? 'duty'} shift has been rescheduled to ${dateStr} ${saved.startTime ?? ''}–${saved.endTime ?? ''}`,
+          data: { dutyId: saved.id, type: 'duty_updated' },
+        }).catch(() => {});
+      }
+    }
+
+    return saved;
   }
 
   async remove(id: string, organisationId: string): Promise<void> {
     const assignment = await this.findOne(id, organisationId);
+
+    // Notify the assigned staff before deleting
+    if (assignment.staffId) {
+      const staff = await this.staffRepository.findOne({ where: { id: assignment.staffId } });
+      if (staff?.userId) {
+        const dutyType = await this.dutyTypesRepository.findOne({ where: { id: assignment.dutyTypeId } });
+        const dateStr = (assignment.dutyDate as Date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+        this.notificationsService.sendToUsers({
+          userIds: [staff.userId],
+          title: 'Duty Cancelled',
+          body: `Your ${dutyType?.name ?? 'duty'} shift on ${dateStr} has been cancelled`,
+          data: { type: 'duty_cancelled' },
+        }).catch(() => {});
+      }
+    }
+
     await this.assignmentsRepository.softDelete(assignment.id);
   }
 

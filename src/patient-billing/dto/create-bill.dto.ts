@@ -15,10 +15,10 @@ import { BillStatus, PaymentMethod } from '../entities/patient-bill.entity';
 import { BillItemDto } from './bill-item.dto';
 
 export class CreateBillDto {
-  @IsNotEmpty()
+  @IsOptional()
   @IsString()
   @MaxLength(100)
-  billNumber: string;
+  billNumber?: string;
 
   @IsNotEmpty()
   @IsString()

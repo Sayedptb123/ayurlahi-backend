@@ -9,10 +9,10 @@ import { Equipment } from './entities/equipment.entity';
 import { Batch } from './entities/batch.entity';
 import { BatchStage } from './entities/batch-stage.entity';
 import { WastageLog } from './entities/wastage-log.entity';
-
-
+import { OrganisationUser } from '../organisation-users/entities/organisation-user.entity';
 import { ManufacturingService } from './manufacturing.service';
 import { ManufacturingController } from './manufacturing.controller';
+import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
     imports: [TypeOrmModule.forFeature([
@@ -25,7 +25,8 @@ import { ManufacturingController } from './manufacturing.controller';
         Batch,
         BatchStage,
         WastageLog,
-    ])],
+        OrganisationUser,
+    ]), NotificationsModule],
     controllers: [ManufacturingController],
     providers: [ManufacturingService],
     exports: [ManufacturingService],

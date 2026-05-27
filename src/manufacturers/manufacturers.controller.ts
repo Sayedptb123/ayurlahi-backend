@@ -51,6 +51,14 @@ export class ManufacturersController {
     return this.manufacturersService.approve(id, req.user.userId);
   }
 
+  @Post(':id/toggle-active')
+  async toggleActive(@Param('id', ParseUUIDPipe) id: string, @Request() req) {
+    if (!RoleUtils.isAdminOrSupport(req.user.role)) {
+      throw new Error('Unauthorized');
+    }
+    return this.manufacturersService.toggleActive(id);
+  }
+
   @Post(':id/reject')
   async reject(
     @Param('id', ParseUUIDPipe) id: string,

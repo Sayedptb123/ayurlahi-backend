@@ -34,9 +34,9 @@ export class CreateOrganisationUserDto {
   @IsString()
   lastName: string;
 
-  @IsNotEmpty()
+  @IsOptional()
   @IsString()
-  phone: string;
+  phone?: string;
 }
 
 export class CreateOrganisationDto {

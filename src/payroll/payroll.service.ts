@@ -7,6 +7,9 @@ import { CreateSalaryStructureDto } from './dto/create-salary-structure.dto';
 import { GeneratePayrollDto } from './dto/generate-payroll.dto';
 import { UpdatePayrollStatusDto } from './dto/update-payroll-status.dto';
 import { Staff } from '../staff/entities/staff.entity';
+import { NotificationsService } from '../notifications/notifications.service';
+
+const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 
 export type RequestUser = { userId: string; organisationId: string; role?: string; organisationType?: string };
 
@@ -19,6 +22,7 @@ export class PayrollService {
         private payrollRecordRepo: Repository<PayrollRecord>,
         @InjectRepository(Staff)
         private staffRepo: Repository<Staff>,
+        private readonly notificationsService: NotificationsService,
     ) { }
 
     async createOrUpdateSalaryStructure(reqUser: RequestUser, dto: CreateSalaryStructureDto) {
@@ -114,7 +118,35 @@ export class PayrollService {
         const record = await this.payrollRecordRepo.findOne({ where: { id } });
         if (!record) throw new NotFoundException('Payroll record not found');
 
+        const previousStatus = record.status;
         Object.assign(record, dto);
-        return this.payrollRecordRepo.save(record);
+        const saved = await this.payrollRecordRepo.save(record);
+
+        // Notify the staff member when salary is approved or paid
+        if (dto.status && dto.status !== previousStatus) {
+            const staff = await this.staffRepo.findOne({ where: { id: saved.staffId } });
+            if (staff?.userId) {
+                const monthName = MONTH_NAMES[(saved.month ?? 1) - 1] ?? '';
+                const netPay = `₹${parseFloat(saved.netPay as any).toLocaleString('en-IN')}`;
+
+                if (dto.status === PayrollStatus.PAID) {
+                    this.notificationsService.sendToUsers({
+                        userIds: [staff.userId],
+                        title: 'Salary Credited',
+                        body: `Your salary of ${netPay} for ${monthName} ${saved.year} has been credited.`,
+                        data: { payrollId: saved.id, type: 'salary_credited' },
+                    }).catch(() => {});
+                } else if ((dto.status as string) === 'approved') {
+                    this.notificationsService.sendToUsers({
+                        userIds: [staff.userId],
+                        title: 'Salary Processed',
+                        body: `Your salary for ${monthName} ${saved.year} (${netPay}) has been processed and will be credited shortly.`,
+                        data: { payrollId: saved.id, type: 'salary_processed' },
+                    }).catch(() => {});
+                }
+            }
+        }
+
+        return saved;
     }
 }

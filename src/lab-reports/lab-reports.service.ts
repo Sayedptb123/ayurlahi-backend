@@ -15,6 +15,7 @@ import { Appointment } from '../appointments/entities/appointment.entity';
 import { CreateLabReportDto } from './dto/create-lab-report.dto';
 import { UpdateLabReportDto } from './dto/update-lab-report.dto';
 import { GetLabReportsDto } from './dto/get-lab-reports.dto';
+import { NotificationsService } from '../notifications/notifications.service';
 
 @Injectable()
 export class LabReportsService {
@@ -29,6 +30,7 @@ export class LabReportsService {
     private staffRepository: Repository<Staff>,
     @InjectRepository(Appointment)
     private appointmentsRepository: Repository<Appointment>,
+    private notificationsService: NotificationsService,
   ) {}
 
   async create(
@@ -361,7 +363,25 @@ export class LabReportsService {
       );
     }
 
-    return this.labReportsRepository.save(labReport);
+    const previousStatus = labReport.status;
+    const saved = await this.labReportsRepository.save(labReport);
+
+    // Notify ordering doctor when results are ready
+    if (updateDto.status === LabReportStatus.COMPLETED && previousStatus !== LabReportStatus.COMPLETED) {
+      const doctor = await this.staffRepository.findOne({ where: { id: saved.doctorId } });
+      if (doctor?.userId) {
+        const patient = await this.patientsRepository.findOne({ where: { id: saved.patientId } });
+        const patientName = patient ? `${patient.firstName} ${patient.lastName}` : 'your patient';
+        this.notificationsService.sendToUsers({
+          userIds: [doctor.userId],
+          title: 'Lab Results Ready',
+          body: `Lab report ${saved.reportNumber} for ${patientName} is ready`,
+          data: { labReportId: saved.id, type: 'lab_results_ready' },
+        }).catch(() => {});
+      }
+    }
+
+    return saved;
   }
 
   async remove(

@@ -333,23 +333,48 @@ export class OrdersService {
 
     const savedOrder = await this.ordersRepository.save(order);
 
-    // Notify clinic owners/managers about order status change
+    // Notify clinic owners/managers about order status change with status-specific message
     const clinicId = savedOrder.organisationId;
     if (clinicId) {
-      this.orgUserRepository
-        .find({ where: { organisationId: clinicId, role: In(['OWNER', 'MANAGER', 'ADMIN']), isActive: true } })
-        .then((orgUsers) => {
-          const userIds = orgUsers.map((ou) => ou.userId).filter(Boolean);
-          if (userIds.length > 0) {
-            this.notificationsService.sendToUsers({
-              userIds,
-              title: 'Order Status Updated',
-              body: `Order ${savedOrder.orderNumber} is now ${savedOrder.status.toLowerCase()}`,
-              data: { orderId: savedOrder.id, type: 'order_status_changed' },
-            }).catch(() => {});
-          }
-        })
-        .catch(() => {});
+      const notifMap: Record<string, { title: string; body: string; type: string }> = {
+        [OrderStatus.CONFIRMED]: {
+          title: 'Order Confirmed',
+          body: `Order ${savedOrder.orderNumber} has been confirmed by the manufacturer`,
+          type: 'order_confirmed',
+        },
+        [OrderStatus.SHIPPED]: {
+          title: 'Order Shipped',
+          body: `Order ${savedOrder.orderNumber} has been shipped and is on the way`,
+          type: 'order_shipped',
+        },
+        [OrderStatus.DELIVERED]: {
+          title: 'Order Delivered',
+          body: `Order ${savedOrder.orderNumber} has been delivered. Inventory updated.`,
+          type: 'order_delivered',
+        },
+        [OrderStatus.CANCELLED]: {
+          title: 'Order Cancelled',
+          body: `Order ${savedOrder.orderNumber} has been cancelled`,
+          type: 'order_cancelled',
+        },
+      };
+      const notif = notifMap[savedOrder.status];
+      if (notif) {
+        this.orgUserRepository
+          .find({ where: { organisationId: clinicId, role: In(['OWNER', 'MANAGER', 'ADMIN']), isActive: true } })
+          .then((orgUsers) => {
+            const userIds = orgUsers.map((ou) => ou.userId).filter(Boolean);
+            if (userIds.length > 0) {
+              this.notificationsService.sendToUsers({
+                userIds,
+                title: notif.title,
+                body: notif.body,
+                data: { orderId: savedOrder.id, type: notif.type },
+              }).catch(() => {});
+            }
+          })
+          .catch(() => {});
+      }
     }
 
     return savedOrder;
