@@ -8,6 +8,7 @@ import { StaffTask } from '../tasks/entities/staff-task.entity';
 import { PatientBill, BillStatus } from '../patient-billing/entities/patient-bill.entity';
 import { Staff } from '../staff/entities/staff.entity';
 import { OrganisationUser } from '../organisation-users/entities/organisation-user.entity';
+import { InventoryItem } from '../inventory/entities/inventory-item.entity';
 import { NotificationsService } from './notifications.service';
 
 @Injectable()
@@ -25,6 +26,8 @@ export class NotificationCronService {
         private staffRepo: Repository<Staff>,
         @InjectRepository(OrganisationUser)
         private orgUserRepo: Repository<OrganisationUser>,
+        @InjectRepository(InventoryItem)
+        private inventoryRepo: Repository<InventoryItem>,
         private notificationsService: NotificationsService,
     ) {}
 
@@ -243,6 +246,64 @@ export class NotificationCronService {
                     title: 'Invoice Due Soon',
                     body: `Bill ${bill.billNumber} (₹${parseFloat(bill.total as any).toLocaleString('en-IN')}) is due in 3 days`,
                     data: { billId: bill.id, type: 'invoice_due_soon' },
+                }).catch(() => {});
+            }
+        }
+    }
+
+    // --- Daily stock check — runs daily at 07:00 ---
+    @Cron('0 7 * * *')
+    async alertLowStock() {
+        const lowItems = await this.inventoryRepo
+            .createQueryBuilder('i')
+            .where('i.current_stock <= i.min_stock_level')
+            .andWhere('i.is_active = true')
+            .getMany();
+
+        // Group by org and send one digest per org
+        const byOrg = new Map<string, number>();
+        for (const item of lowItems) {
+            byOrg.set(item.organisationId, (byOrg.get(item.organisationId) ?? 0) + 1);
+        }
+
+        for (const [orgId, count] of byOrg) {
+            const orgUsers = await this.orgUserRepo.find({
+                where: { organisationId: orgId, role: In(['OWNER', 'MANAGER']), isActive: true },
+            });
+            const userIds = orgUsers.map((ou) => ou.userId).filter(Boolean);
+            if (userIds.length > 0) {
+                this.notificationsService.sendToUsers({
+                    userIds,
+                    title: 'Low Stock Alert',
+                    body: `${count} item${count !== 1 ? 's are' : ' is'} below minimum stock levels`,
+                    data: { type: 'low_stock', count },
+                }).catch(() => {});
+            }
+        }
+    }
+
+    // --- Daily duty reminder — runs daily at 20:00 ---
+    @Cron('0 20 * * *')
+    async sendDailyDutyReminders() {
+        const tomorrow = new Date();
+        tomorrow.setDate(tomorrow.getDate() + 1);
+        const tomorrowStr = tomorrow.toISOString().split('T')[0];
+
+        const duties = await this.dutyRepo
+            .createQueryBuilder('d')
+            .where('d.duty_date = :tomorrow', { tomorrow: tomorrowStr })
+            .andWhere('d.status = :status', { status: 'scheduled' })
+            .andWhere('d.deleted_at IS NULL')
+            .getMany();
+
+        for (const duty of duties) {
+            const staff = await this.staffRepo.findOne({ where: { id: duty.staffId } });
+            if (staff?.userId) {
+                this.notificationsService.sendToUsers({
+                    userIds: [staff.userId],
+                    title: 'Duty Tomorrow',
+                    body: `You have a duty shift tomorrow from ${duty.startTime} to ${duty.endTime}`,
+                    data: { dutyId: duty.id, type: 'duty_reminder' },
                 }).catch(() => {});
             }
         }

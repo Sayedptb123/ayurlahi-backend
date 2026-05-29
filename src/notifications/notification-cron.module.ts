@@ -6,6 +6,7 @@ import { StaffTask } from '../tasks/entities/staff-task.entity';
 import { PatientBill } from '../patient-billing/entities/patient-bill.entity';
 import { Staff } from '../staff/entities/staff.entity';
 import { OrganisationUser } from '../organisation-users/entities/organisation-user.entity';
+import { InventoryItem } from '../inventory/entities/inventory-item.entity';
 import { NotificationsModule } from './notifications.module';
 import { NotificationCronService } from './notification-cron.service';
 
@@ -18,6 +19,7 @@ import { NotificationCronService } from './notification-cron.service';
             PatientBill,
             Staff,
             OrganisationUser,
+            InventoryItem,
         ]),
         NotificationsModule,
     ],

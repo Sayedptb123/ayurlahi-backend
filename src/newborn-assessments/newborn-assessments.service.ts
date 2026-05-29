@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, IsNull } from 'typeorm';
 import { NewbornAssessment } from './entities/newborn-assessment.entity';
 import { CreateNewbornAssessmentDto } from './dto/create-newborn-assessment.dto';
 
@@ -12,7 +12,7 @@ export class NewbornAssessmentsService {
   ) {}
 
   async getAssessments(organisationId: string, patientId?: string): Promise<NewbornAssessment[]> {
-    const where: Record<string, string> = { organisationId };
+    const where: any = { organisationId, deletedAt: IsNull() };
     if (patientId) {
       where.patientId = patientId;
     }
@@ -50,12 +50,13 @@ export class NewbornAssessmentsService {
 
   async deleteAssessment(organisationId: string, id: string): Promise<{ message: string }> {
     const assessment = await this.newbornAssessmentsRepository.findOne({
-      where: { id, organisationId },
+      where: { id, organisationId, deletedAt: IsNull() },
     });
     if (!assessment) {
       throw new NotFoundException(`Newborn assessment with ID ${id} not found`);
     }
-    await this.newbornAssessmentsRepository.remove(assessment);
+    assessment.deletedAt = new Date();
+    await this.newbornAssessmentsRepository.save(assessment);
     return { message: 'Newborn assessment deleted successfully' };
   }
 }

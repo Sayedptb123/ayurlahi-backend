@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, IsNull } from 'typeorm';
 import { FeedingLog } from './entities/feeding-log.entity';
 import { CreateFeedingLogDto } from './dto/create-feeding-log.dto';
 
@@ -12,7 +12,7 @@ export class FeedingLogsService {
   ) {}
 
   async getFeedingLogs(organisationId: string, patientId?: string): Promise<FeedingLog[]> {
-    const where: Record<string, string> = { organisationId };
+    const where: any = { organisationId, deletedAt: IsNull() };
     if (patientId) {
       where.patientId = patientId;
     }
@@ -43,12 +43,13 @@ export class FeedingLogsService {
 
   async deleteFeedingLog(organisationId: string, id: string): Promise<{ message: string }> {
     const feedingLog = await this.feedingLogsRepository.findOne({
-      where: { id, organisationId },
+      where: { id, organisationId, deletedAt: IsNull() },
     });
     if (!feedingLog) {
       throw new NotFoundException(`Feeding log with ID ${id} not found`);
     }
-    await this.feedingLogsRepository.remove(feedingLog);
+    feedingLog.deletedAt = new Date();
+    await this.feedingLogsRepository.save(feedingLog);
     return { message: 'Feeding log deleted successfully' };
   }
 }

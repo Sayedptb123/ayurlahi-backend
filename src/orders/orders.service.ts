@@ -286,8 +286,9 @@ export class OrdersService {
     userRole: string,
     organisationType: string | undefined,
     updateDto: UpdateOrderStatusDto,
+    organisationId?: string,
   ) {
-    const order = await this.findOne(id, userId, userRole, organisationType);
+    const order = await this.findOne(id, userId, userRole, organisationType, organisationId);
 
     // Only admin, support, and manufacturer can update status
     const normalizedRole = RoleUtils.normalizeRole(userRole, organisationType);

@@ -20,7 +20,7 @@ export class ProductsService {
     private productsRepository: Repository<Product>,
   ) { }
 
-  async findAll(query: GetProductsDto, organisationType?: string) {
+  async findAll(query: GetProductsDto, organisationType?: string, organisationId?: string) {
     const { page = 1, limit = 20, manufacturerId, category, search } = query;
     const skip = (page - 1) * limit;
     const queryBuilder = this.productsRepository.createQueryBuilder('product');
@@ -30,8 +30,10 @@ export class ProductsService {
       queryBuilder.andWhere('product.status = :status', { status: ProductStatus.ACTIVE });
     }
 
-    if (manufacturerId) {
-      queryBuilder.andWhere('product.manufacturerId = :manufacturerId', { manufacturerId });
+    // Manufacturers are always scoped to their own products — they cannot see other orgs' products
+    const effectiveManufacturerId = manufacturerId ?? (organisationType === 'MANUFACTURER' ? organisationId : undefined);
+    if (effectiveManufacturerId) {
+      queryBuilder.andWhere('product.manufacturerId = :manufacturerId', { manufacturerId: effectiveManufacturerId });
     }
     if (category) {
       queryBuilder.andWhere('product.category = :category', { category });

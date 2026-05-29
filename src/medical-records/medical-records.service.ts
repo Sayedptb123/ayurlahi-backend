@@ -140,6 +140,8 @@ export class MedicalRecordsService {
       });
     }
 
+    queryBuilder.andWhere('medicalRecord.deletedAt IS NULL');
+
     if (patientId) {
       queryBuilder.andWhere('medicalRecord.patientId = :patientId', {
         patientId,

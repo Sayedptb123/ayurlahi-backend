@@ -4,6 +4,7 @@ import {
   Post,
   Body,
   Patch,
+  Put,
   Param,
   Delete,
   Query,
@@ -55,6 +56,15 @@ export class DutyAssignmentsController {
 
   @Patch(':id')
   update(
+    @Param('organisationId') organisationId: string,
+    @Param('id') id: string,
+    @Body() updateDto: UpdateDutyAssignmentDto,
+  ) {
+    return this.assignmentsService.update(id, organisationId, updateDto);
+  }
+
+  @Put(':id')
+  updatePut(
     @Param('organisationId') organisationId: string,
     @Param('id') id: string,
     @Body() updateDto: UpdateDutyAssignmentDto,

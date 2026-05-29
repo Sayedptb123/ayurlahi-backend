@@ -36,7 +36,6 @@ export class RolesGuard implements CanActivate {
       if (orgMemberRoles.includes(upperRole)) {
         // For organization members, map to the org-type-level role
         if (user.organisationType === 'CLINIC') return UserRole.CLINIC;
-        if (user.organisationType === 'POSTNATAL_HOSPITAL') return UserRole.CLINIC;
         if (user.organisationType === 'MANUFACTURER') return UserRole.MANUFACTURER;
         if (user.organisationType === 'AYURLAHI_TEAM') return UserRole.ADMIN;
       }

@@ -32,8 +32,8 @@ export class PayrollController {
 
     @Get('structure/:staffId')
     @Roles(UserRole.OWNER, UserRole.MANAGER, UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.CLINIC, UserRole.MANUFACTURER)
-    getStructure(@Param('staffId') staffId: string) {
-        return this.payrollService.getSalaryStructure(staffId);
+    getStructure(@Request() req, @Param('staffId') staffId: string) {
+        return this.payrollService.getSalaryStructure(req.user, staffId);
     }
 
     @Post('generate')
@@ -54,7 +54,7 @@ export class PayrollController {
 
     @Patch(':id/status')
     @Roles(UserRole.OWNER, UserRole.MANAGER, UserRole.ADMIN, UserRole.SUPER_ADMIN, UserRole.CLINIC, UserRole.MANUFACTURER)
-    updateStatus(@Param('id') id: string, @Body() dto: UpdatePayrollStatusDto) {
-        return this.payrollService.updatePayrollStatus(id, dto);
+    updateStatus(@Request() req, @Param('id') id: string, @Body() dto: UpdatePayrollStatusDto) {
+        return this.payrollService.updatePayrollStatus(req.user, id, dto);
     }
 }

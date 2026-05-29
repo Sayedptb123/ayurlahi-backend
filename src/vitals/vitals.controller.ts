@@ -19,10 +19,11 @@ import {
 import { VitalsService } from './vitals.service';
 import { CreateVitalDto } from './dto/create-vital.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { OrganisationGuard } from '../auth/guards/organisation.guard';
 
 @ApiTags('Vitals')
 @ApiBearerAuth('access-token')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, OrganisationGuard)
 @Controller('organisations/:organisationId/vitals')
 export class VitalsController {
   constructor(private readonly vitalsService: VitalsService) {}

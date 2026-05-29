@@ -49,10 +49,11 @@ export class PayrollService {
         return this.salaryStructureRepo.save(structure);
     }
 
-    async getSalaryStructure(staffId: string) {
-        const structure = await this.salaryStructureRepo.findOne({
-            where: { staffId },
-        });
+    async getSalaryStructure(reqUser: RequestUser, staffId: string) {
+        const orgId = reqUser.organisationId;
+        const staff = await this.staffRepo.findOne({ where: { id: staffId, organisationId: orgId } });
+        if (!staff) throw new ForbiddenException('Staff member not found in your organisation');
+        const structure = await this.salaryStructureRepo.findOne({ where: { staffId } });
         if (!structure) throw new NotFoundException('Salary structure not set for this staff');
         return structure;
     }
@@ -111,12 +112,26 @@ export class PayrollService {
     }
 
     async getPayrollRecords(reqUser: RequestUser, month?: number, year?: number) {
-        return [];
+        const orgId = reqUser.organisationId;
+        if (!orgId) throw new BadRequestException('User not linked to an organisation');
+
+        const where: any = { organisationId: orgId };
+        if (month) where.month = month;
+        if (year) where.year = year;
+
+        return this.payrollRecordRepo.find({
+            where,
+            relations: ['staff'],
+            order: { year: 'DESC', month: 'DESC' },
+        });
     }
 
-    async updatePayrollStatus(id: string, dto: UpdatePayrollStatusDto) {
+    async updatePayrollStatus(reqUser: RequestUser, id: string, dto: UpdatePayrollStatusDto) {
         const record = await this.payrollRecordRepo.findOne({ where: { id } });
         if (!record) throw new NotFoundException('Payroll record not found');
+        if (reqUser.organisationId && record.organisationId !== reqUser.organisationId) {
+            throw new ForbiddenException('You do not have access to this payroll record');
+        }
 
         const previousStatus = record.status;
         Object.assign(record, dto);

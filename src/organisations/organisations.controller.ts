@@ -76,4 +76,24 @@ export class OrganisationsController {
     requireTeam(req);
     return this.organisationsService.reject(id, rejectionReason, req.user?.userId);
   }
+
+  @Get(':id/capabilities')
+  getCapabilities(@Param('id') id: string, @Request() req) {
+    const isTeam = req.user?.organisationType === 'AYURLAHI_TEAM';
+    const isOwnOrg = req.user?.organisationId === id;
+    if (!isTeam && !isOwnOrg) {
+      throw new ForbiddenException('You can only view your own organisation capabilities');
+    }
+    return this.organisationsService.getCapabilities(id);
+  }
+
+  @Patch(':id/capabilities')
+  updateCapabilities(@Param('id') id: string, @Body() body: any, @Request() req) {
+    const isOwnOrg = req.user?.organisationId === id;
+    const isOwnerOrManager = ['OWNER', 'MANAGER'].includes(req.user?.role);
+    if (!isOwnOrg || !isOwnerOrManager) {
+      throw new ForbiddenException('Only the clinic OWNER or MANAGER can update service capabilities');
+    }
+    return this.organisationsService.updateCapabilities(id, body);
+  }
 }

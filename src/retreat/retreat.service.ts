@@ -64,6 +64,22 @@ export class RetreatService {
         return this.packageRepo.save(pkg);
     }
 
+    async getAdmission(clinicId: string, id: string) {
+        const admission = await this.admissionRepo.findOne({
+            where: { id, organisationId: clinicId },
+            relations: ['patient', 'room', 'treatmentPackage'],
+        });
+        if (!admission) throw new NotFoundException('Admission not found');
+        return admission;
+    }
+
+    async deletePackage(clinicId: string, id: string) {
+        const pkg = await this.packageRepo.findOne({ where: { id, organisationId: clinicId } });
+        if (!pkg) throw new NotFoundException('Package not found');
+        await this.packageRepo.softDelete(id);
+        return { message: 'Package deleted' };
+    }
+
     // --- ADMISSIONS ---
     async getAdmissions(clinicId: string, params?: { patientId?: string; status?: string }) {
         const where: any = { organisationId: clinicId };

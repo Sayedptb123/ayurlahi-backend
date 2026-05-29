@@ -25,7 +25,7 @@ export class PurchaseOrdersController {
   constructor(private readonly poService: PurchaseOrdersService) {}
 
   @Post()
-  @Roles(UserRole.OWNER, UserRole.MANAGER, UserRole.ADMIN)
+  @Roles(UserRole.CLINIC, UserRole.MANUFACTURER, UserRole.ADMIN)
   create(
     @Param('organisationId') organisationId: string,
     @Body() createDto: CreatePurchaseOrderDto,
@@ -48,7 +48,7 @@ export class PurchaseOrdersController {
   }
 
   @Patch(':id')
-  @Roles(UserRole.OWNER, UserRole.MANAGER, UserRole.ADMIN)
+  @Roles(UserRole.CLINIC, UserRole.MANUFACTURER, UserRole.ADMIN)
   update(
     @Param('organisationId') organisationId: string,
     @Param('id') id: string,
@@ -58,7 +58,7 @@ export class PurchaseOrdersController {
   }
 
   @Delete(':id')
-  @Roles(UserRole.OWNER, UserRole.MANAGER, UserRole.ADMIN)
+  @Roles(UserRole.CLINIC, UserRole.MANUFACTURER, UserRole.ADMIN)
   remove(
     @Param('organisationId') organisationId: string,
     @Param('id') id: string,

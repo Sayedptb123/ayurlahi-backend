@@ -74,6 +74,18 @@ export class RetreatController {
         return this.retreatService.discharge(clinicId, id);
     }
 
+    @Get('admissions/:id')
+    getAdmission(@Request() req, @Param('id') id: string) {
+        const clinicId = req.user.organisationId;
+        return this.retreatService.getAdmission(clinicId, id);
+    }
+
+    @Delete('packages/:id')
+    deletePackage(@Request() req, @Param('id') id: string) {
+        const clinicId = req.user.organisationId;
+        return this.retreatService.deletePackage(clinicId, id);
+    }
+
     // --- BOOKING ENDPOINTS ---
     @Post('bookings')
     createBooking(@Request() req, @Body() dto: CreateBookingDto) {

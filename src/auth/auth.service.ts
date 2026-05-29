@@ -14,6 +14,7 @@ import { User } from '../users/entities/user.entity';
 import { OrganisationUser } from '../organisation-users/entities/organisation-user.entity';
 import { Organisation } from '../organisations/entities/organisation.entity';
 import { Staff } from '../staff/entities/staff.entity';
+import { ClinicCapabilities } from '../clinic-capabilities/entities/clinic-capabilities.entity';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
 import { RegisterOrganisationDto } from './dto/register-organisation.dto';
@@ -39,9 +40,25 @@ export class AuthService {
     private organisationsRepository: Repository<Organisation>,
     @InjectRepository(Staff)
     private staffRepository: Repository<Staff>,
+    @InjectRepository(ClinicCapabilities)
+    private clinicCapabilitiesRepository: Repository<ClinicCapabilities>,
     private jwtService: JwtService,
     private notificationsService: NotificationsService,
   ) { }
+
+  private async fetchCapabilities(orgType: string, orgId: string) {
+    if (orgType !== 'CLINIC') return null;
+    const cap = await this.clinicCapabilitiesRepository.findOne({
+      where: { organisationId: orgId },
+    });
+    if (!cap) return null;
+    return {
+      hasPostnatalCare: cap.hasPostnatalCare,
+      hasAyurveda: cap.hasAyurveda,
+      hasIpd: cap.hasIpd,
+      hasOpd: cap.hasOpd,
+    };
+  }
 
   async validateUser(email: string, password: string): Promise<User | null> {
     try {
@@ -149,6 +166,9 @@ export class AuthService {
       };
 
       const accessToken = this.jwtService.sign(payload);
+      const loginCapabilities = currentOrg
+        ? await this.fetchCapabilities(currentOrg.organisation.type, currentOrg.organisation.id)
+        : null;
 
       console.log('[Auth Service] Login - Token generated:', {
         userId: user.id,
@@ -178,6 +198,7 @@ export class AuthService {
             approvalStatus: currentOrg.organisation.approvalStatus,
             isActive: currentOrg.organisation.isActive,
             permissions: currentOrg.permissions ?? null,
+            capabilities: loginCapabilities,
           }
           : null,
         organisations,
@@ -273,6 +294,18 @@ export class AuthService {
     });
     const savedOrg = await this.organisationsRepository.save(org);
 
+    // Auto-create default capabilities row for new CLINIC orgs
+    if (savedOrg.type === 'CLINIC') {
+      const defaultCaps = this.clinicCapabilitiesRepository.create({
+        organisationId: savedOrg.id,
+        hasPostnatalCare: true,
+        hasAyurveda: true,
+        hasIpd: true,
+        hasOpd: true,
+      });
+      await this.clinicCapabilitiesRepository.save(defaultCaps);
+    }
+
     // Link user to org as OWNER
     const orgUser = this.organisationUsersRepository.create({
       userId: savedUser.id,
@@ -323,6 +356,9 @@ export class AuthService {
         approvalStatus: savedOrg.approvalStatus,
         isActive: savedOrg.isActive,
         permissions: null,
+        capabilities: savedOrg.type === 'CLINIC'
+          ? { hasPostnatalCare: true, hasAyurveda: true, hasIpd: true, hasOpd: true }
+          : null,
       },
     };
   }
@@ -355,6 +391,10 @@ export class AuthService {
       isPrimary: ou.isPrimary,
     }));
 
+    const meCapabilities = currentOrgUser
+      ? await this.fetchCapabilities(currentOrgUser.organisation.type, currentOrgUser.organisation.id)
+      : null;
+
     return {
       id: user.id,
       email: user.email,
@@ -372,6 +412,7 @@ export class AuthService {
           approvalStatus: currentOrgUser.organisation.approvalStatus,
           isActive: currentOrgUser.organisation.isActive,
           permissions: currentOrgUser.permissions ?? null,
+          capabilities: meCapabilities,
         }
         : null,
       organisations,
@@ -425,6 +466,10 @@ export class AuthService {
         isPrimary: ou.isPrimary,
       }));
 
+      const refreshCapabilities = currentOrg
+        ? await this.fetchCapabilities(currentOrg.organisation.type, currentOrg.organisation.id)
+        : null;
+
       return {
         accessToken,
         refreshToken: refreshToken,
@@ -446,6 +491,7 @@ export class AuthService {
             approvalStatus: currentOrg.organisation.approvalStatus,
             isActive: currentOrg.organisation.isActive,
             permissions: currentOrg.permissions ?? null,
+            capabilities: refreshCapabilities,
           }
           : null,
         organisations,

@@ -1,6 +1,10 @@
 import { Controller, Post, Get, Sse, UseGuards } from '@nestjs/common';
 import { ScraperService } from './scraper.service';
 import { Observable } from 'rxjs';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { RolesGuard } from '../auth/guards/roles.guard';
+import { Roles } from '../auth/decorators/roles.decorator';
+import { UserRole } from '../users/enums/user-role.enum';
 
 export interface MessageEvent {
   data: string | object;
@@ -10,6 +14,8 @@ export interface MessageEvent {
 }
 
 @Controller('scraper')
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Roles(UserRole.SUPER_ADMIN, UserRole.SUPPORT)
 export class ScraperController {
   constructor(private readonly scraperService: ScraperService) {}
 

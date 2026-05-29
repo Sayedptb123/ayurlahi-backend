@@ -382,7 +382,9 @@ export class AppointmentsService {
       const patient = await this.patientsRepository.findOne({ where: { id: saved.patientId } });
       const doctor = await this.staffRepository.findOne({ where: { id: saved.doctorId } });
       const patientName = patient ? `${patient.firstName} ${patient.lastName}` : 'Patient';
-      const dateStr = saved.appointmentDate?.toLocaleDateString('en-IN') ?? '';
+      const dateStr = saved.appointmentDate
+        ? new Date(String(saved.appointmentDate)).toLocaleDateString('en-IN')
+        : '';
       const timeStr = saved.appointmentTime ?? '';
 
       // Email

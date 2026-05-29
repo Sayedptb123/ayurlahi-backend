@@ -98,6 +98,7 @@ import { FeedingLogsModule } from './feeding-logs/feeding-logs.module';
 import { FeedingLog } from './feeding-logs/entities/feeding-log.entity';
 import { NewbornAssessmentsModule } from './newborn-assessments/newborn-assessments.module';
 import { NewbornAssessment } from './newborn-assessments/entities/newborn-assessment.entity';
+import { ClinicCapabilities } from './clinic-capabilities/entities/clinic-capabilities.entity';
 import { TasksModule } from './tasks/tasks.module';
 import { StaffTask } from './tasks/entities/staff-task.entity';
 import { UserNotification } from './notifications/entities/user-notification.entity';
@@ -175,6 +176,7 @@ import { NotificationCronModule } from './notifications/notification-cron.module
           PushToken,
           UserNotification,
           CustomNotificationLog,
+          ClinicCapabilities,
           Expense,
           Budget,
           PayrollRecord,

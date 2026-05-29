@@ -25,7 +25,7 @@ export class ProductsController {
 
   @Get()
   async findAll(@Request() req, @Query() query: GetProductsDto) {
-    return this.productsService.findAll(query, req.user?.organisationType);
+    return this.productsService.findAll(query, req.user?.organisationType, req.user?.organisationId);
   }
 
   @Get('my-products')

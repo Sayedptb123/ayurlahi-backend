@@ -2,6 +2,7 @@ import {
   Entity,
   PrimaryGeneratedColumn,
   Column,
+  DeleteDateColumn,
   ManyToOne,
   JoinColumn,
 } from 'typeorm';
@@ -35,6 +36,9 @@ export class PrescriptionItem {
 
   @Column({ type: 'int', default: 0, name: 'order' })
   order: number; // Display order
+
+  @DeleteDateColumn({ name: 'deleted_at', nullable: true })
+  deletedAt: Date | null;
 
   @ManyToOne(() => Prescription, (prescription) => prescription.items, {
     onDelete: 'CASCADE',

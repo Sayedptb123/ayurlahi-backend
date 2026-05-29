@@ -183,6 +183,8 @@ export class LabReportsService {
       });
     }
 
+    queryBuilder.andWhere('labReport.deletedAt IS NULL');
+
     if (patientId) {
       queryBuilder.andWhere('labReport.patientId = :patientId', { patientId });
     }
@@ -348,7 +350,7 @@ export class LabReportsService {
       labReport.reportFile = updateDto.reportFile;
 
     if (updateDto.tests !== undefined) {
-      await this.labTestsRepository.delete({ labReportId: labReport.id });
+      await this.labTestsRepository.softDelete({ labReportId: labReport.id });
       labReport.tests = updateDto.tests.map((test) =>
         this.labTestsRepository.create({
           labReportId: labReport.id,

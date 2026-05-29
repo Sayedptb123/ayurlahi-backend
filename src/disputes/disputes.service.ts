@@ -20,23 +20,34 @@ export class DisputesService {
     private usersRepository: Repository<User>,
   ) { }
 
-  async findAll(userId: string, userRole: string, query: GetDisputesDto) {
-    // TODO: Disputes table doesn't exist yet - return empty data temporarily
-    // Once disputes table is created, implement proper query logic
+  async findAll(userId: string, userRole: string, query: GetDisputesDto, organisationId?: string) {
     const { page = 1, limit = 20 } = query;
+    const skip = (page - 1) * limit;
 
+    const qb = this.disputesRepository.createQueryBuilder('dispute')
+      .where('dispute.deletedAt IS NULL')
+      .leftJoinAndSelect('dispute.order', 'order')
+      .orderBy('dispute.createdAt', 'DESC')
+      .skip(skip)
+      .take(limit);
+
+    if (!RoleUtils.isAdminOrSupport(userRole) && organisationId) {
+      qb.andWhere('dispute.organisationId = :organisationId', { organisationId });
+    }
+
+    const [data, total] = await qb.getManyAndCount();
     return {
-      data: [],
+      data,
       pagination: {
         page,
         limit,
-        total: 0,
-        totalPages: 0,
+        total,
+        totalPages: Math.ceil(total / limit),
       },
     };
   }
 
-  async findOne(id: string, userId: string, userRole: string) {
+  async findOne(id: string, userId: string, userRole: string, organisationId?: string) {
     const dispute = await this.disputesRepository.findOne({
       where: { id, deletedAt: IsNull() },
       relations: ['order', 'clinic'],
@@ -51,7 +62,7 @@ export class DisputesService {
       const user = await this.usersRepository.findOne({
         where: { id: userId },
       });
-      if (!user || dispute.organisationId !== userId) {
+      if (!organisationId || dispute.organisationId !== organisationId) {
         throw new ForbiddenException('You do not have access to this dispute');
       }
     } else if (!RoleUtils.isAdminOrSupport(userRole)) {

@@ -218,6 +218,19 @@ export class ManufacturingService {
         });
     }
 
+    async activateBatch(batchId: string, manufacturerId: string) {
+        const batch = await this.batchRepository.findOne({
+            where: { id: batchId, manufacturerId },
+        });
+        if (!batch) throw new NotFoundException('Batch not found');
+        if (batch.status !== BatchStatus.PLANNED) {
+            throw new BadRequestException('Only PLANNED batches can be activated');
+        }
+        batch.status = BatchStatus.IN_PROGRESS;
+        batch.startDate = new Date() as any;
+        return this.batchRepository.save(batch);
+    }
+
     async createSimpleBatch(data: {
         manufacturerId: string;
         batchNumber: string;

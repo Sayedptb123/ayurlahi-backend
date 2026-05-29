@@ -26,6 +26,7 @@ export class DisputesController {
         req.user.userId,
         req.user.role,
         query,
+        req.user.organisationId,
       );
     } catch (error) {
       console.error('[Disputes Controller] Error in findAll:', {
@@ -41,7 +42,7 @@ export class DisputesController {
 
   @Get(':id')
   async findOne(@Param('id', ParseUUIDPipe) id: string, @Request() req) {
-    return this.disputesService.findOne(id, req.user.userId, req.user.role);
+    return this.disputesService.findOne(id, req.user.userId, req.user.role, req.user.organisationId);
   }
 
   @Patch(':id/resolve')

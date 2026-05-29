@@ -2,6 +2,7 @@ import {
   Entity,
   PrimaryGeneratedColumn,
   Column,
+  DeleteDateColumn,
   ManyToOne,
   JoinColumn,
 } from 'typeorm';
@@ -46,6 +47,9 @@ export class LabTest {
 
   @Column({ type: 'text', nullable: true, name: 'notes' })
   notes: string | null;
+
+  @DeleteDateColumn({ name: 'deleted_at', nullable: true })
+  deletedAt: Date | null;
 
   @ManyToOne(() => LabReport, (labReport) => labReport.tests, {
     onDelete: 'CASCADE',

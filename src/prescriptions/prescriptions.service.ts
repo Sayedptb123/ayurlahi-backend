@@ -50,12 +50,9 @@ export class PrescriptionsService {
       );
     }
 
-    if (
-      userRole !== 'DOCTOR' &&
-      userRole !== 'SUPER_ADMIN' &&
-      userRole !== 'SUPPORT'
-    ) {
-      throw new ForbiddenException('Only doctors can write prescriptions');
+    const canPrescribe = ['DOCTOR', 'SUPER_ADMIN', 'SUPPORT', 'OWNER', 'MANAGER', 'ADMIN'];
+    if (!canPrescribe.includes(userRole)) {
+      throw new ForbiddenException('Only clinic staff can write prescriptions');
     }
 
     const clinicId = organisationId;
@@ -175,6 +172,8 @@ export class PrescriptionsService {
         organisationId,
       });
     }
+
+    queryBuilder.andWhere('prescription.deletedAt IS NULL');
 
     if (patientId) {
       queryBuilder.andWhere('prescription.patientId = :patientId', { patientId });
@@ -323,7 +322,7 @@ export class PrescriptionsService {
     if (updateDto.status !== undefined) prescription.status = updateDto.status;
 
     if (updateDto.items !== undefined) {
-      await this.prescriptionItemsRepository.delete({
+      await this.prescriptionItemsRepository.softDelete({
         prescriptionId: prescription.id,
       });
       prescription.items = updateDto.items.map((item, index) =>

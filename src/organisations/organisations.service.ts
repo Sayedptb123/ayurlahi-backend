@@ -12,6 +12,7 @@ import { UpdateOrganisationDto } from './dto/update-organisation.dto';
 import { GetOrganisationsDto } from './dto/get-organisations.dto';
 
 import { OrganisationUser } from '../organisation-users/entities/organisation-user.entity';
+import { ClinicCapabilities } from '../clinic-capabilities/entities/clinic-capabilities.entity';
 import { UsersService } from '../users/users.service';
 import { NotificationsService } from '../notifications/notifications.service';
 
@@ -22,6 +23,8 @@ export class OrganisationsService {
     private readonly organisationsRepository: Repository<Organisation>,
     @InjectRepository(OrganisationUser)
     private readonly organisationUserRepository: Repository<OrganisationUser>,
+    @InjectRepository(ClinicCapabilities)
+    private readonly capabilitiesRepository: Repository<ClinicCapabilities>,
     private readonly usersService: UsersService,
     private readonly notificationsService: NotificationsService,
   ) { }
@@ -162,6 +165,30 @@ export class OrganisationsService {
       .orderBy('org.createdAt', 'DESC')
       .getManyAndCount();
 
+    // Attach clinic capabilities for CLINIC type orgs
+    if (data.length > 0) {
+      const clinicIds = data.filter((o) => o.type === 'CLINIC').map((o) => o.id);
+      if (clinicIds.length > 0) {
+        const caps = await this.capabilitiesRepository.find({
+          where: clinicIds.map((id) => ({ organisationId: id })),
+        });
+        const capMap = new Map(caps.map((c) => [c.organisationId, c]));
+        for (const org of data) {
+          if (org.type === 'CLINIC') {
+            const cap = capMap.get(org.id);
+            (org as any).capabilities = cap
+              ? {
+                  hasPostnatalCare: cap.hasPostnatalCare,
+                  hasAyurveda: cap.hasAyurveda,
+                  hasIpd: cap.hasIpd,
+                  hasOpd: cap.hasOpd,
+                }
+              : null;
+          }
+        }
+      }
+    }
+
     return { data, total };
   }
 
@@ -277,5 +304,39 @@ export class OrganisationsService {
     }).catch(() => {});
 
     return saved;
+  }
+
+  async getCapabilities(orgId: string) {
+    const cap = await this.capabilitiesRepository.findOne({
+      where: { organisationId: orgId },
+    });
+    if (!cap) throw new NotFoundException('Capabilities not found for this organisation');
+    return {
+      hasPostnatalCare: cap.hasPostnatalCare,
+      hasAyurveda: cap.hasAyurveda,
+      hasIpd: cap.hasIpd,
+      hasOpd: cap.hasOpd,
+    };
+  }
+
+  async updateCapabilities(
+    orgId: string,
+    dto: { hasPostnatalCare?: boolean; hasAyurveda?: boolean; hasIpd?: boolean; hasOpd?: boolean },
+  ) {
+    let cap = await this.capabilitiesRepository.findOne({ where: { organisationId: orgId } });
+    if (!cap) {
+      cap = this.capabilitiesRepository.create({ organisationId: orgId });
+    }
+    if (dto.hasPostnatalCare !== undefined) cap.hasPostnatalCare = dto.hasPostnatalCare;
+    if (dto.hasAyurveda !== undefined) cap.hasAyurveda = dto.hasAyurveda;
+    if (dto.hasIpd !== undefined) cap.hasIpd = dto.hasIpd;
+    if (dto.hasOpd !== undefined) cap.hasOpd = dto.hasOpd;
+    await this.capabilitiesRepository.save(cap);
+    return {
+      hasPostnatalCare: cap.hasPostnatalCare,
+      hasAyurveda: cap.hasAyurveda,
+      hasIpd: cap.hasIpd,
+      hasOpd: cap.hasOpd,
+    };
   }
 }

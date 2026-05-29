@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Param, UseGuards, Req } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Body, Param, UseGuards, Req } from '@nestjs/common';
 import { ManufacturingService } from './manufacturing.service';
 import { AuthGuard } from '@nestjs/passport';
 
@@ -73,6 +73,11 @@ export class ManufacturingController {
     @Get('batches/:manufacturerId')
     getBatches(@Param('manufacturerId') manufacturerId: string) {
         return this.manufacturingService.getBatches(manufacturerId);
+    }
+
+    @Patch('batches/:id/activate')
+    activateBatch(@Param('id') id: string, @Req() req) {
+        return this.manufacturingService.activateBatch(id, req.user.organisationId);
     }
 
     @Post('batches/:id/complete')

@@ -4,6 +4,7 @@ import {
   Column,
   CreateDateColumn,
   UpdateDateColumn,
+  Index,
 } from 'typeorm';
 
 @Entity('newborn_assessments')
@@ -58,6 +59,9 @@ export class NewbornAssessment {
 
   @Column({ type: 'text', nullable: true, name: 'notes' })
   notes: string | null;
+
+  @Column({ type: 'timestamptz', nullable: true, name: 'deleted_at' })
+  deletedAt: Date | null;
 
   @CreateDateColumn({ name: 'createdAt' })
   createdAt: Date;

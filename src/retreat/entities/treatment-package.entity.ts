@@ -27,7 +27,7 @@ export class TreatmentPackage {
     @Column({ type: 'text', nullable: true, name: 'description' })
     description: string | null;
 
-    @Column({ type: 'int', default: 1, name: 'durationDays' })
+    @Column({ type: 'int', default: 1, name: 'duration_days' })
     durationDays: number;
 
     @Column({ type: 'decimal', precision: 10, scale: 2, default: 0, name: 'price' })
@@ -36,7 +36,7 @@ export class TreatmentPackage {
     @Column({ type: 'jsonb', nullable: true, name: 'inclusions' })
     inclusions: string[] | null;
 
-    @Column({ type: 'varchar', length: 500, nullable: true, name: 'imageUrl' })
+    @Column({ type: 'varchar', length: 500, nullable: true, name: 'image_url' })
     imageUrl: string | null;
 
     @CreateDateColumn()

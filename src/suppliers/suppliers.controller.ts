@@ -25,7 +25,7 @@ export class SuppliersController {
   constructor(private readonly suppliersService: SuppliersService) {}
 
   @Post()
-  @Roles(UserRole.OWNER, UserRole.MANAGER, UserRole.ADMIN)
+  @Roles(UserRole.CLINIC, UserRole.MANUFACTURER, UserRole.ADMIN)
   create(
     @Param('organisationId') organisationId: string,
     @Body() createSupplierDto: CreateSupplierDto,
@@ -47,7 +47,7 @@ export class SuppliersController {
   }
 
   @Patch(':id')
-  @Roles(UserRole.OWNER, UserRole.MANAGER, UserRole.ADMIN)
+  @Roles(UserRole.CLINIC, UserRole.MANUFACTURER, UserRole.ADMIN)
   update(
     @Param('organisationId') organisationId: string,
     @Param('id') id: string,
@@ -57,7 +57,7 @@ export class SuppliersController {
   }
 
   @Delete(':id')
-  @Roles(UserRole.OWNER, UserRole.MANAGER, UserRole.ADMIN)
+  @Roles(UserRole.CLINIC, UserRole.MANUFACTURER, UserRole.ADMIN)
   remove(
     @Param('organisationId') organisationId: string,
     @Param('id') id: string,

@@ -55,6 +55,18 @@ export class PatientsService {
       );
     }
 
+    // Duplicate phone check — phone must be unique per organisation
+    if (createDto.phone) {
+      const phoneConflict = await this.patientsRepository.findOne({
+        where: { organisationId: clinicId as string, phone: createDto.phone },
+      });
+      if (phoneConflict) {
+        throw new ConflictException(
+          `A patient with phone number ${createDto.phone} is already registered (${phoneConflict.firstName} ${phoneConflict.lastName}). Search for them before registering a new record.`,
+        );
+      }
+    }
+
     const patient = this.patientsRepository.create({
       organisationId: clinicId as string,
       patientCode: createDto.patientId,
@@ -71,7 +83,23 @@ export class PatientsService {
       medicalHistory: createDto.medicalHistory,
     });
 
-    return this.patientsRepository.save(patient);
+    try {
+      return await this.patientsRepository.save(patient);
+    } catch (err: any) {
+      if (err?.code === '23505') {
+        if (err?.constraint?.includes('phone')) {
+          throw new ConflictException(
+            `A patient with this phone number is already registered in your clinic. Search for them before registering a new record.`,
+          );
+        }
+        if (err?.constraint?.includes('patient_code') || err?.constraint?.includes('patientcode')) {
+          throw new ConflictException(
+            `Patient ID ${createDto.patientId} already exists in this clinic`,
+          );
+        }
+      }
+      throw err;
+    }
   }
 
   async findAll(

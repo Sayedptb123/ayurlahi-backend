@@ -604,7 +604,6 @@ export class StaffService {
 
       return {
         message: 'Invitation sent successfully',
-        invitationToken, // Return token for testing (remove in production)
         expiresAt,
       };
     } catch (error) {
