@@ -157,7 +157,7 @@ export class OrganisationUsersService {
 
   async remove(id: string): Promise<void> {
     const organisationUser = await this.findOne(id);
-    await this.organisationUsersRepository.remove(organisationUser);
+    await this.organisationUsersRepository.softDelete(organisationUser.id);
   }
 
   async updatePermissionsByUserId(

@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { Resend } from 'resend';
+import * as nodemailer from 'nodemailer';
 
 interface AppointmentReminderData {
   patientName: string;
@@ -15,66 +15,109 @@ interface AppointmentReminderData {
 @Injectable()
 export class EmailService {
   private readonly logger = new Logger(EmailService.name);
-  private resend: Resend | null = null;
+  private transporter: nodemailer.Transporter | null = null;
   private fromEmail: string;
 
   constructor(private configService: ConfigService) {
-    const apiKey = this.configService.get<string>('RESEND_API_KEY');
-    if (apiKey) {
-      this.resend = new Resend(apiKey);
+    const host = this.configService.get<string>('EMAIL_HOST');
+    const user = this.configService.get<string>('EMAIL_USER');
+    const pass = this.configService.get<string>('EMAIL_PASS');
+
+    this.fromEmail = this.configService.get<string>('EMAIL_FROM', 'Ayurlahi <noreply@ayurlahi.com>');
+
+    if (host && user && pass) {
+      this.transporter = nodemailer.createTransport({
+        host,
+        port: this.configService.get<number>('EMAIL_PORT') ?? 587,
+        secure: false,
+        auth: { user, pass },
+        connectionTimeout: 8000,  // 8s to establish TCP connection
+        greetingTimeout: 8000,    // 8s for SMTP greeting
+        socketTimeout: 10000,     // 10s of inactivity before abort
+      });
+      this.logger.log(`Email service ready via ${host}`);
+      // Verify SMTP connection at startup
+      this.transporter.verify().then(() => {
+        this.logger.log('SMTP connection verified OK');
+      }).catch((err) => {
+        this.logger.error(`SMTP connection failed: ${err.message}`);
+      });
     } else {
-      this.logger.warn('RESEND_API_KEY not set — email sending disabled');
+      this.logger.warn('EMAIL_HOST / EMAIL_USER / EMAIL_PASS not set — email sending in console-log mode');
     }
-    this.fromEmail = this.configService.get<string>('EMAIL_FROM', 'noreply@ayurlahi.com');
+  }
+
+  private async send(to: string, subject: string, html: string): Promise<void> {
+    if (!this.transporter) {
+      this.logger.warn(`[EMAIL - DEV] To: ${to} | Subject: ${subject}`);
+      return;
+    }
+    this.logger.log(`Sending email to ${to} — subject: "${subject}"`);
+    try {
+      const info = await this.transporter.sendMail({ from: this.fromEmail, to, subject, html });
+      this.logger.log(`Email sent OK — messageId: ${info.messageId}`);
+    } catch (err: any) {
+      this.logger.error(`Failed to send email to ${to}: ${err.message} (code: ${err.code})`);
+      throw err;
+    }
+  }
+
+  async sendOtp(email: string, otp: string): Promise<void> {
+    if (!this.transporter) {
+      this.logger.warn(`[EMAIL - DEV] To: ${email} | OTP: ${otp}`);
+      return;
+    }
+    await this.send(email, 'Your Ayurlahi OTP', `
+      <div style="font-family:Arial,sans-serif;max-width:500px;margin:0 auto;padding:24px;">
+        <div style="background:#0ea5e9;padding:20px;border-radius:8px 8px 0 0;">
+          <h1 style="color:#fff;margin:0;font-size:20px;">Your OTP</h1>
+        </div>
+        <div style="border:1px solid #e2e8f0;border-top:none;padding:24px;border-radius:0 0 8px 8px;">
+          <p>Your one-time password is:</p>
+          <p style="font-size:36px;font-weight:bold;letter-spacing:8px;color:#0ea5e9;text-align:center;margin:24px 0;">${otp}</p>
+          <p style="color:#64748b;font-size:13px;">Valid for 5 minutes. Do not share this with anyone.</p>
+          <hr style="border:none;border-top:1px solid #e2e8f0;margin:16px 0">
+          <p style="color:#94a3b8;font-size:11px;text-align:center;">Ayurlahi Health Technologies — Medilink</p>
+        </div>
+      </div>
+    `);
   }
 
   async sendAppointmentReminder(data: AppointmentReminderData): Promise<boolean> {
-    if (!this.resend) return false;
-
     try {
-      await this.resend.emails.send({
-        from: this.fromEmail,
-        to: data.patientEmail,
-        subject: `Appointment Reminder — ${data.appointmentDate} at ${data.clinicName}`,
-        html: this.buildReminderHtml(data),
-      });
+      await this.send(
+        data.patientEmail,
+        `Appointment Reminder — ${data.appointmentDate} at ${data.clinicName}`,
+        this.buildReminderHtml(data),
+      );
       return true;
-    } catch (err) {
-      this.logger.error(`Failed to send appointment reminder: ${err.message}`);
+    } catch {
       return false;
     }
   }
 
   async sendAppointmentConfirmation(data: AppointmentReminderData): Promise<boolean> {
-    if (!this.resend) return false;
-
     try {
-      await this.resend.emails.send({
-        from: this.fromEmail,
-        to: data.patientEmail,
-        subject: `Appointment Confirmed — ${data.appointmentDate} at ${data.clinicName}`,
-        html: this.buildConfirmationHtml(data),
-      });
+      await this.send(
+        data.patientEmail,
+        `Appointment Confirmed — ${data.appointmentDate} at ${data.clinicName}`,
+        this.buildConfirmationHtml(data),
+      );
       return true;
-    } catch (err) {
-      this.logger.error(`Failed to send appointment confirmation: ${err.message}`);
+    } catch {
       return false;
     }
   }
 
   async sendAppointmentCancellation(data: Omit<AppointmentReminderData, 'appointmentType'> & { reason?: string }): Promise<boolean> {
-    if (!this.resend) return false;
-
     try {
-      await this.resend.emails.send({
-        from: this.fromEmail,
-        to: data.patientEmail,
-        subject: `Appointment Cancelled — ${data.clinicName}`,
-        html: this.buildCancellationHtml(data),
-      });
+      await this.send(
+        data.patientEmail,
+        `Appointment Cancelled — ${data.clinicName}`,
+        this.buildCancellationHtml(data),
+      );
       return true;
-    } catch (err) {
-      this.logger.error(`Failed to send cancellation email: ${err.message}`);
+    } catch {
       return false;
     }
   }

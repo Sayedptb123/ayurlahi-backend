@@ -15,11 +15,18 @@ import { OrganisationUser } from '../organisation-users/entities/organisation-us
 import { Organisation } from '../organisations/entities/organisation.entity';
 import { Staff } from '../staff/entities/staff.entity';
 import { ClinicCapabilities } from '../clinic-capabilities/entities/clinic-capabilities.entity';
+import { OtpVerification, OtpPurpose } from '../otp/entities/otp-verification.entity';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
 import { RegisterOrganisationDto } from './dto/register-organisation.dto';
 import { UpdateMeDto } from './dto/update-me.dto';
+import { RequestOtpDto } from './dto/request-otp.dto';
+import { VerifyOtpDto } from './dto/verify-otp.dto';
+import { ResetPasswordDto } from './dto/reset-password.dto';
 import { NotificationsService } from '../notifications/notifications.service';
+import { SmsService } from '../sms/sms.service';
+import { EmailService } from '../email/email.service';
+import { IsNull } from 'typeorm';
 
 export interface JwtPayload {
   sub: string; // userId
@@ -42,8 +49,12 @@ export class AuthService {
     private staffRepository: Repository<Staff>,
     @InjectRepository(ClinicCapabilities)
     private clinicCapabilitiesRepository: Repository<ClinicCapabilities>,
+    @InjectRepository(OtpVerification)
+    private otpRepository: Repository<OtpVerification>,
     private jwtService: JwtService,
     private notificationsService: NotificationsService,
+    private smsService: SmsService,
+    private emailService: EmailService,
   ) { }
 
   private async fetchCapabilities(orgType: string, orgId: string) {
@@ -58,6 +69,13 @@ export class AuthService {
       hasIpd: cap.hasIpd,
       hasOpd: cap.hasOpd,
     };
+  }
+
+  private async fetchStaffPosition(userId: string, orgId: string): Promise<string | null> {
+    const staff = await this.staffRepository.findOne({ where: { userId, organisationId: orgId } });
+    if (!staff) return null;
+    if (staff.positionCustom) return staff.positionCustom;
+    return staff.position.split('_').map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
   }
 
   async validateUser(email: string, password: string): Promise<User | null> {
@@ -169,6 +187,9 @@ export class AuthService {
       const loginCapabilities = currentOrg
         ? await this.fetchCapabilities(currentOrg.organisation.type, currentOrg.organisation.id)
         : null;
+      const loginStaffPosition = currentOrg
+        ? await this.fetchStaffPosition(user.id, currentOrg.organisation.id)
+        : null;
 
       console.log('[Auth Service] Login - Token generated:', {
         userId: user.id,
@@ -199,6 +220,7 @@ export class AuthService {
             isActive: currentOrg.organisation.isActive,
             permissions: currentOrg.permissions ?? null,
             capabilities: loginCapabilities,
+            staffPosition: loginStaffPosition,
           }
           : null,
         organisations,
@@ -394,6 +416,9 @@ export class AuthService {
     const meCapabilities = currentOrgUser
       ? await this.fetchCapabilities(currentOrgUser.organisation.type, currentOrgUser.organisation.id)
       : null;
+    const meStaffPosition = currentOrgUser
+      ? await this.fetchStaffPosition(user.id, currentOrgUser.organisation.id)
+      : null;
 
     return {
       id: user.id,
@@ -413,6 +438,7 @@ export class AuthService {
           isActive: currentOrgUser.organisation.isActive,
           permissions: currentOrgUser.permissions ?? null,
           capabilities: meCapabilities,
+          staffPosition: meStaffPosition,
         }
         : null,
       organisations,
@@ -583,5 +609,168 @@ export class AuthService {
 
     const { passwordHash, ...result } = user as any;
     return result;
+  }
+
+  // ── OTP ──────────────────────────────────────────────────────────────────────
+
+  async requestOtp(dto: RequestOtpDto): Promise<{ message: string }> {
+    const identifier = dto.channel === 'sms' ? dto.phone! : dto.email!;
+    const where = dto.channel === 'sms'
+      ? { phone: identifier }
+      : { email: identifier };
+
+    const user = await this.usersRepository.findOne({ where });
+
+    if (!user) {
+      const msg = dto.channel === 'sms'
+        ? 'No account found with this mobile number.'
+        : 'No account found with this email address.';
+      throw new NotFoundException(msg);
+    }
+
+    if (dto.purpose === 'login' && !user.isActive) {
+      throw new BadRequestException('Account is deactivated');
+    }
+
+    // Invalidate any prior unused OTPs for this identifier+purpose
+    await this.otpRepository
+      .createQueryBuilder()
+      .update(OtpVerification)
+      .set({ usedAt: new Date() })
+      .where('identifier = :identifier AND purpose = :purpose AND used_at IS NULL', {
+        identifier,
+        purpose: dto.purpose,
+      })
+      .execute();
+
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const otpHash = await bcrypt.hash(otp, 10);
+    const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
+
+    await this.otpRepository.save(
+      this.otpRepository.create({
+        identifier,
+        channel: dto.channel,
+        otpHash,
+        purpose: dto.purpose,
+        expiresAt,
+        usedAt: null,
+      }),
+    );
+
+    if (dto.channel === 'sms') {
+      await this.smsService.sendOtp(identifier, otp);
+    } else {
+      await this.emailService.sendOtp(identifier, otp);
+    }
+
+    return { message: 'OTP sent successfully.' };
+  }
+
+  async verifyOtpLogin(dto: VerifyOtpDto): Promise<any> {
+    const record = await this._findValidOtp(dto.identifier, dto.purpose);
+    const valid = await bcrypt.compare(dto.otp, record.otpHash);
+    if (!valid) throw new UnauthorizedException('Invalid OTP');
+
+    // For password_reset: don't consume the OTP yet — resetPassword will consume it
+    if (dto.purpose !== 'login') {
+      return { message: 'OTP verified', identifier: dto.identifier };
+    }
+
+    await this.otpRepository.update(record.id, { usedAt: new Date() });
+
+    // Find user by phone or email depending on how OTP was sent
+    const isEmail = record.channel === 'email';
+    const user = await this.usersRepository.findOne({
+      where: isEmail ? { email: dto.identifier } : { phone: dto.identifier },
+    });
+    if (!user) throw new UnauthorizedException('User not found');
+
+    const organisationUsers = await this.organisationUsersRepository.find({
+      where: { userId: user.id },
+      relations: ['organisation'],
+    });
+
+    const primaryOrg = organisationUsers.find((ou) => ou.isPrimary);
+    const currentOrg = primaryOrg || organisationUsers[0];
+
+    const payload: JwtPayload = {
+      sub: user.id,
+      email: user.email,
+      organisationId: currentOrg?.organisation.id,
+      organisationType: currentOrg?.organisation.type,
+      role: currentOrg?.role,
+    };
+
+    const accessToken = this.jwtService.sign(payload);
+    const capabilities = currentOrg
+      ? await this.fetchCapabilities(currentOrg.organisation.type, currentOrg.organisation.id)
+      : null;
+    const otpStaffPosition = currentOrg
+      ? await this.fetchStaffPosition(user.id, currentOrg.organisation.id)
+      : null;
+
+    return {
+      accessToken,
+      user: {
+        id: user.id,
+        email: user.email,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        phone: user.phone,
+        isActive: user.isActive,
+        isEmailVerified: user.isEmailVerified,
+      },
+      currentOrganisation: currentOrg
+        ? {
+            id: currentOrg.organisation.id,
+            name: currentOrg.organisation.name,
+            type: currentOrg.organisation.type,
+            role: currentOrg.role,
+            approvalStatus: currentOrg.organisation.approvalStatus,
+            isActive: currentOrg.organisation.isActive,
+            permissions: currentOrg.permissions,
+            capabilities,
+            staffPosition: otpStaffPosition,
+          }
+        : null,
+      organisations: organisationUsers.map((ou) => ({
+        id: ou.organisation.id,
+        name: ou.organisation.name,
+        type: ou.organisation.type,
+        role: ou.role,
+        isPrimary: ou.isPrimary,
+      })),
+    };
+  }
+
+  async resetPassword(dto: ResetPasswordDto): Promise<{ message: string }> {
+    const record = await this._findValidOtp(dto.identifier, 'password_reset');
+    const valid = await bcrypt.compare(dto.otp, record.otpHash);
+    if (!valid) throw new UnauthorizedException('Invalid OTP');
+
+    const isEmail = record.channel === 'email';
+    const user = await this.usersRepository.findOne({
+      where: isEmail ? { email: dto.identifier } : { phone: dto.identifier },
+    });
+    if (!user) throw new NotFoundException('User not found');
+
+    await this.otpRepository.update(record.id, { usedAt: new Date() });
+    user.passwordHash = await bcrypt.hash(dto.newPassword, 10);
+    await this.usersRepository.save(user);
+
+    return { message: 'Password reset successfully' };
+  }
+
+  private async _findValidOtp(identifier: string, purpose: OtpPurpose): Promise<OtpVerification> {
+    const record = await this.otpRepository.findOne({
+      where: { identifier, purpose, usedAt: IsNull() },
+      order: { createdAt: 'DESC' },
+    });
+
+    if (!record) throw new UnauthorizedException('OTP not found or already used');
+    if (record.expiresAt < new Date()) throw new UnauthorizedException('OTP has expired');
+
+    return record;
   }
 }

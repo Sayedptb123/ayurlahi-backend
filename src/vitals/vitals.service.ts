@@ -52,7 +52,7 @@ export class VitalsService {
     if (!vital) {
       throw new NotFoundException(`Vital record with ID ${id} not found`);
     }
-    await this.vitalsRepository.remove(vital);
+    await this.vitalsRepository.softDelete(vital.id);
     return { message: 'Vital record deleted successfully' };
   }
 }

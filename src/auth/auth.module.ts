@@ -11,29 +11,22 @@ import { OrganisationUser } from '../organisation-users/entities/organisation-us
 import { Organisation } from '../organisations/entities/organisation.entity';
 import { Staff } from '../staff/entities/staff.entity';
 import { ClinicCapabilities } from '../clinic-capabilities/entities/clinic-capabilities.entity';
+import { OtpVerification } from '../otp/entities/otp-verification.entity';
 import { NotificationsModule } from '../notifications/notifications.module';
+import { SmsModule } from '../sms/sms.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([User, OrganisationUser, Organisation, Staff, ClinicCapabilities]),
+    TypeOrmModule.forFeature([User, OrganisationUser, Organisation, Staff, ClinicCapabilities, OtpVerification]),
     NotificationsModule,
+    SmsModule,
     PassportModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
-      useFactory: (configService: ConfigService) => {
-        const secret =
-          configService.get<string>('JWT_SECRET') ||
-          'your-secret-key-change-in-production';
-        console.log('[JWT Module] Registering with secret:', {
-          hasSecret: !!configService.get<string>('JWT_SECRET'),
-          secretLength: secret.length,
-          secretPreview: secret.substring(0, 10) + '...',
-        });
-        return {
-          secret,
-          signOptions: { expiresIn: '7d' },
-        };
-      },
+      useFactory: (configService: ConfigService) => ({
+        secret: configService.get<string>('JWT_SECRET') || 'your-secret-key-change-in-production',
+        signOptions: { expiresIn: '7d' },
+      }),
       inject: [ConfigService],
     }),
   ],

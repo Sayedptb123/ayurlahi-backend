@@ -163,10 +163,7 @@ export class ManufacturingService {
                 item.rawMaterial.currentStock -= requiredQty;
                 await manager.save(item.rawMaterial);
 
-                // Log Transaction (Usage)
-                // Note: We need a way to get unit cost (FIFO/Avg). For now assume 0 or handle later.
-                // Simplified: Unit cost tracking is complex, using 0 placeholder or last purchase price if available.
-                const unitCost = 0; // TODO: Implement cost retrieval
+                const unitCost = parseFloat(String(item.rawMaterial.unitCost ?? 0));
 
                 const transaction = manager.create(InventoryTransaction, {
                     manufacturerId,

@@ -104,6 +104,8 @@ import { StaffTask } from './tasks/entities/staff-task.entity';
 import { UserNotification } from './notifications/entities/user-notification.entity';
 import { CustomNotificationLog } from './notifications/entities/custom-notification-log.entity';
 import { NotificationCronModule } from './notifications/notification-cron.module';
+import { Payout } from './payouts/entities/payout.entity';
+import { OtpVerification } from './otp/entities/otp-verification.entity';
 
 @Module({
   imports: [
@@ -181,6 +183,8 @@ import { NotificationCronModule } from './notifications/notification-cron.module
           Budget,
           PayrollRecord,
           SalaryStructure,
+          Payout,
+          OtpVerification,
         ],
         synchronize: false, // Disabled - synchronize causes issues
         logging: configService.get<string>('NODE_ENV') === 'development',

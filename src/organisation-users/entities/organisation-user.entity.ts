@@ -6,6 +6,7 @@ import {
   JoinColumn,
   CreateDateColumn,
   UpdateDateColumn,
+  DeleteDateColumn,
   Index,
 } from 'typeorm';
 import { User } from '../../users/entities/user.entity';
@@ -66,7 +67,7 @@ export class OrganisationUser {
   @Column({ type: 'uuid', nullable: true, name: 'updated_by' })
   updatedBy: string | null;
 
-  @Column({ type: 'timestamp', nullable: true, name: 'deleted_at' })
+  @DeleteDateColumn({ name: 'deleted_at', nullable: true })
   deletedAt: Date | null;
 
   @CreateDateColumn({ name: 'created_at' })

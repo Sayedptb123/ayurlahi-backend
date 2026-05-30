@@ -13,6 +13,9 @@ import { RegisterDto } from './dto/register.dto';
 import { RegisterOrganisationDto } from './dto/register-organisation.dto';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { UpdateMeDto } from './dto/update-me.dto';
+import { RequestOtpDto } from './dto/request-otp.dto';
+import { VerifyOtpDto } from './dto/verify-otp.dto';
+import { ResetPasswordDto } from './dto/reset-password.dto';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 
 @Controller('auth')
@@ -87,8 +90,21 @@ export class AuthController {
   }
   @Post('logout')
   async logout(@Request() req) {
-    // Since we use stateless JWTs, we don't need to do anything server-side
-    // unless we were checking against a blacklist.
     return { message: 'Logged out successfully' };
+  }
+
+  @Post('request-otp')
+  async requestOtp(@Body() dto: RequestOtpDto) {
+    return this.authService.requestOtp(dto);
+  }
+
+  @Post('verify-otp')
+  async verifyOtp(@Body() dto: VerifyOtpDto) {
+    return this.authService.verifyOtpLogin(dto);
+  }
+
+  @Post('reset-password')
+  async resetPassword(@Body() dto: ResetPasswordDto) {
+    return this.authService.resetPassword(dto);
   }
 }
