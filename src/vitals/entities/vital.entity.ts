@@ -4,6 +4,7 @@ import {
   Column,
   CreateDateColumn,
   UpdateDateColumn,
+  DeleteDateColumn,
   Index,
   ManyToOne,
   JoinColumn,
@@ -67,7 +68,7 @@ export class Vital {
   @Column({ type: 'uuid', nullable: true, name: 'updated_by' })
   updatedBy: string | null;
 
-  @Column({ type: 'timestamptz', nullable: true, name: 'deleted_at' })
+  @DeleteDateColumn({ name: 'deleted_at', nullable: true })
   deletedAt: Date | null;
 
   @CreateDateColumn({ name: 'created_at' })
