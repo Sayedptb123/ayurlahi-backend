@@ -9,10 +9,13 @@ import {
   Query,
   UseGuards,
   Request,
+  ForbiddenException,
 } from '@nestjs/common';
 import { OrganisationUsersService } from './organisation-users.service';
 import { CreateOrganisationUserDto } from './dto/create-organisation-user.dto';
 import { UpdateOrganisationUserDto } from './dto/update-organisation-user.dto';
+
+const PERMISSION_MANAGERS = ['OWNER', 'MANAGER', 'ADMIN', 'SUPER_ADMIN'];
 import { GetOrganisationUsersDto } from './dto/get-organisation-users.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 
@@ -57,6 +60,9 @@ export class OrganisationUsersController {
     @Body('permissions') permissions: Record<string, boolean>,
     @Request() req,
   ) {
+    if (!PERMISSION_MANAGERS.includes(req.user?.role)) {
+      throw new ForbiddenException('Only managers and owners can update staff permissions');
+    }
     const organisationId = req.user?.organisationId;
     return this.organisationUsersService.updatePermissionsByUserId(
       targetUserId,

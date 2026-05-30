@@ -19,10 +19,11 @@ import {
 import { FeedingLogsService } from './feeding-logs.service';
 import { CreateFeedingLogDto } from './dto/create-feeding-log.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { OrganisationGuard } from '../auth/guards/organisation.guard';
 
 @ApiTags('Feeding Logs')
 @ApiBearerAuth('access-token')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, OrganisationGuard)
 @Controller('organisations/:organisationId/feeding-logs')
 export class FeedingLogsController {
   constructor(private readonly feedingLogsService: FeedingLogsService) {}

@@ -1,6 +1,15 @@
-import { Controller, Get, Post, Patch, Body, Param, UseGuards, Req } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Body, Param, UseGuards, Req, ForbiddenException } from '@nestjs/common';
 import { ManufacturingService } from './manufacturing.service';
 import { AuthGuard } from '@nestjs/passport';
+
+function assertOwnsManufacturer(req: any, manufacturerId: string) {
+    // Manufacturer ID is the org ID for manufacturer-type organisations.
+    // AYURLAHI_TEAM can inspect any manufacturer.
+    if (req.user?.organisationType === 'AYURLAHI_TEAM') return;
+    if (req.user?.organisationId !== manufacturerId) {
+        throw new ForbiddenException('You do not have access to this manufacturer');
+    }
+}
 
 @Controller('manufacturing')
 @UseGuards(AuthGuard('jwt'))
@@ -16,7 +25,8 @@ export class ManufacturingController {
     }
 
     @Get('raw-materials/:manufacturerId')
-    getRawMaterials(@Param('manufacturerId') manufacturerId: string) {
+    getRawMaterials(@Param('manufacturerId') manufacturerId: string, @Req() req) {
+        assertOwnsManufacturer(req, manufacturerId);
         return this.manufacturingService.findAllRawMaterials(manufacturerId);
     }
 
@@ -43,7 +53,8 @@ export class ManufacturingController {
     }
 
     @Get('formulas/:manufacturerId')
-    getFormulas(@Param('manufacturerId') manufacturerId: string) {
+    getFormulas(@Param('manufacturerId') manufacturerId: string, @Req() req) {
+        assertOwnsManufacturer(req, manufacturerId);
         return this.manufacturingService.getFormulas(manufacturerId);
     }
 
@@ -71,7 +82,8 @@ export class ManufacturingController {
     }
 
     @Get('batches/:manufacturerId')
-    getBatches(@Param('manufacturerId') manufacturerId: string) {
+    getBatches(@Param('manufacturerId') manufacturerId: string, @Req() req) {
+        assertOwnsManufacturer(req, manufacturerId);
         return this.manufacturingService.getBatches(manufacturerId);
     }
 

@@ -19,10 +19,11 @@ import {
 import { NewbornAssessmentsService } from './newborn-assessments.service';
 import { CreateNewbornAssessmentDto } from './dto/create-newborn-assessment.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { OrganisationGuard } from '../auth/guards/organisation.guard';
 
 @ApiTags('Newborn Assessments')
 @ApiBearerAuth('access-token')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, OrganisationGuard)
 @Controller('organisations/:organisationId/newborn-assessments')
 export class NewbornAssessmentsController {
   constructor(private readonly newbornAssessmentsService: NewbornAssessmentsService) {}

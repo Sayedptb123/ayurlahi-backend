@@ -16,11 +16,12 @@ import {
 } from './dto/create-inventory-item.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
+import { OrganisationGuard } from '../auth/guards/organisation.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { UserRole } from '../users/enums/user-role.enum';
 
 @Controller('organisations/:organisationId/inventory')
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard, OrganisationGuard, RolesGuard)
 export class InventoryController {
   constructor(private readonly inventoryService: InventoryService) { }
 
