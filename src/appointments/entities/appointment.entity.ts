@@ -3,6 +3,7 @@ import {
   PrimaryGeneratedColumn,
   Column,
   CreateDateColumn,
+  DeleteDateColumn,
   UpdateDateColumn,
   ManyToOne,
   JoinColumn,
@@ -78,7 +79,7 @@ export class Appointment {
   @Column({ type: 'uuid', nullable: true, name: 'updated_by' })
   updatedBy: string | null;
 
-  @Column({ type: 'timestamp', nullable: true, name: 'deleted_at' })
+  @DeleteDateColumn({ type: 'timestamp', nullable: true, name: 'deleted_at' })
   deletedAt: Date | null;
 
   @ManyToOne(() => Organisation)

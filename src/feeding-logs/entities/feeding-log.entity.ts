@@ -3,6 +3,7 @@ import {
   PrimaryGeneratedColumn,
   Column,
   CreateDateColumn,
+  DeleteDateColumn,
   UpdateDateColumn,
   Index,
 } from 'typeorm';
@@ -39,7 +40,7 @@ export class FeedingLog {
   @Column({ type: 'text', nullable: true, name: 'notes' })
   notes: string | null;
 
-  @Column({ type: 'timestamptz', nullable: true, name: 'deleted_at' })
+  @DeleteDateColumn({ type: 'timestamptz', nullable: true, name: 'deleted_at' })
   deletedAt: Date | null;
 
   @CreateDateColumn({ name: 'createdAt' })

@@ -3,6 +3,7 @@ import {
   PrimaryGeneratedColumn,
   Column,
   CreateDateColumn,
+  DeleteDateColumn,
   UpdateDateColumn,
   ManyToOne,
   OneToMany,
@@ -65,7 +66,7 @@ export class LabReport {
   @Column({ type: 'varchar', length: 500, nullable: true, name: 'report_file' })
   reportFile: string | null;
 
-  @Column({ type: 'timestamp', nullable: true, name: 'deleted_at' })
+  @DeleteDateColumn({ type: 'timestamp', nullable: true, name: 'deleted_at' })
   deletedAt: Date | null;
 
   @ManyToOne(() => Organisation)

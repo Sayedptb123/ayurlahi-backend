@@ -3,6 +3,7 @@ import {
     PrimaryGeneratedColumn,
     Column,
     CreateDateColumn,
+  DeleteDateColumn,
     UpdateDateColumn,
     ManyToOne,
     JoinColumn,
@@ -72,7 +73,7 @@ export class Room {
     @Column({ type: 'uuid', nullable: true, name: 'branch_id' })
     branchId: string | null;
 
-    @Column({ type: 'timestamp', nullable: true, name: 'deleted_at' })
+    @DeleteDateColumn({ type: 'timestamp', nullable: true, name: 'deleted_at' })
     deletedAt: Date | null;
 
     @CreateDateColumn({ name: 'created_at' })

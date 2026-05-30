@@ -135,6 +135,6 @@ export class PurchaseOrdersService {
         'Cannot delete a Purchase Order that is not in draft status',
       );
     }
-    await this.poRepository.remove(po);
+    await this.poRepository.softDelete(po.id);
   }
 }

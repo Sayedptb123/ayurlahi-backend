@@ -1,4 +1,5 @@
-import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn,
+  DeleteDateColumn, UpdateDateColumn } from 'typeorm';
 
 export enum ProductStatus {
   DRAFT = 'draft',
@@ -88,7 +89,7 @@ export class Product {
   @Column({ type: 'decimal', precision: 5, scale: 2, nullable: true, name: 'commission_rate' })
   commissionRate: number | null;
 
-  @Column({ type: 'timestamp', nullable: true, name: 'deleted_at' })
+  @DeleteDateColumn({ type: 'timestamp', nullable: true, name: 'deleted_at' })
   deletedAt: Date | null;
 
   @CreateDateColumn({ name: 'created_at' })

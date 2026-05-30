@@ -85,7 +85,7 @@ export class InventoryService {
 
   async remove(organisationId: string, id: string): Promise<void> {
     const item = await this.findOne(organisationId, id);
-    await this.inventoryRepository.remove(item);
+    await this.inventoryRepository.softDelete(item.id);
   }
 
   async checkLowStock(organisationId: string): Promise<InventoryItem[]> {

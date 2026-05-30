@@ -3,6 +3,7 @@ import {
   PrimaryGeneratedColumn,
   Column,
   CreateDateColumn,
+  DeleteDateColumn,
   UpdateDateColumn,
   ManyToOne,
   OneToMany,
@@ -50,7 +51,7 @@ export class Prescription {
   @Column({ type: 'varchar', length: 20, default: PrescriptionStatus.ACTIVE, name: 'status' })
   status: PrescriptionStatus;
 
-  @Column({ type: 'timestamp', nullable: true, name: 'deleted_at' })
+  @DeleteDateColumn({ type: 'timestamp', nullable: true, name: 'deleted_at' })
   deletedAt: Date | null;
 
   @ManyToOne(() => Organisation)

@@ -3,6 +3,7 @@ import {
     PrimaryGeneratedColumn,
     Column,
     CreateDateColumn,
+  DeleteDateColumn,
     UpdateDateColumn,
     Index,
 } from 'typeorm';
@@ -61,7 +62,7 @@ export class Expense {
     @Column({ type: 'uuid', nullable: true, name: 'updated_by' })
     updatedBy: string | null;
 
-    @Column({ type: 'timestamp', nullable: true, name: 'deleted_at' })
+    @DeleteDateColumn({ type: 'timestamp', nullable: true, name: 'deleted_at' })
     deletedAt: Date | null;
 
     @CreateDateColumn({ name: 'created_at' })

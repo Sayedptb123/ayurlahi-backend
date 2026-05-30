@@ -5,6 +5,7 @@ import {
     ManyToOne,
     JoinColumn,
     CreateDateColumn,
+  DeleteDateColumn,
     UpdateDateColumn,
     OneToMany,
     Index,
@@ -91,6 +92,6 @@ export class Batch {
     @UpdateDateColumn({ name: 'updated_at' })
     updatedAt: Date;
 
-    @Column({ type: 'timestamp', nullable: true, name: 'deleted_at' })
+    @DeleteDateColumn({ type: 'timestamp', nullable: true, name: 'deleted_at' })
     deletedAt: Date | null;
 }

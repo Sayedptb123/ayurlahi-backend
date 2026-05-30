@@ -169,7 +169,7 @@ export class StaffBranchAssignmentsService {
 
   async remove(id: string, organisationId: string): Promise<void> {
     const assignment = await this.findOne(id, organisationId);
-    await this.assignmentsRepository.remove(assignment);
+    await this.assignmentsRepository.softDelete(assignment.id);
   }
 
   async getStaffBranches(

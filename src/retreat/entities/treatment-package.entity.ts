@@ -4,6 +4,7 @@ import {
     Column,
     CreateDateColumn,
     UpdateDateColumn,
+    DeleteDateColumn,
     ManyToOne,
     JoinColumn,
 } from 'typeorm';
@@ -44,4 +45,7 @@ export class TreatmentPackage {
 
     @UpdateDateColumn()
     updatedAt: Date;
+
+    @DeleteDateColumn({ type: 'timestamp', nullable: true, name: 'deleted_at' })
+    deletedAt: Date | null;
 }

@@ -3,6 +3,7 @@ import {
     PrimaryGeneratedColumn,
     Column,
     CreateDateColumn,
+  DeleteDateColumn,
     UpdateDateColumn,
     Index,
     ManyToOne,
@@ -51,7 +52,7 @@ export class Budget {
     @Column({ type: 'uuid', nullable: true, name: 'updated_by' })
     updatedBy: string | null;
 
-    @Column({ type: 'timestamp', nullable: true, name: 'deleted_at' })
+    @DeleteDateColumn({ type: 'timestamp', nullable: true, name: 'deleted_at' })
     deletedAt: Date | null;
 
     @CreateDateColumn({ name: 'created_at' })
