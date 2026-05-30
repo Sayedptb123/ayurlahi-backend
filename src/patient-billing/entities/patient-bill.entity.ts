@@ -112,4 +112,14 @@ export class PatientBill {
 
   @UpdateDateColumn({ name: 'updated_at' })
   updatedAt: Date;
+
+  // Ensure `balance` is serialized in JSON responses.
+  // TypeORM/Express don't call accessor getters during JSON.stringify,
+  // so we expose it explicitly on toJSON.
+  toJSON() {
+    return {
+      ...this,
+      balance: Number(this.total ?? 0) - Number(this.paidAmount ?? 0),
+    };
+  }
 }
