@@ -106,7 +106,8 @@ export class StaffPublicController {
 
   @Post('accept-invitation')
   @HttpCode(HttpStatus.OK)
-  @Throttle({ default: { ttl: 900000, limit: 5 } })
+  // Override both named throttlers: 5 attempts per 15 min (anti-brute-force on tokens)
+  @Throttle({ short: { ttl: 900000, limit: 5 }, medium: { ttl: 900000, limit: 5 } })
   async acceptInvitation(
     @Body() acceptDto: { token: string; password: string; confirmPassword: string },
   ) {

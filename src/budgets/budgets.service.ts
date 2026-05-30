@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Budget } from './entities/budget.entity';
@@ -22,7 +22,16 @@ export class BudgetsService {
             ...createBudgetDto,
             organisationId: orgId,
         });
-        return this.budgetRepository.save(budget);
+        try {
+            return await this.budgetRepository.save(budget);
+        } catch (err: any) {
+            if (err?.code === '23505') {
+                throw new ConflictException(
+                    `A budget named "${createBudgetDto.name}" already exists for this period in your organisation.`,
+                );
+            }
+            throw err;
+        }
     }
 
     async findAll(reqUser: RequestUser) {

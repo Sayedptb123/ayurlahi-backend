@@ -6,6 +6,7 @@ import {
   IsEmail,
   IsDateString,
   IsArray,
+  IsUUID,
   MaxLength,
   ValidateNested,
 } from 'class-validator';
@@ -123,4 +124,8 @@ export class CreatePatientDto {
   @IsOptional()
   @IsString()
   medicalHistory?: string;
+
+  @IsOptional()
+  @IsUUID()
+  motherPatientId?: string;
 }

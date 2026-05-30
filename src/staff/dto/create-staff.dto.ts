@@ -113,6 +113,25 @@ export class CreateStaffDto {
   @MaxLength(255)
   specialization?: string;
 
+  // Doctor-specific fields (used when position === 'doctor')
+  @IsOptional()
+  @IsString()
+  @MaxLength(50)
+  doctorCode?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  licenseNumber?: string;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  consultationFee?: number;
+
+  @IsOptional()
+  schedule?: Record<string, unknown>;
+
   @IsOptional()
   @IsString()
   @MaxLength(1000)

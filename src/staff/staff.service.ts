@@ -137,8 +137,21 @@ export class StaffService {
     const data = await queryBuilder.getMany();
     console.log('[Staff Service] Data retrieved:', data.length, 'records');
 
+    // Batch-fetch permissions from organisation_users for staff who have user accounts
+    const userIds = data.filter((s) => s.userId).map((s) => s.userId as string);
+    const permissionsMap: Record<string, Record<string, boolean> | null> = {};
+    if (userIds.length > 0 && targetOrganizationId) {
+      const orgUsers = await this.organisationUsersRepository.find({
+        where: { userId: In(userIds), organisationId: targetOrganizationId },
+        select: ['userId', 'permissions'],
+      });
+      for (const ou of orgUsers) {
+        if (ou.userId) permissionsMap[ou.userId] = ou.permissions ?? null;
+      }
+    }
+
     return {
-      data: data.map((staff) => this.mapToResponse(staff)),
+      data: data.map((staff) => this.mapToResponse(staff, staff.userId ? (permissionsMap[staff.userId] ?? null) : null)),
       pagination: {
         page,
         limit,
@@ -212,6 +225,11 @@ export class StaffService {
       salary: createDto.salary || null,
       qualifications: createDto.qualifications || null,
       specialization: createDto.specialization || null,
+      // Doctor-specific fields (only meaningful when position === 'doctor')
+      doctorCode: createDto.doctorCode || null,
+      licenseNumber: createDto.licenseNumber || null,
+      consultationFee: createDto.consultationFee ?? null,
+      schedule: createDto.schedule || null,
       isActive: true,
       notes: createDto.notes || null,
     });
@@ -446,7 +464,7 @@ export class StaffService {
       }
     }
 
-    await this.staffRepository.remove(staff);
+    await this.staffRepository.softDelete(staff.id);
     return { message: 'Staff member deleted successfully' };
   }
 
@@ -772,7 +790,7 @@ export class StaffService {
     return crypto.randomBytes(32).toString('hex');
   }
 
-  private mapToResponse(staff: Staff) {
+  private mapToResponse(staff: Staff, permissions: Record<string, boolean> | null = null) {
     return {
       id: staff.id,
       organisationId: staff.organisationId,
@@ -797,6 +815,11 @@ export class StaffService {
       salary: staff.salary ? Number(staff.salary) : null,
       qualifications: staff.qualifications,
       specialization: staff.specialization,
+      // Doctor-specific (null when position !== 'doctor')
+      doctorCode: staff.doctorCode ?? null,
+      licenseNumber: staff.licenseNumber ?? null,
+      consultationFee: staff.consultationFee != null ? Number(staff.consultationFee) : null,
+      schedule: staff.schedule ?? null,
       isActive: staff.isActive,
       notes: staff.notes,
       // User account fields
@@ -807,6 +830,8 @@ export class StaffService {
       invitationExpiresAt: staff.invitationExpiresAt?.toISOString() || null,
       createdAt: staff.createdAt.toISOString(),
       updatedAt: staff.updatedAt.toISOString(),
+      // Permissions from organisation_users (null if staff has no user account)
+      permissions,
     };
   }
 }

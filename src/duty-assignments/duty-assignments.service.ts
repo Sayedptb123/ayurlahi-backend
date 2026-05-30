@@ -91,6 +91,7 @@ export class DutyAssignmentsService {
           userIds: [staff.userId],
           title: 'Shift Assigned',
           body: `You have been assigned ${dutyType.name} on ${dateStr}`,
+          data: { dutyId: saved.id, type: 'duty_assigned' },
         })
         .catch(() => {/* non-critical */});
     }
@@ -258,7 +259,7 @@ export class DutyAssignmentsService {
       const newStaff = await this.staffRepository.findOne({ where: { id: updateDto.staffId } });
       if (newStaff?.userId) {
         const dutyType = await this.dutyTypesRepository.findOne({ where: { id: saved.dutyTypeId } });
-        const dateStr = saved.dutyDate.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+        const dateStr = new Date(saved.dutyDate as unknown as string).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
         this.notificationsService.sendToUsers({
           userIds: [newStaff.userId],
           title: 'New Duty Assigned',
@@ -271,7 +272,7 @@ export class DutyAssignmentsService {
       const staff = await this.staffRepository.findOne({ where: { id: saved.staffId } });
       if (staff?.userId) {
         const dutyType = await this.dutyTypesRepository.findOne({ where: { id: saved.dutyTypeId } });
-        const dateStr = saved.dutyDate.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+        const dateStr = new Date(saved.dutyDate as unknown as string).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
         this.notificationsService.sendToUsers({
           userIds: [staff.userId],
           title: 'Duty Updated',
@@ -292,7 +293,8 @@ export class DutyAssignmentsService {
       const staff = await this.staffRepository.findOne({ where: { id: assignment.staffId } });
       if (staff?.userId) {
         const dutyType = await this.dutyTypesRepository.findOne({ where: { id: assignment.dutyTypeId } });
-        const dateStr = (assignment.dutyDate as Date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+        // dutyDate column is DATE — TypeORM returns it as a string
+        const dateStr = new Date(assignment.dutyDate as unknown as string).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
         this.notificationsService.sendToUsers({
           userIds: [staff.userId],
           title: 'Duty Cancelled',

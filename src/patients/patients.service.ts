@@ -67,6 +67,16 @@ export class PatientsService {
       }
     }
 
+    // If motherPatientId is supplied, verify it belongs to the same org (no cross-org linking)
+    if (createDto.motherPatientId) {
+      const mother = await this.patientsRepository.findOne({
+        where: { id: createDto.motherPatientId, organisationId: clinicId as string },
+      });
+      if (!mother) {
+        throw new NotFoundException('Mother patient not found in this clinic');
+      }
+    }
+
     const patient = this.patientsRepository.create({
       organisationId: clinicId as string,
       patientCode: createDto.patientId,
@@ -81,6 +91,7 @@ export class PatientsService {
       bloodGroup: createDto.bloodGroup,
       allergies: createDto.allergies,
       medicalHistory: createDto.medicalHistory,
+      motherPatientId: createDto.motherPatientId,
     });
 
     try {

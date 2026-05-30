@@ -1,6 +1,7 @@
 import {
     IsNumber,
     IsOptional,
+    IsString,
     IsUUID,
     IsArray,
     ValidateNested,
@@ -9,17 +10,19 @@ import {
 import { Type } from 'class-transformer';
 
 class AllowanceDto {
+    @IsString()
+    name: string;
+
     @IsNumber()
     amount: number;
-
-    name: string;
 }
 
 class DeductionDto {
+    @IsString()
+    name: string;
+
     @IsNumber()
     amount: number;
-
-    name: string;
 }
 
 export class CreateSalaryStructureDto {
