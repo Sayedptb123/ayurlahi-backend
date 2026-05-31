@@ -7,13 +7,14 @@ import { OrderItem } from './entities/order-item.entity';
 import { Product } from '../products/entities/product.entity';
 import { User } from '../users/entities/user.entity';
 import { OrganisationUser } from '../organisation-users/entities/organisation-user.entity';
+import { Invoice } from '../invoices/entities/invoice.entity';
 
 import { InventoryModule } from '../inventory/inventory.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Order, OrderItem, Product, User, OrganisationUser]),
+    TypeOrmModule.forFeature([Order, OrderItem, Product, User, OrganisationUser, Invoice]),
     InventoryModule,
     NotificationsModule,
   ],

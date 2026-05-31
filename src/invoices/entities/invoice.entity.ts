@@ -20,11 +20,14 @@ export class Invoice {
   @Column({ type: 'varchar', length: 50, unique: true, name: 'invoiceNumber' })
   invoiceNumber: string;
 
-  @Column({ type: 'varchar', length: 500, name: 's3Key' })
-  s3Key: string;
+  // Nullable while S3 file-upload is not yet configured (V7).
+  // Auto-generated invoices on order delivery have these empty until the
+  // PDF render worker uploads to S3 and back-fills them.
+  @Column({ type: 'varchar', length: 500, name: 's3Key', nullable: true })
+  s3Key: string | null;
 
-  @Column({ type: 'varchar', length: 500, name: 's3Url' })
-  s3Url: string;
+  @Column({ type: 'varchar', length: 500, name: 's3Url', nullable: true })
+  s3Url: string | null;
 
   @Column({ type: 'date', name: 'invoiceDate' })
   invoiceDate: Date;

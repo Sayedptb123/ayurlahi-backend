@@ -17,6 +17,18 @@ import { UpdateOrderStatusDto } from './dto/update-order-status.dto';
 import { InventoryService } from '../inventory/inventory.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { RoleUtils } from '../common/utils/role.utils';
+import { Invoice } from '../invoices/entities/invoice.entity';
+
+// Valid order status transitions. Anything not in the allowed set is rejected.
+const ORDER_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
+  [OrderStatus.PENDING]: [OrderStatus.CONFIRMED, OrderStatus.CANCELLED],
+  [OrderStatus.CONFIRMED]: [OrderStatus.PROCESSING, OrderStatus.SHIPPED, OrderStatus.CANCELLED],
+  [OrderStatus.PROCESSING]: [OrderStatus.SHIPPED, OrderStatus.CANCELLED],
+  [OrderStatus.SHIPPED]: [OrderStatus.DELIVERED, OrderStatus.RETURNED],
+  [OrderStatus.DELIVERED]: [OrderStatus.RETURNED],
+  [OrderStatus.CANCELLED]: [], // terminal
+  [OrderStatus.RETURNED]: [], // terminal
+};
 
 @Injectable()
 export class OrdersService {
@@ -31,6 +43,8 @@ export class OrdersService {
     private usersRepository: Repository<User>,
     @InjectRepository(OrganisationUser)
     private orgUserRepository: Repository<OrganisationUser>,
+    @InjectRepository(Invoice)
+    private invoicesRepository: Repository<Invoice>,
     private inventoryService: InventoryService,
     private notificationsService: NotificationsService,
   ) { }
@@ -290,12 +304,40 @@ export class OrdersService {
   ) {
     const order = await this.findOne(id, userId, userRole, organisationType, organisationId);
 
-    // Only admin, support, and manufacturer can update status
     const normalizedRole = RoleUtils.normalizeRole(userRole, organisationType);
-    if (!['admin', 'support', 'manufacturer'].includes(normalizedRole)) {
-      throw new ForbiddenException(
-        'You do not have permission to update order status',
-      );
+    const isManufacturer = normalizedRole === 'manufacturer';
+    const isAdmin = ['admin', 'support'].includes(normalizedRole);
+    const isClinicCallerOwningOrder =
+      normalizedRole === 'clinic' && organisationId && order.organisationId === organisationId;
+
+    // Permission rules:
+    //  - admin/support/manufacturer: full status updates
+    //  - clinic that owns the order: may only cancel, and only while not yet shipped
+    if (!(isAdmin || isManufacturer || isClinicCallerOwningOrder)) {
+      throw new ForbiddenException('You do not have permission to update order status');
+    }
+
+    if (isClinicCallerOwningOrder && !isAdmin && !isManufacturer) {
+      if (updateDto.status !== OrderStatus.CANCELLED) {
+        throw new ForbiddenException(
+          'Clinics may only cancel their own orders. Other status transitions are reserved for the manufacturer.',
+        );
+      }
+      if (![OrderStatus.PENDING, OrderStatus.CONFIRMED].includes(order.status)) {
+        throw new BadRequestException(
+          `Order cannot be cancelled by clinic once status is "${order.status}". Contact the manufacturer.`,
+        );
+      }
+    }
+
+    // State machine: validate transition (admin/support bypass)
+    if (!isAdmin) {
+      const allowed = ORDER_TRANSITIONS[order.status] || [];
+      if (order.status !== updateDto.status && !allowed.includes(updateDto.status)) {
+        throw new BadRequestException(
+          `Invalid status transition: ${order.status} → ${updateDto.status}. Allowed from ${order.status}: ${allowed.join(', ') || '(terminal)'}.`,
+        );
+      }
     }
 
     // Update status
@@ -323,6 +365,9 @@ export class OrdersService {
           })),
         );
       }
+      // Auto-create invoice record (PDF generation in S3 is deferred to V7;
+      // for now we capture the invoice data so accountants can retrieve it).
+      await this.createInvoiceForDeliveredOrder(order);
     } else if (
       updateDto.status === OrderStatus.CANCELLED &&
       !order.cancelledAt
@@ -379,5 +424,58 @@ export class OrdersService {
     }
 
     return savedOrder;
+  }
+
+  /**
+   * Create an invoice row when an order is marked delivered.
+   * PDF rendering + S3 upload is deferred (V7) — when wired, the s3Key/s3Url
+   * fields can be populated by a separate worker that picks up invoices
+   * with empty s3Key.
+   */
+  private async createInvoiceForDeliveredOrder(order: Order): Promise<void> {
+    // Don't duplicate if already exists
+    const existing = await this.invoicesRepository.findOne({ where: { orderId: order.id } });
+    if (existing) return;
+
+    const items = (order.items || []).map((i) => ({
+      productSku: i.productSku,
+      productName: i.productName,
+      quantity: i.quantity,
+      unitPrice: Number(i.unitPrice),
+      lineTotal: Number(i.unitPrice) * i.quantity,
+    }));
+    const subtotal = items.reduce((sum, i) => sum + i.lineTotal, 0);
+    const gstAmount = Number(((subtotal * 5) / 100).toFixed(2)); // assume 5% pending real GST per-item
+    const totalAmount = subtotal + gstAmount;
+
+    const invoiceNumber = `INV-${new Date().getFullYear()}-${order.orderNumber}`;
+
+    const invoice = this.invoicesRepository.create({
+      orderId: order.id,
+      invoiceNumber,
+      s3Key: '', // populated when S3 worker generates PDF
+      s3Url: '',
+      invoiceDate: new Date(),
+      dueDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // +30 days
+      clinicDetails: {
+        organisationId: order.organisationId,
+        shippingAddress: order.shippingAddress,
+      },
+      items,
+      subtotal,
+      gstAmount,
+      shippingCharges: 0,
+      platformFee: 0,
+      totalAmount,
+      isGstInvoice: true,
+      hsnCode: null,
+    });
+    try {
+      await this.invoicesRepository.save(invoice);
+    } catch (err: any) {
+      // Don't fail the order delivery if invoice creation hits a constraint;
+      // log and continue. Accountants can regenerate via separate flow.
+      console.error('[OrdersService] Failed to create invoice for order', order.id, err?.message);
+    }
   }
 }

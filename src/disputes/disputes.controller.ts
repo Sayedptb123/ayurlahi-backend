@@ -1,6 +1,7 @@
 import {
   Controller,
   Get,
+  Post,
   Patch,
   Body,
   Param,
@@ -12,12 +13,23 @@ import {
 import { DisputesService } from './disputes.service';
 import { GetDisputesDto } from './dto/get-disputes.dto';
 import { ResolveDisputeDto } from './dto/resolve-dispute.dto';
+import { CreateDisputeDto } from './dto/create-dispute.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 
 @Controller('disputes')
 @UseGuards(JwtAuthGuard)
 export class DisputesController {
   constructor(private readonly disputesService: DisputesService) {}
+
+  @Post()
+  async create(@Request() req, @Body() dto: CreateDisputeDto) {
+    return this.disputesService.create(
+      req.user.userId,
+      req.user.organisationId,
+      req.user.organisationType,
+      dto,
+    );
+  }
 
   @Get()
   async findAll(@Request() req, @Query() query: GetDisputesDto) {
