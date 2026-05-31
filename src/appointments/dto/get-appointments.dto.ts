@@ -55,4 +55,9 @@ export class GetAppointmentsDto {
   @IsOptional()
   @IsEnum(AppointmentType)
   appointmentType?: AppointmentType;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  search?: string; // Free-text search across patient name, doctor name, reason, notes
 }

@@ -169,6 +169,7 @@ export class AppointmentsService {
       endDate,
       status,
       appointmentType,
+      search,
     } = query;
     const skip = (page - 1) * limit;
 
@@ -237,6 +238,14 @@ export class AppointmentsService {
       queryBuilder.andWhere('appointment.appointmentType = :appointmentType', {
         appointmentType,
       });
+    }
+
+    if (search) {
+      const term = `%${search}%`;
+      queryBuilder.andWhere(
+        '(patient.firstName ILIKE :term OR patient.lastName ILIKE :term OR patient.patientCode ILIKE :term OR doctor.firstName ILIKE :term OR doctor.lastName ILIKE :term OR appointment.reason ILIKE :term OR appointment.notes ILIKE :term)',
+        { term },
+      );
     }
 
     // Order and pagination

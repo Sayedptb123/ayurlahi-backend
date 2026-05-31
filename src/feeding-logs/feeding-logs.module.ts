@@ -3,9 +3,10 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { FeedingLogsController } from './feeding-logs.controller';
 import { FeedingLogsService } from './feeding-logs.service';
 import { FeedingLog } from './entities/feeding-log.entity';
+import { ClinicCapabilities } from '../clinic-capabilities/entities/clinic-capabilities.entity';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([FeedingLog])],
+  imports: [TypeOrmModule.forFeature([FeedingLog, ClinicCapabilities])],
   controllers: [FeedingLogsController],
   providers: [FeedingLogsService],
   exports: [FeedingLogsService],

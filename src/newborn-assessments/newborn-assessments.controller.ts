@@ -20,10 +20,12 @@ import { NewbornAssessmentsService } from './newborn-assessments.service';
 import { CreateNewbornAssessmentDto } from './dto/create-newborn-assessment.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { OrganisationGuard } from '../auth/guards/organisation.guard';
+import { CapabilityGuard, RequiresCapability } from '../auth/guards/capability.guard';
 
 @ApiTags('Newborn Assessments')
 @ApiBearerAuth('access-token')
-@UseGuards(JwtAuthGuard, OrganisationGuard)
+@UseGuards(JwtAuthGuard, OrganisationGuard, CapabilityGuard)
+@RequiresCapability('hasPostnatalCare')
 @Controller('organisations/:organisationId/newborn-assessments')
 export class NewbornAssessmentsController {
   constructor(private readonly newbornAssessmentsService: NewbornAssessmentsService) {}
