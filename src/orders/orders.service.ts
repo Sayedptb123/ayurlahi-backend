@@ -379,35 +379,47 @@ export class OrdersService {
 
     const savedOrder = await this.ordersRepository.save(order);
 
-    // Notify clinic owners/managers about order status change with status-specific message
-    const clinicId = savedOrder.organisationId;
-    if (clinicId) {
-      const notifMap: Record<string, { title: string; body: string; type: string }> = {
-        [OrderStatus.CONFIRMED]: {
-          title: 'Order Confirmed',
-          body: `Order ${savedOrder.orderNumber} has been confirmed by the manufacturer`,
-          type: 'order_confirmed',
-        },
-        [OrderStatus.SHIPPED]: {
-          title: 'Order Shipped',
-          body: `Order ${savedOrder.orderNumber} has been shipped and is on the way`,
-          type: 'order_shipped',
-        },
-        [OrderStatus.DELIVERED]: {
-          title: 'Order Delivered',
-          body: `Order ${savedOrder.orderNumber} has been delivered. Inventory updated.`,
-          type: 'order_delivered',
-        },
-        [OrderStatus.CANCELLED]: {
-          title: 'Order Cancelled',
-          body: `Order ${savedOrder.orderNumber} has been cancelled`,
-          type: 'order_cancelled',
-        },
-      };
-      const notif = notifMap[savedOrder.status];
-      if (notif) {
+    // Notify the *other side* of the marketplace about status changes:
+    //   - manufacturer → clinic for confirmed/shipped/delivered
+    //   - whichever party cancelled → notify the other party
+    const clinicOrgId = savedOrder.organisationId;
+    const mfgOrgId = savedOrder.items?.[0]?.manufacturerId;
+    const notifMap: Record<string, { title: string; body: string; type: string }> = {
+      [OrderStatus.CONFIRMED]: {
+        title: 'Order Confirmed',
+        body: `Order ${savedOrder.orderNumber} has been confirmed by the manufacturer`,
+        type: 'order_confirmed',
+      },
+      [OrderStatus.SHIPPED]: {
+        title: 'Order Shipped',
+        body: `Order ${savedOrder.orderNumber} has been shipped and is on the way`,
+        type: 'order_shipped',
+      },
+      [OrderStatus.DELIVERED]: {
+        title: 'Order Delivered',
+        body: `Order ${savedOrder.orderNumber} has been delivered. Inventory updated.`,
+        type: 'order_delivered',
+      },
+      [OrderStatus.CANCELLED]: {
+        title: 'Order Cancelled',
+        body: `Order ${savedOrder.orderNumber} has been cancelled`,
+        type: 'order_cancelled',
+      },
+    };
+    const notif = notifMap[savedOrder.status];
+    if (notif) {
+      // Cancellation: notify the side that did NOT cancel.
+      // All other transitions are manufacturer-driven → notify clinic.
+      let recipientOrgId: string | undefined;
+      if (savedOrder.status === OrderStatus.CANCELLED) {
+        recipientOrgId =
+          isClinicCallerOwningOrder && !isManufacturer ? mfgOrgId : clinicOrgId;
+      } else {
+        recipientOrgId = clinicOrgId;
+      }
+      if (recipientOrgId) {
         this.orgUserRepository
-          .find({ where: { organisationId: clinicId, role: In(['OWNER', 'MANAGER', 'ADMIN']), isActive: true } })
+          .find({ where: { organisationId: recipientOrgId, role: In(['OWNER', 'MANAGER', 'ADMIN']), isActive: true } })
           .then((orgUsers) => {
             const userIds = orgUsers.map((ou) => ou.userId).filter(Boolean);
             if (userIds.length > 0) {
