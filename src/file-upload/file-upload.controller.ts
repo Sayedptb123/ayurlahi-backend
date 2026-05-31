@@ -5,7 +5,9 @@ import {
   UploadedFile,
   UseGuards,
   BadRequestException,
+  ForbiddenException,
   Query,
+  Request,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiTags, ApiBearerAuth, ApiConsumes, ApiBody } from '@nestjs/swagger';
@@ -19,6 +21,22 @@ const ALLOWED_MIME_TYPES = [
   'application/pdf',
   'image/heic',
 ];
+
+// Folder names the client is allowed to upload into. We always prefix with the
+// org id, so the actual S3 key looks like: <orgId>/<folder>/<uuid>.<ext>
+// Adding a new folder = add it here. Prevents abuse like uploading
+// "../../some-other-org/" by smuggling characters through the query param.
+const ALLOWED_FOLDERS = new Set([
+  'uploads',
+  'documents',
+  'medical-records',
+  'lab-reports',
+  'prescriptions',
+  'invoices',
+  'profile-photos',
+  'postnatal',
+  'misc',
+]);
 
 @ApiTags('file-upload')
 @ApiBearerAuth('access-token')
@@ -44,6 +62,7 @@ export class FileUploadController {
   )
   async uploadFile(
     @UploadedFile() file: Express.Multer.File,
+    @Request() req,
     @Query('folder') folder?: string,
   ) {
     if (!file) {
@@ -54,6 +73,14 @@ export class FileUploadController {
         `File type not allowed. Allowed types: ${ALLOWED_MIME_TYPES.join(', ')}`,
       );
     }
-    return this.fileUploadService.uploadFile(file, folder ?? 'uploads');
+    const orgId = req.user?.organisationId;
+    if (!orgId) {
+      throw new ForbiddenException('No organisation context on request');
+    }
+    const safeFolder = folder && ALLOWED_FOLDERS.has(folder) ? folder : 'uploads';
+    // Always namespace uploads by org id so one tenant's signed URL can't be
+    // crafted to point at another tenant's data.
+    const scopedFolder = `${orgId}/${safeFolder}`;
+    return this.fileUploadService.uploadFile(file, scopedFolder);
   }
 }
