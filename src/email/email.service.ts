@@ -26,17 +26,19 @@ export class EmailService {
     this.fromEmail = this.configService.get<string>('EMAIL_FROM', 'Ayurlahi <noreply@ayurlahi.com>');
 
     if (host && user && pass) {
+      // Use port 2525 — cloud hosts (Render, Railway, Fly) block 25/465/587
+      // but leave 2525 open. Brevo, SendGrid, and most relay services support it.
+      const port = this.configService.get<number>('EMAIL_PORT') ?? 2525;
       this.transporter = nodemailer.createTransport({
         host,
-        port: this.configService.get<number>('EMAIL_PORT') ?? 587,
-        secure: false,
+        port,
+        secure: false,   // STARTTLS on 2525 / 587
         auth: { user, pass },
-        connectionTimeout: 8000,  // 8s to establish TCP connection
-        greetingTimeout: 8000,    // 8s for SMTP greeting
-        socketTimeout: 10000,     // 10s of inactivity before abort
+        connectionTimeout: 10000,
+        greetingTimeout: 10000,
+        socketTimeout: 15000,
       });
-      this.logger.log(`Email service ready via ${host}`);
-      // Verify SMTP connection at startup
+      this.logger.log(`Email service ready via ${host}:${port}`);
       this.transporter.verify().then(() => {
         this.logger.log('SMTP connection verified OK');
       }).catch((err) => {
