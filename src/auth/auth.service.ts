@@ -27,6 +27,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { SmsService } from '../sms/sms.service';
 import { EmailService } from '../email/email.service';
 import { IsNull } from 'typeorm';
+import { normalizePhone } from '../common/utils/phone.util';
 
 export interface JwtPayload {
   sub: string; // userId
@@ -237,9 +238,11 @@ export class AuthService {
       throw new BadRequestException('Phone number is required');
     }
 
+    const phone = normalizePhone(registerDto.phone) as string;
+
     // Check if user already exists
     const existingUser = await this.usersRepository.findOne({
-      where: [{ email: registerDto.email }, { phone: registerDto.phone }],
+      where: [{ email: registerDto.email }, { phone }],
     });
 
     if (existingUser) {
@@ -257,7 +260,7 @@ export class AuthService {
       passwordHash: hashedPassword,
       firstName: registerDto.firstName,
       lastName: registerDto.lastName,
-      phone: registerDto.phone,
+      phone,
       isActive: true,
       isEmailVerified: false,
     });
@@ -285,9 +288,11 @@ export class AuthService {
   }
 
   async registerOrganisation(dto: RegisterOrganisationDto) {
+    const phone = normalizePhone(dto.phone) as string;
+
     // Check for existing user
     const existing = await this.usersRepository.findOne({
-      where: [{ email: dto.email }, { phone: dto.phone }],
+      where: [{ email: dto.email }, { phone }],
     });
     if (existing) {
       throw new ConflictException('An account with this email or phone already exists');
@@ -301,7 +306,7 @@ export class AuthService {
       passwordHash: hashedPassword,
       firstName: dto.firstName,
       lastName: dto.lastName,
-      phone: dto.phone,
+      phone,
       isActive: true,
       isEmailVerified: false,
     });
@@ -595,7 +600,7 @@ export class AuthService {
 
     if (dto.firstName !== undefined) user.firstName = dto.firstName;
     if (dto.lastName !== undefined) user.lastName = dto.lastName;
-    if (dto.phone !== undefined) user.phone = dto.phone;
+    if (dto.phone !== undefined) user.phone = normalizePhone(dto.phone) as string;
     await this.usersRepository.save(user);
 
     // Keep staff record in sync
@@ -603,7 +608,7 @@ export class AuthService {
     if (staffRecord) {
       if (dto.firstName !== undefined) staffRecord.firstName = dto.firstName;
       if (dto.lastName !== undefined) staffRecord.lastName = dto.lastName;
-      if (dto.phone !== undefined) staffRecord.phone = dto.phone;
+      if (dto.phone !== undefined) staffRecord.phone = normalizePhone(dto.phone) as string;
       await this.staffRepository.save(staffRecord);
     }
 

@@ -13,6 +13,7 @@ import { Organisation } from '../organisations/entities/organisation.entity';
 import { OrganisationUser } from '../organisation-users/entities/organisation-user.entity';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
+import { normalizePhone } from '../common/utils/phone.util';
 import { GetUsersDto } from './dto/get-users.dto';
 import { RoleUtils } from '../common/utils/role.utils';
 
@@ -136,7 +137,7 @@ export class UsersService {
       passwordHash,
       firstName: createUserDto.firstName,
       lastName: createUserDto.lastName,
-      phone: createUserDto.phone,
+      phone: normalizePhone(createUserDto.phone) as string,
       isActive:
         createUserDto.isActive !== undefined ? createUserDto.isActive : true,
       isEmailVerified: false,
@@ -210,7 +211,7 @@ export class UsersService {
       firstName: updateUserDto.firstName || user.firstName,
       lastName: updateUserDto.lastName || user.lastName,
       phone:
-        updateUserDto.phone !== undefined ? updateUserDto.phone : user.phone,
+        updateUserDto.phone !== undefined ? normalizePhone(updateUserDto.phone) as string : user.phone,
       isActive:
         updateUserDto.isActive !== undefined
           ? updateUserDto.isActive
