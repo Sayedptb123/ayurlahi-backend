@@ -19,6 +19,7 @@ import { GetStaffDto } from './dto/get-staff.dto';
 import * as bcrypt from 'bcryptjs';
 import * as crypto from 'crypto';
 import { NotificationsService } from '../notifications/notifications.service';
+import { normalizePhone } from '../common/utils/phone.util';
 
 
 @Injectable()
@@ -210,6 +211,8 @@ export class StaffService {
       );
     }
 
+    if (createDto.phone) createDto.phone = normalizePhone(createDto.phone) as string;
+
     // Uniqueness checks BEFORE any DB write. Previously these ran after
     // staffRepository.save(), so a conflict left an orphan staff row behind.
     if (createDto.email || createDto.phone) {
@@ -383,7 +386,7 @@ export class StaffService {
     const finalEmail =
       updateDto.email !== undefined ? updateDto.email : staff.email;
     const finalPhone =
-      updateDto.phone !== undefined ? updateDto.phone : staff.phone;
+      updateDto.phone !== undefined ? normalizePhone(updateDto.phone) as string : staff.phone;
     const contactChanged =
       (updateDto.email !== undefined && updateDto.email !== staff.email) ||
       (updateDto.phone !== undefined && updateDto.phone !== staff.phone);
@@ -444,7 +447,7 @@ export class StaffService {
     if (updateDto.positionCustom !== undefined)
       staff.positionCustom = updateDto.positionCustom;
     if (updateDto.email !== undefined) staff.email = updateDto.email;
-    if (updateDto.phone !== undefined) staff.phone = updateDto.phone;
+    if (updateDto.phone !== undefined) staff.phone = finalPhone;
     if (updateDto.whatsappNumber !== undefined)
       staff.whatsappNumber = updateDto.whatsappNumber;
     if (updateDto.address !== undefined) {
