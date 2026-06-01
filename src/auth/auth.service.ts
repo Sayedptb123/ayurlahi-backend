@@ -28,6 +28,9 @@ import { SmsService } from '../sms/sms.service';
 import { EmailService } from '../email/email.service';
 import { IsNull } from 'typeorm';
 import { normalizePhone } from '../common/utils/phone.util';
+import { ClinicProfile } from '../organisations/entities/clinic-profile.entity';
+import { ManufacturerProfile } from '../organisations/entities/manufacturer-profile.entity';
+import { OrganisationContact } from '../organisations/entities/organisation-contact.entity';
 
 export interface JwtPayload {
   sub: string; // userId
@@ -50,6 +53,12 @@ export class AuthService {
     private staffRepository: Repository<Staff>,
     @InjectRepository(ClinicCapabilities)
     private clinicCapabilitiesRepository: Repository<ClinicCapabilities>,
+    @InjectRepository(ClinicProfile)
+    private clinicProfileRepository: Repository<ClinicProfile>,
+    @InjectRepository(ManufacturerProfile)
+    private manufacturerProfileRepository: Repository<ManufacturerProfile>,
+    @InjectRepository(OrganisationContact)
+    private orgContactRepository: Repository<OrganisationContact>,
     @InjectRepository(OtpVerification)
     private otpRepository: Repository<OtpVerification>,
     private jwtService: JwtService,
@@ -331,6 +340,44 @@ export class AuthService {
         hasOpd: true,
       });
       await this.clinicCapabilitiesRepository.save(defaultCaps);
+
+      // Clinic profile — license number, gstin, etc.
+      await this.clinicProfileRepository.save(
+        this.clinicProfileRepository.create({
+          organisationId: savedOrg.id,
+          clinicName: dto.orgName,
+          licenseNumber: dto.licenseNumber || null,
+          gstin: dto.gstin || null,
+        }),
+      );
+    }
+
+    if (savedOrg.type === 'MANUFACTURER') {
+      await this.manufacturerProfileRepository.save(
+        this.manufacturerProfileRepository.create({
+          organisationId: savedOrg.id,
+          companyName: dto.orgName,
+          licenseNumber: dto.licenseNumber || null,
+          gstin: dto.gstin || null,
+        }),
+      );
+    }
+
+    // Contact details — address, phone, etc.
+    const hasContact = dto.address || dto.city || dto.state || dto.pincode || dto.orgPhone;
+    if (hasContact) {
+      await this.orgContactRepository.save(
+        this.orgContactRepository.create({
+          organisationId: savedOrg.id,
+          type: 'primary',
+          addressLine1: dto.address || null,
+          city: dto.city || null,
+          state: dto.state || null,
+          pincode: dto.pincode || null,
+          phone: normalizePhone(dto.orgPhone) || null,
+          isPrimary: true,
+        }),
+      );
     }
 
     // Link user to org as OWNER

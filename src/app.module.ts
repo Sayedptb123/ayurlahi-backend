@@ -99,6 +99,9 @@ import { FeedingLog } from './feeding-logs/entities/feeding-log.entity';
 import { NewbornAssessmentsModule } from './newborn-assessments/newborn-assessments.module';
 import { NewbornAssessment } from './newborn-assessments/entities/newborn-assessment.entity';
 import { ClinicCapabilities } from './clinic-capabilities/entities/clinic-capabilities.entity';
+import { ClinicProfile } from './organisations/entities/clinic-profile.entity';
+import { ManufacturerProfile } from './organisations/entities/manufacturer-profile.entity';
+import { OrganisationContact } from './organisations/entities/organisation-contact.entity';
 import { TasksModule } from './tasks/tasks.module';
 import { StaffTask } from './tasks/entities/staff-task.entity';
 import { UserNotification } from './notifications/entities/user-notification.entity';
@@ -179,6 +182,9 @@ import { OtpVerification } from './otp/entities/otp-verification.entity';
           UserNotification,
           CustomNotificationLog,
           ClinicCapabilities,
+          ClinicProfile,
+          ManufacturerProfile,
+          OrganisationContact,
           Expense,
           Budget,
           PayrollRecord,

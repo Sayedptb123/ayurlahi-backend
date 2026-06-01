@@ -11,13 +11,16 @@ import { OrganisationUser } from '../organisation-users/entities/organisation-us
 import { Organisation } from '../organisations/entities/organisation.entity';
 import { Staff } from '../staff/entities/staff.entity';
 import { ClinicCapabilities } from '../clinic-capabilities/entities/clinic-capabilities.entity';
+import { ClinicProfile } from '../organisations/entities/clinic-profile.entity';
+import { ManufacturerProfile } from '../organisations/entities/manufacturer-profile.entity';
+import { OrganisationContact } from '../organisations/entities/organisation-contact.entity';
 import { OtpVerification } from '../otp/entities/otp-verification.entity';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { SmsModule } from '../sms/sms.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([User, OrganisationUser, Organisation, Staff, ClinicCapabilities, OtpVerification]),
+    TypeOrmModule.forFeature([User, OrganisationUser, Organisation, Staff, ClinicCapabilities, ClinicProfile, ManufacturerProfile, OrganisationContact, OtpVerification]),
     NotificationsModule,
     SmsModule,
     PassportModule,
