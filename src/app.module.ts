@@ -189,6 +189,13 @@ import { OtpVerification } from './otp/entities/otp-verification.entity';
         synchronize: false, // Disabled - synchronize causes issues
         logging: configService.get<string>('NODE_ENV') === 'development',
         namingStrategy: new CustomNamingStrategy(),
+        // SSL is required by managed Postgres providers (Supabase, RDS, etc.).
+        // Toggle via DB_SSL env var so localhost can still connect without it.
+        // `rejectUnauthorized: false` is intentional — Supabase uses a self-signed
+        // cert chain that Node can't verify out of the box.
+        ssl: configService.get<string>('DB_SSL') === 'true'
+          ? { rejectUnauthorized: false }
+          : false,
       }),
       inject: [ConfigService],
     }),
