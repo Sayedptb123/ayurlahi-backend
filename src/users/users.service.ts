@@ -143,7 +143,21 @@ export class UsersService {
       isEmailVerified: false,
     });
 
-    const savedUser = await this.usersRepository.save(user);
+    let savedUser: User;
+    try {
+      savedUser = await this.usersRepository.save(user);
+    } catch (err: any) {
+      if (err.code === '23505') {
+        if (err.detail?.includes('phone')) {
+          throw new ConflictException('A user with this phone number already exists');
+        }
+        if (err.detail?.includes('email')) {
+          throw new ConflictException('A user with this email address already exists');
+        }
+        throw new ConflictException('A user with this email or phone already exists');
+      }
+      throw err;
+    }
 
     // If role is MANUFACTURER or CLINIC and organizationName is provided, create organisation
     if (

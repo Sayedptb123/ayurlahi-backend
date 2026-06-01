@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import * as nodemailer from 'nodemailer';
+import { Resend } from 'resend';
 
 interface AppointmentReminderData {
   patientName: string;
@@ -15,57 +15,37 @@ interface AppointmentReminderData {
 @Injectable()
 export class EmailService {
   private readonly logger = new Logger(EmailService.name);
-  private transporter: nodemailer.Transporter | null = null;
+  private resend: Resend | null = null;
   private fromEmail: string;
 
   constructor(private configService: ConfigService) {
-    const host = this.configService.get<string>('EMAIL_HOST');
-    const user = this.configService.get<string>('EMAIL_USER');
-    const pass = this.configService.get<string>('EMAIL_PASS');
-
+    const apiKey = this.configService.get<string>('RESEND_API_KEY');
     this.fromEmail = this.configService.get<string>('EMAIL_FROM', 'Ayurlahi <noreply@ayurlahi.com>');
 
-    if (host && user && pass) {
-      // Use port 2525 — cloud hosts (Render, Railway, Fly) block 25/465/587
-      // but leave 2525 open. Brevo, SendGrid, and most relay services support it.
-      const port = this.configService.get<number>('EMAIL_PORT') ?? 2525;
-      this.transporter = nodemailer.createTransport({
-        host,
-        port,
-        secure: false,   // STARTTLS on 2525 / 587
-        auth: { user, pass },
-        connectionTimeout: 10000,
-        greetingTimeout: 10000,
-        socketTimeout: 15000,
-      });
-      this.logger.log(`Email service ready via ${host}:${port}`);
-      this.transporter.verify().then(() => {
-        this.logger.log('SMTP connection verified OK');
-      }).catch((err) => {
-        this.logger.error(`SMTP connection failed: ${err.message}`);
-      });
+    if (apiKey) {
+      this.resend = new Resend(apiKey);
+      this.logger.log('Email service ready via Resend');
     } else {
-      this.logger.warn('EMAIL_HOST / EMAIL_USER / EMAIL_PASS not set — email sending in console-log mode');
+      this.logger.warn('RESEND_API_KEY not set — email sending in console-log mode');
     }
   }
 
   private async send(to: string, subject: string, html: string): Promise<void> {
-    if (!this.transporter) {
+    if (!this.resend) {
       this.logger.warn(`[EMAIL - DEV] To: ${to} | Subject: ${subject}`);
       return;
     }
     this.logger.log(`Sending email to ${to} — subject: "${subject}"`);
-    try {
-      const info = await this.transporter.sendMail({ from: this.fromEmail, to, subject, html });
-      this.logger.log(`Email sent OK — messageId: ${info.messageId}`);
-    } catch (err: any) {
-      this.logger.error(`Failed to send email to ${to}: ${err.message} (code: ${err.code})`);
-      throw err;
+    const { error } = await this.resend.emails.send({ from: this.fromEmail, to, subject, html });
+    if (error) {
+      this.logger.error(`Failed to send email to ${to}: ${error.message}`);
+      throw new Error(error.message);
     }
+    this.logger.log(`Email sent OK to ${to}`);
   }
 
   async sendOtp(email: string, otp: string): Promise<void> {
-    if (!this.transporter) {
+    if (!this.resend) {
       this.logger.warn(`[EMAIL - DEV] To: ${email} | OTP: ${otp}`);
       return;
     }
@@ -140,7 +120,7 @@ export class EmailService {
             <tr><td style="padding:8px;font-weight:bold">Time</td><td style="padding:8px">${data.appointmentTime}</td></tr>
             <tr><td style="padding:8px;background:#f8fafc;font-weight:bold">Type</td><td style="padding:8px">${data.appointmentType}</td></tr>
           </table>
-          <p style="color:#64748b;font-size:12px;">Please arrive 10 minutes early. If you need to reschedule, contact us as soon as possible.</p>
+          <p style="color:#64748b;font-size:12px;">Please arrive 10 minutes early.</p>
           <hr style="border:none;border-top:1px solid #e2e8f0;margin:16px 0">
           <p style="color:#94a3b8;font-size:11px;text-align:center;">Ayurlahi Health Technologies — Medilink</p>
         </div>
@@ -180,7 +160,7 @@ export class EmailService {
           <p>Dear <strong>${data.patientName}</strong>,</p>
           <p>Your appointment on <strong>${data.appointmentDate}</strong> at <strong>${data.clinicName}</strong> has been cancelled.</p>
           ${data.reason ? `<p>Reason: ${data.reason}</p>` : ''}
-          <p>Please contact us to reschedule at your earliest convenience.</p>
+          <p>Please contact us to reschedule.</p>
           <hr style="border:none;border-top:1px solid #e2e8f0;margin:16px 0">
           <p style="color:#94a3b8;font-size:11px;text-align:center;">Ayurlahi Health Technologies — Medilink</p>
         </div>
