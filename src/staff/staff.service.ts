@@ -210,6 +210,43 @@ export class StaffService {
       );
     }
 
+    // Uniqueness checks BEFORE any DB write. Previously these ran after
+    // staffRepository.save(), so a conflict left an orphan staff row behind.
+    if (createDto.email || createDto.phone) {
+      const staffConflictWhere: any[] = [];
+      if (createDto.email)
+        staffConflictWhere.push({ organisationId, email: createDto.email });
+      if (createDto.phone)
+        staffConflictWhere.push({ organisationId, phone: createDto.phone });
+      const conflictingStaff = await this.staffRepository.findOne({
+        where: staffConflictWhere,
+      });
+      if (conflictingStaff) {
+        throw new ConflictException(
+          'A staff member with this email or phone already exists in this organisation',
+        );
+      }
+    }
+
+    if (createDto.createUserAccount && (createDto.email || createDto.phone)) {
+      const userWhere: any[] = [];
+      if (createDto.email) userWhere.push({ email: createDto.email });
+      if (createDto.phone) userWhere.push({ phone: createDto.phone });
+      const existingUser = await this.usersRepository.findOne({
+        where: userWhere,
+      });
+      if (existingUser) {
+        const alreadyInOrg = await this.organisationUsersRepository.findOne({
+          where: { userId: existingUser.id, organisationId },
+        });
+        if (alreadyInOrg) {
+          throw new ConflictException(
+            'A user with this email or phone already belongs to this organisation',
+          );
+        }
+      }
+    }
+
     const staff = this.staffRepository.create({
       organisationId,
       firstName: createDto.firstName,
@@ -338,6 +375,65 @@ export class StaffService {
       throw new BadRequestException(
         'positionCustom is required when position is "other"',
       );
+    }
+
+    // Uniqueness checks BEFORE writing. Previously these ran after
+    // staffRepository.save() / user-account creation, so a conflict could
+    // leave the staff row mutated even though the request "failed".
+    const finalEmail =
+      updateDto.email !== undefined ? updateDto.email : staff.email;
+    const finalPhone =
+      updateDto.phone !== undefined ? updateDto.phone : staff.phone;
+    const contactChanged =
+      (updateDto.email !== undefined && updateDto.email !== staff.email) ||
+      (updateDto.phone !== undefined && updateDto.phone !== staff.phone);
+
+    if (contactChanged && (finalEmail || finalPhone)) {
+      const staffConflictWhere: any[] = [];
+      if (finalEmail)
+        staffConflictWhere.push({
+          organisationId: staff.organisationId,
+          email: finalEmail,
+        });
+      if (finalPhone)
+        staffConflictWhere.push({
+          organisationId: staff.organisationId,
+          phone: finalPhone,
+        });
+      const conflictingStaff = await this.staffRepository.findOne({
+        where: staffConflictWhere,
+      });
+      if (conflictingStaff && conflictingStaff.id !== staff.id) {
+        throw new ConflictException(
+          'A staff member with this email or phone already exists in this organisation',
+        );
+      }
+    }
+
+    if (
+      updateDto.createUserAccount &&
+      !staff.userId &&
+      (finalEmail || finalPhone)
+    ) {
+      const userWhere: any[] = [];
+      if (finalEmail) userWhere.push({ email: finalEmail });
+      if (finalPhone) userWhere.push({ phone: finalPhone });
+      const existingUser = await this.usersRepository.findOne({
+        where: userWhere,
+      });
+      if (existingUser) {
+        const alreadyInOrg = await this.organisationUsersRepository.findOne({
+          where: {
+            userId: existingUser.id,
+            organisationId: staff.organisationId,
+          },
+        });
+        if (alreadyInOrg) {
+          throw new ConflictException(
+            'A user with this email or phone already belongs to this organisation',
+          );
+        }
+      }
     }
 
     // Update fields
