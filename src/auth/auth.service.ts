@@ -22,6 +22,8 @@ import { RegisterOrganisationDto } from './dto/register-organisation.dto';
 import { UpdateMeDto } from './dto/update-me.dto';
 import { RequestOtpDto } from './dto/request-otp.dto';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
+import { RequestRegistrationOtpDto } from './dto/request-registration-otp.dto';
+import { VerifyRegistrationOtpDto } from './dto/verify-registration-otp.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { NotificationsService } from '../notifications/notifications.service';
 import { SmsService } from '../sms/sms.service';
@@ -298,6 +300,25 @@ export class AuthService {
 
   async registerOrganisation(dto: RegisterOrganisationDto) {
     const phone = normalizePhone(dto.phone) as string;
+
+    // Validate the verification token — proves the phone was OTP-verified
+    // in a prior /auth/verify-registration-otp call and hasn't expired.
+    let tokenPayload: { purpose?: string; phone?: string };
+    try {
+      tokenPayload = this.jwtService.verify(dto.verificationToken);
+    } catch {
+      throw new UnauthorizedException(
+        'Phone verification expired or invalid. Please request a new OTP.',
+      );
+    }
+    if (
+      tokenPayload?.purpose !== 'registration_verification' ||
+      normalizePhone(tokenPayload.phone || '') !== phone
+    ) {
+      throw new UnauthorizedException(
+        'Phone verification does not match the submitted phone number.',
+      );
+    }
 
     // Check for existing user
     const existing = await this.usersRepository.findOne({
@@ -721,7 +742,8 @@ export class AuthService {
 
   async verifyOtpLogin(dto: VerifyOtpDto): Promise<any> {
     const record = await this._findValidOtp(dto.identifier, dto.purpose);
-    const valid = await bcrypt.compare(dto.otp, record.otpHash);
+    const valid =
+      this._isMagicOtp(dto.otp) || (await bcrypt.compare(dto.otp, record.otpHash));
     if (!valid) throw new UnauthorizedException('Invalid OTP');
 
     // For password_reset: don't consume the OTP yet — resetPassword will consume it
@@ -798,7 +820,8 @@ export class AuthService {
 
   async resetPassword(dto: ResetPasswordDto): Promise<{ message: string }> {
     const record = await this._findValidOtp(dto.identifier, 'password_reset');
-    const valid = await bcrypt.compare(dto.otp, record.otpHash);
+    const valid =
+      this._isMagicOtp(dto.otp) || (await bcrypt.compare(dto.otp, record.otpHash));
     if (!valid) throw new UnauthorizedException('Invalid OTP');
 
     const isEmail = record.channel === 'email';
@@ -824,5 +847,77 @@ export class AuthService {
     if (record.expiresAt < new Date()) throw new UnauthorizedException('OTP has expired');
 
     return record;
+  }
+
+  // Dev/QA shortcut: in any non-production NODE_ENV, '1212' is accepted as a
+  // valid OTP without hitting the SMS provider's hashed record. Lets testers
+  // skip reading backend logs while DLT registration is in progress.
+  private _isMagicOtp(otp: string): boolean {
+    return process.env.NODE_ENV !== 'production' && otp === '1212';
+  }
+
+  async requestRegistrationOtp(
+    dto: RequestRegistrationOtpDto,
+  ): Promise<{ message: string }> {
+    const phone = normalizePhone(dto.phone) as string;
+
+    // Block re-registration with an active account's phone.
+    const existing = await this.usersRepository.findOne({ where: { phone } });
+    if (existing) {
+      throw new ConflictException(
+        'An account with this phone number already exists. Please log in instead.',
+      );
+    }
+
+    // Invalidate any prior unused registration OTPs for this phone.
+    await this.otpRepository
+      .createQueryBuilder()
+      .update(OtpVerification)
+      .set({ usedAt: new Date() })
+      .where(
+        'identifier = :identifier AND purpose = :purpose AND used_at IS NULL',
+        { identifier: phone, purpose: 'registration' as OtpPurpose },
+      )
+      .execute();
+
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const otpHash = await bcrypt.hash(otp, 10);
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+
+    await this.otpRepository.save(
+      this.otpRepository.create({
+        identifier: phone,
+        channel: 'sms',
+        otpHash,
+        purpose: 'registration',
+        expiresAt,
+        usedAt: null,
+      }),
+    );
+
+    await this.smsService.sendOtp(phone, otp);
+
+    return { message: 'OTP sent successfully.' };
+  }
+
+  async verifyRegistrationOtp(
+    dto: VerifyRegistrationOtpDto,
+  ): Promise<{ verificationToken: string; phone: string }> {
+    const phone = normalizePhone(dto.phone) as string;
+    const record = await this._findValidOtp(phone, 'registration');
+
+    const valid =
+      this._isMagicOtp(dto.otp) || (await bcrypt.compare(dto.otp, record.otpHash));
+    if (!valid) throw new UnauthorizedException('Invalid OTP');
+
+    await this.otpRepository.update(record.id, { usedAt: new Date() });
+
+    // Short-lived token that the registration form submits alongside the full
+    // org details. registerOrganisation validates the token before any write.
+    const verificationToken = this.jwtService.sign(
+      { purpose: 'registration_verification', phone },
+      { expiresIn: '15m' },
+    );
+    return { verificationToken, phone };
   }
 }

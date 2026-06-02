@@ -1,6 +1,6 @@
 import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, Index } from 'typeorm';
 
-export type OtpPurpose = 'login' | 'password_reset';
+export type OtpPurpose = 'login' | 'password_reset' | 'registration';
 export type OtpChannel = 'sms' | 'email';
 
 @Index(['identifier', 'purpose', 'expiresAt'])

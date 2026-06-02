@@ -1,6 +1,10 @@
 import { IsString, IsNotEmpty, IsOptional, IsEnum, MinLength, IsEmail } from 'class-validator';
 
 export class RegisterOrganisationDto {
+  // Proof the phone below was verified via OTP. Issued by
+  // POST /auth/verify-registration-otp. 15-minute TTL.
+  @IsString() @IsNotEmpty() verificationToken: string;
+
   // Personal info
   @IsString() @IsNotEmpty() firstName: string;
   @IsString() @IsNotEmpty() lastName: string;

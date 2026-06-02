@@ -15,6 +15,8 @@ import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { UpdateMeDto } from './dto/update-me.dto';
 import { RequestOtpDto } from './dto/request-otp.dto';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
+import { RequestRegistrationOtpDto } from './dto/request-registration-otp.dto';
+import { VerifyRegistrationOtpDto } from './dto/verify-registration-otp.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 
@@ -106,5 +108,19 @@ export class AuthController {
   @Post('reset-password')
   async resetPassword(@Body() dto: ResetPasswordDto) {
     return this.authService.resetPassword(dto);
+  }
+
+  // Phone-first registration: step 1 — send OTP to the phone number the user
+  // is registering with. No login / no user-exists requirement.
+  @Post('request-registration-otp')
+  async requestRegistrationOtp(@Body() dto: RequestRegistrationOtpDto) {
+    return this.authService.requestRegistrationOtp(dto);
+  }
+
+  // Step 2 — verify the OTP. Returns a short-lived JWT that the registration
+  // form submits alongside the rest of the org details.
+  @Post('verify-registration-otp')
+  async verifyRegistrationOtp(@Body() dto: VerifyRegistrationOtpDto) {
+    return this.authService.verifyRegistrationOtp(dto);
   }
 }
