@@ -849,11 +849,12 @@ export class AuthService {
     return record;
   }
 
-  // Dev/QA shortcut: in any non-production NODE_ENV, '1212' is accepted as a
-  // valid OTP without hitting the SMS provider's hashed record. Lets testers
-  // skip reading backend logs while DLT registration is in progress.
+  // Dev/QA shortcut: in any non-production NODE_ENV, '121212' is accepted as
+  // a valid OTP without hitting the SMS provider's hashed record. Lets
+  // testers skip reading backend logs while DLT registration is in progress.
+  // 6 digits because the verify DTOs require exactly 6 (real OTPs are 6 too).
   private _isMagicOtp(otp: string): boolean {
-    return process.env.NODE_ENV !== 'production' && otp === '1212';
+    return process.env.NODE_ENV !== 'production' && otp === '121212';
   }
 
   async requestRegistrationOtp(
