@@ -849,12 +849,19 @@ export class AuthService {
     return record;
   }
 
-  // Dev/QA shortcut: in any non-production NODE_ENV, '121212' is accepted as
-  // a valid OTP without hitting the SMS provider's hashed record. Lets
-  // testers skip reading backend logs while DLT registration is in progress.
-  // 6 digits because the verify DTOs require exactly 6 (real OTPs are 6 too).
+  // Dev/QA shortcut: '121212' is accepted as a valid OTP without hitting
+  // the SMS provider's hashed record. Enabled when either:
+  //   - NODE_ENV != 'production' (local dev), OR
+  //   - OTP_TEST_MODE === 'true' (explicit opt-in for staging on managed
+  //     hosts that pin NODE_ENV=production for other reasons)
+  // 6 digits to match the @Length(6,6) on the verify DTOs.
+  // NEVER set OTP_TEST_MODE=true in real production.
   private _isMagicOtp(otp: string): boolean {
-    return process.env.NODE_ENV !== 'production' && otp === '121212';
+    if (otp !== '121212') return false;
+    return (
+      process.env.NODE_ENV !== 'production' ||
+      process.env.OTP_TEST_MODE === 'true'
+    );
   }
 
   async requestRegistrationOtp(
