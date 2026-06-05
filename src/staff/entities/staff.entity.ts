@@ -35,6 +35,23 @@ export enum StaffPosition {
   OTHER = 'other',
 }
 
+// Support / manual roles that may not have an email address — email is
+// optional for these. Professional roles still require an email.
+export const EMAIL_OPTIONAL_POSITIONS: ReadonlySet<StaffPosition> = new Set([
+  StaffPosition.COOK,
+  StaffPosition.CHEF,
+  StaffPosition.HELPER,
+  StaffPosition.ASSISTANT,
+  StaffPosition.PACKAGER,
+  StaffPosition.WAREHOUSE_STAFF,
+  StaffPosition.OTHER,
+]);
+
+export function isEmailRequiredForPosition(position?: StaffPosition): boolean {
+  if (!position) return false;
+  return !EMAIL_OPTIONAL_POSITIONS.has(position);
+}
+
 @Entity('staff')
 export class Staff {
   @PrimaryGeneratedColumn('uuid')

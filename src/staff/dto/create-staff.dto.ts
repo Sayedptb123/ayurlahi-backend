@@ -15,7 +15,10 @@ import {
   MinLength,
 } from 'class-validator';
 import { Type } from 'class-transformer';
-import { StaffPosition } from '../entities/staff.entity';
+import {
+  StaffPosition,
+  isEmailRequiredForPosition,
+} from '../entities/staff.entity';
 
 export class AddressDto {
   @IsOptional()
@@ -70,8 +73,17 @@ export class CreateStaffDto {
   @MaxLength(100)
   positionCustom?: string;
 
-  @IsOptional()
-  @IsEmail()
+  // Required for professional positions and when creating a login account;
+  // optional for support roles (cook, helper, etc.). Always validated as a
+  // proper email when a value is provided.
+  @ValidateIf(
+    (o) =>
+      o.createUserAccount === true ||
+      isEmailRequiredForPosition(o.position) ||
+      (typeof o.email === 'string' && o.email.trim() !== ''),
+  )
+  @IsNotEmpty({ message: 'Email is required for professional staff' })
+  @IsEmail({}, { message: 'A valid email address is required' })
   @MaxLength(255)
   email?: string;
 
