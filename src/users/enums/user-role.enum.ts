@@ -15,6 +15,12 @@ export enum UserRole {
   RECEPTIONIST = 'RECEPTIONIST',
   LAB_TECHNICIAN = 'LAB_TECHNICIAN',
 
+  // Sales CRM roles (AYURLAHI_TEAM members) — see scope/Medilink_CRM_Final_Brief.md B1
+  TELECALLER = 'TELECALLER',
+  FIELD_STAFF = 'FIELD_STAFF',
+  TEAM_LEAD = 'TEAM_LEAD',
+  SALES_MANAGER = 'SALES_MANAGER',
+
   // System/User Entity Roles (lowercase)
   CLINIC = 'clinic',
   MANUFACTURER = 'manufacturer',

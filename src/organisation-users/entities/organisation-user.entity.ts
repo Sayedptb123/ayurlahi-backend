@@ -25,6 +25,11 @@ export type OrganisationUserRole =
   | 'RECEPTIONIST'
   | 'LAB_TECHNICIAN'
   | 'STAFF'
+  // Sales CRM roles (AYURLAHI_TEAM members) — see scope/Medilink_CRM_Final_Brief.md B1
+  | 'TELECALLER'
+  | 'FIELD_STAFF'
+  | 'TEAM_LEAD'
+  | 'SALES_MANAGER'
   | 'PATIENT';
 
 @Entity('organisation_users')

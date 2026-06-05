@@ -109,6 +109,15 @@ import { CustomNotificationLog } from './notifications/entities/custom-notificat
 import { NotificationCronModule } from './notifications/notification-cron.module';
 import { Payout } from './payouts/entities/payout.entity';
 import { OtpVerification } from './otp/entities/otp-verification.entity';
+import { CrmModule } from './crm/crm.module';
+import { CrmLead } from './crm/entities/crm-lead.entity';
+import { CrmPipelineStage } from './crm/entities/crm-pipeline-stage.entity';
+import { CrmActivity } from './crm/entities/crm-activity.entity';
+import { CrmRequirement } from './crm/entities/crm-requirement.entity';
+import { CrmTask } from './crm/entities/crm-task.entity';
+import { CrmVisit } from './crm/entities/crm-visit.entity';
+import { CrmAuditLog } from './crm/entities/crm-audit-log.entity';
+import { CrmStaffScope } from './crm/entities/crm-staff-scope.entity';
 
 @Module({
   imports: [
@@ -191,6 +200,14 @@ import { OtpVerification } from './otp/entities/otp-verification.entity';
           SalaryStructure,
           Payout,
           OtpVerification,
+          CrmLead,
+          CrmPipelineStage,
+          CrmActivity,
+          CrmRequirement,
+          CrmTask,
+          CrmVisit,
+          CrmAuditLog,
+          CrmStaffScope,
         ],
         synchronize: false, // Disabled - synchronize causes issues
         logging: configService.get<string>('NODE_ENV') === 'development',
@@ -247,6 +264,7 @@ import { OtpVerification } from './otp/entities/otp-verification.entity';
     NotificationCronModule,
     EmailModule,
     ScraperModule,
+    CrmModule,
   ],
   controllers: [AppController],
   providers: [
