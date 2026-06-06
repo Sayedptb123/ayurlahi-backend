@@ -34,8 +34,17 @@ export class InventoryItem {
   @Column({ nullable: true })
   category: string;
 
-  @Column({ name: 'product_id', nullable: true })
-  productId: string;
+  // Optional link to a marketplace products(id) — hook for the low-stock →
+  // "Order Now" bridge (Phase 24A). uuid FK; ON DELETE SET NULL.
+  @Column({ name: 'product_id', type: 'uuid', nullable: true })
+  productId: string | null;
+
+  // Phase 24C.2 — batch/expiry for dead/expired-stock tracking
+  @Column({ name: 'batch_number', type: 'varchar', length: 100, nullable: true })
+  batchNumber: string | null;
+
+  @Column({ name: 'expiry_date', type: 'date', nullable: true })
+  expiryDate: string | null;
 
   @Column()
   unit: string;

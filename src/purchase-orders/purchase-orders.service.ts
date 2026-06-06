@@ -12,6 +12,7 @@ import {
   UpdatePurchaseOrderDto,
 } from './dto/create-purchase-order.dto';
 import { InventoryItem } from '../inventory/entities/inventory-item.entity';
+import { StockMovement } from '../inventory/entities/stock-movement.entity';
 
 @Injectable()
 export class PurchaseOrdersService {
@@ -86,6 +87,7 @@ export class PurchaseOrdersService {
     // If status is changing to 'received', we need to update inventory
     if (updateDto.status === 'received' && po.status !== 'received') {
       await this.receivePurchaseOrder(po);
+      po.receivedAt = new Date(); // Phase 24B.3 — capture receipt time
     }
 
     Object.assign(po, updateDto);
@@ -111,6 +113,20 @@ export class PurchaseOrdersService {
             inventoryItem.currentStock += item.quantity;
             inventoryItem.costPrice = item.unitPrice; // Update cost price with latest PO price
             await queryRunner.manager.save(inventoryItem);
+
+            // Phase 24C.1 — ledger the purchase receipt in the same transaction
+            await queryRunner.manager.save(
+              queryRunner.manager.create(StockMovement, {
+                organisationId: po.organisationId,
+                inventoryItemId: inventoryItem.id,
+                movementType: 'purchase_receipt',
+                quantity: item.quantity,
+                balanceAfter: inventoryItem.currentStock,
+                unitCost: item.unitPrice,
+                referenceType: 'purchase_order',
+                referenceId: po.id,
+              }),
+            );
           }
         }
 

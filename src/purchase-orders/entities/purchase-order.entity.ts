@@ -45,6 +45,10 @@ export class PurchaseOrder {
   @Column({ default: 'draft' })
   status: string; // draft, sent, received, cancelled
 
+  // Phase 24B.3 — set when status → received, for supplier lead-time analytics
+  @Column({ name: 'received_at', type: 'timestamp', nullable: true })
+  receivedAt: Date | null;
+
   @Column({
     name: 'total_amount',
     type: 'decimal',

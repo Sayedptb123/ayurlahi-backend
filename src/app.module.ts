@@ -54,6 +54,10 @@ import { DutyTemplate } from './duty-templates/entities/duty-template.entity';
 import { Document } from './documents/entities/document.entity';
 import { Supplier } from './suppliers/entities/supplier.entity';
 import { InventoryItem } from './inventory/entities/inventory-item.entity';
+import { StockMovement } from './inventory/entities/stock-movement.entity';
+import { TreatmentProtocol } from './treatment-protocols/entities/treatment-protocol.entity';
+import { TreatmentProtocolItem } from './treatment-protocols/entities/treatment-protocol-item.entity';
+import { TreatmentProtocolsModule } from './treatment-protocols/treatment-protocols.module';
 import { PurchaseOrder } from './purchase-orders/entities/purchase-order.entity';
 import { PurchaseOrderItem } from './purchase-orders/entities/purchase-order-item.entity';
 import { Product } from './products/entities/product.entity';
@@ -118,6 +122,21 @@ import { CrmTask } from './crm/entities/crm-task.entity';
 import { CrmVisit } from './crm/entities/crm-visit.entity';
 import { CrmAuditLog } from './crm/entities/crm-audit-log.entity';
 import { CrmStaffScope } from './crm/entities/crm-staff-scope.entity';
+import { PromotionsModule } from './promotions/promotions.module';
+import { Promotion } from './promotions/entities/promotion.entity';
+import { PromotionEvent } from './promotions/entities/promotion-event.entity';
+import { UsageEvent } from './analytics/entities/usage-event.entity';
+import { LeaveModule } from './leave/leave.module';
+import { LeaveType } from './leave/entities/leave-type.entity';
+import { LeaveRequest } from './leave/entities/leave-request.entity';
+import { LeaveBalance } from './leave/entities/leave-balance.entity';
+import { AssetModule } from './assets/assets.module';
+import { AssetCategory } from './assets/entities/asset-category.entity';
+import { Asset } from './assets/entities/asset.entity';
+import { AssetMaintenance } from './assets/entities/asset-maintenance.entity';
+import { BillsModule } from './bills/bills.module';
+import { RecurringBill } from './bills/entities/recurring-bill.entity';
+import { BillPayment } from './bills/entities/bill-payment.entity';
 
 @Module({
   imports: [
@@ -151,6 +170,9 @@ import { CrmStaffScope } from './crm/entities/crm-staff-scope.entity';
           Document,
           Supplier,
           InventoryItem,
+          StockMovement,
+          TreatmentProtocol,
+          TreatmentProtocolItem,
           PurchaseOrder,
           PurchaseOrderItem,
           Product,
@@ -208,6 +230,17 @@ import { CrmStaffScope } from './crm/entities/crm-staff-scope.entity';
           CrmVisit,
           CrmAuditLog,
           CrmStaffScope,
+          Promotion,
+          PromotionEvent,
+          UsageEvent,
+          LeaveType,
+          LeaveRequest,
+          LeaveBalance,
+          AssetCategory,
+          Asset,
+          AssetMaintenance,
+          RecurringBill,
+          BillPayment,
         ],
         synchronize: false, // Disabled - synchronize causes issues
         logging: configService.get<string>('NODE_ENV') === 'development',
@@ -250,6 +283,7 @@ import { CrmStaffScope } from './crm/entities/crm-staff-scope.entity';
     SuppliersModule,
     InventoryModule,
     PurchaseOrdersModule,
+    TreatmentProtocolsModule,
     ExpensesModule,
     BudgetsModule,
     PayrollModule,
@@ -265,6 +299,10 @@ import { CrmStaffScope } from './crm/entities/crm-staff-scope.entity';
     EmailModule,
     ScraperModule,
     CrmModule,
+    PromotionsModule,
+    LeaveModule,
+    AssetModule,
+    BillsModule,
   ],
   controllers: [AppController],
   providers: [

@@ -4,6 +4,8 @@ import {
   IsOptional,
   IsNumber,
   IsBoolean,
+  IsUUID,
+  IsDateString,
   Min,
 } from 'class-validator';
 
@@ -24,9 +26,19 @@ export class CreateInventoryItemDto {
   @IsOptional()
   category?: string;
 
+  // Optional link to a marketplace products(id). null clears the link.
+  @IsOptional()
+  @IsUUID()
+  productId?: string | null;
+
   @IsString()
   @IsOptional()
-  productId?: string;
+  batchNumber?: string;
+
+  // ISO date string (YYYY-MM-DD)
+  @IsOptional()
+  @IsDateString()
+  expiryDate?: string;
 
   @IsString()
   @IsNotEmpty()
@@ -70,9 +82,19 @@ export class UpdateInventoryItemDto {
   @IsOptional()
   category?: string;
 
+  // Optional link to a marketplace products(id). null clears the link.
+  @IsOptional()
+  @IsUUID()
+  productId?: string | null;
+
   @IsString()
   @IsOptional()
-  productId?: string;
+  batchNumber?: string;
+
+  // ISO date string (YYYY-MM-DD)
+  @IsOptional()
+  @IsDateString()
+  expiryDate?: string;
 
   @IsString()
   @IsOptional()

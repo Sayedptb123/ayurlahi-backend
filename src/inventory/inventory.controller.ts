@@ -57,6 +57,15 @@ export class InventoryController {
     return this.inventoryService.findOne(organisationId, id);
   }
 
+  // Phase 24C.1 — stock-movement history for one item
+  @Get(':id/movements')
+  getMovements(
+    @Param('organisationId') organisationId: string,
+    @Param('id') id: string,
+  ) {
+    return this.inventoryService.getMovements(organisationId, id);
+  }
+
   @Patch(':id')
   @Roles(UserRole.CLINIC, UserRole.MANUFACTURER, UserRole.ADMIN)
   update(

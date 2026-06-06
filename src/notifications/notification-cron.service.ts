@@ -9,6 +9,7 @@ import { PatientBill, BillStatus } from '../patient-billing/entities/patient-bil
 import { Staff } from '../staff/entities/staff.entity';
 import { OrganisationUser } from '../organisation-users/entities/organisation-user.entity';
 import { InventoryItem } from '../inventory/entities/inventory-item.entity';
+import { CrmTask } from '../crm/entities/crm-task.entity';
 import { NotificationsService } from './notifications.service';
 
 @Injectable()
@@ -28,6 +29,8 @@ export class NotificationCronService {
         private orgUserRepo: Repository<OrganisationUser>,
         @InjectRepository(InventoryItem)
         private inventoryRepo: Repository<InventoryItem>,
+        @InjectRepository(CrmTask)
+        private crmTaskRepo: Repository<CrmTask>,
         private notificationsService: NotificationsService,
     ) {}
 
@@ -340,6 +343,57 @@ export class NotificationCronService {
                     title: "Today's Appointments",
                     body: `${appts.length} appointment${appts.length !== 1 ? 's' : ''} scheduled for today`,
                     data: { type: 'appointment_daily_summary', count: appts.length },
+                }).catch(() => {});
+            }
+        }
+    }
+
+    // --- CRM Tasks overdue — runs daily at 08:00 ---
+    @Cron('0 8 * * *')
+    async alertOverdueCrmTasks() {
+        const today = new Date().toISOString().split('T')[0];
+
+        const tasks = await this.crmTaskRepo
+            .createQueryBuilder('t')
+            .where('t.status NOT IN (:...doneStatuses)', { doneStatuses: ['completed', 'cancelled'] })
+            .andWhere('t.due_at < :today', { today })
+            .andWhere('t.deleted_at IS NULL')
+            .getMany();
+
+        for (const task of tasks) {
+            if (task.assigneeUserId) {
+                this.notificationsService.sendToUsers({
+                    userIds: [task.assigneeUserId],
+                    title: 'CRM Follow-up Overdue',
+                    body: `Your follow-up task "${task.title}" is overdue`,
+                    data: { crmTaskId: task.id, type: 'crm_task_overdue' },
+                }).catch(() => {});
+            }
+        }
+    }
+
+    // --- CRM Tasks due today — runs daily at 08:00 ---
+    @Cron('0 8 * * *')
+    async alertCrmTasksDueToday() {
+        const today = new Date().toISOString().split('T')[0];
+        const tomorrow = new Date();
+        tomorrow.setDate(tomorrow.getDate() + 1);
+        const tomorrowStr = tomorrow.toISOString().split('T')[0];
+
+        const tasks = await this.crmTaskRepo
+            .createQueryBuilder('t')
+            .where('t.status NOT IN (:...doneStatuses)', { doneStatuses: ['completed', 'cancelled'] })
+            .andWhere('t.due_at >= :today AND t.due_at < :tomorrow', { today, tomorrow: tomorrowStr })
+            .andWhere('t.deleted_at IS NULL')
+            .getMany();
+
+        for (const task of tasks) {
+            if (task.assigneeUserId) {
+                this.notificationsService.sendToUsers({
+                    userIds: [task.assigneeUserId],
+                    title: 'CRM Follow-up Due Today',
+                    body: `You have a follow-up task "${task.title}" due today`,
+                    data: { crmTaskId: task.id, type: 'crm_task_due_today' },
                 }).catch(() => {});
             }
         }

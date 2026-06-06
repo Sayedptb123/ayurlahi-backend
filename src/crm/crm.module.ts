@@ -26,6 +26,10 @@ import { CrmRequirementsController } from './controllers/crm-requirements.contro
 import { CrmTasksController } from './controllers/crm-tasks.controller';
 import { CrmVisitsController } from './controllers/crm-visits.controller';
 import { CrmStaffController } from './controllers/crm-staff.controller';
+import { CrmReportsService } from './services/crm-reports.service';
+import { CrmReportsController } from './controllers/crm-reports.controller';
+
+import { NotificationsModule } from '../notifications/notifications.module';
 
 /**
  * Sales CRM module — "Ayurvedic Center" pipeline for the marketing team.
@@ -50,6 +54,7 @@ import { CrmStaffController } from './controllers/crm-staff.controller';
       OrganisationUser,
       User,
     ]),
+    NotificationsModule,
   ],
   controllers: [
     CrmLeadsController,
@@ -59,6 +64,7 @@ import { CrmStaffController } from './controllers/crm-staff.controller';
     CrmTasksController,
     CrmVisitsController,
     CrmStaffController,
+    CrmReportsController,
   ],
   providers: [
     CrmRolesGuard,
@@ -70,6 +76,7 @@ import { CrmStaffController } from './controllers/crm-staff.controller';
     CrmTasksService,
     CrmVisitsService,
     CrmStaffService,
+    CrmReportsService,
   ],
   exports: [
     CrmRolesGuard,
@@ -81,6 +88,7 @@ import { CrmStaffController } from './controllers/crm-staff.controller';
     CrmTasksService,
     CrmVisitsService,
     CrmStaffService,
+    CrmReportsService,
   ],
 })
 export class CrmModule {}

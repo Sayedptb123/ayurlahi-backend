@@ -22,6 +22,7 @@ import {
   isCrmTeamLead,
 } from '../crm-access.util';
 import { UserRole } from '../../users/enums/user-role.enum';
+import { NotificationsService } from '../../notifications/notifications.service';
 
 /** Per-role stage caps (B1). Manager/Admin uncapped. */
 const TELECALLER_CAP_KEY = 'demo_scheduled';
@@ -38,6 +39,7 @@ export class CrmLeadsService {
     private readonly scopeRepo: Repository<CrmStaffScope>,
     private readonly pipeline: CrmPipelineService,
     private readonly audit: CrmAuditService,
+    private readonly notifications: NotificationsService,
   ) {}
 
   // --------------------------------------------------------------------------
@@ -395,6 +397,25 @@ export class CrmLeadsService {
         after: { telecaller: saved.assignedTelecallerId, field: saved.assignedFieldStaffId },
       },
     });
+
+    // Phase 18L: Notify staff on assignment
+    const toNotify: string[] = [];
+    if (dto.telecallerId && saved.assignedTelecallerId !== before.telecaller) {
+      toNotify.push(saved.assignedTelecallerId!);
+    }
+    if (dto.fieldStaffId && saved.assignedFieldStaffId !== before.field) {
+      toNotify.push(saved.assignedFieldStaffId!);
+    }
+
+    if (toNotify.length > 0) {
+      this.notifications.sendToUsers({
+        userIds: toNotify,
+        title: 'Lead Assigned',
+        body: `You have been assigned to lead: ${saved.name}`,
+        data: { leadId: saved.id, type: 'crm_lead_assigned' },
+      }).catch(() => {});
+    }
+
     return saved;
   }
 
@@ -477,6 +498,46 @@ export class CrmLeadsService {
       action: 'delete',
       actorUserId: actor.userId,
     });
+  }
+
+  // --------------------------------------------------------------------------
+  // DPDP Anonymise (Phase 18P). Retains the lead for analytics but strips PII.
+  // --------------------------------------------------------------------------
+  async anonymiseLead(organisationId: string, id: string, actor: CrmActor): Promise<CrmLead> {
+    const lead = await this.leadRepo.findOne({
+      where: { id, organisationId, deletedAt: IsNull() },
+    });
+    if (!lead) throw new NotFoundException('Lead not found');
+
+    const anonymisedStr = '[ANONYMISED]';
+    
+    // Strip PII
+    lead.name = anonymisedStr;
+    if (lead.address) lead.address = anonymisedStr;
+    if (lead.primaryContactName) lead.primaryContactName = anonymisedStr;
+    if (lead.phone) lead.phone = anonymisedStr;
+    if (lead.phoneSecondary) lead.phoneSecondary = null;
+    if (lead.whatsapp) lead.whatsapp = null;
+    if (lead.email) lead.email = anonymisedStr;
+    if (lead.ownerDoctorName) lead.ownerDoctorName = anonymisedStr;
+    if (lead.googleMapsUrl) lead.googleMapsUrl = null;
+    if (lead.website) lead.website = null;
+    if (lead.googlePlaceId) lead.googlePlaceId = null;
+
+    lead.updatedBy = actor.userId;
+
+    const saved = await this.leadRepo.save(lead);
+
+    await this.audit.record({
+      organisationId,
+      entityType: 'lead',
+      entityId: id,
+      action: 'update', // We'll log it as update since 'anonymise' might not be in the enum, or we can just pass 'update'
+      actorUserId: actor.userId,
+      changes: { info: 'PII removed for DPDP compliance' },
+    });
+
+    return saved;
   }
 
   // --------------------------------------------------------------------------

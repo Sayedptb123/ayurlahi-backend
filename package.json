@@ -33,7 +33,8 @@
     "migrate:medilink:run": "node scripts/run-medilink-migrations.js",
     "migrate:postnatal": "psql $DATABASE_URL -f migrations/medilink/014-create-postnatal-and-notifications-tables.sql",
     "migrate:doctors-to-staff": "node scripts/migrate-doctors-to-staff.js",
-    "migrate:doctors-to-staff:rollback": "node scripts/migrate-doctors-to-staff.js rollback"
+    "migrate:doctors-to-staff:rollback": "node scripts/migrate-doctors-to-staff.js rollback",
+    "migrate:leave": "node scripts/run-leave-migration.js"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.1",

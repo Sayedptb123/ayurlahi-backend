@@ -52,17 +52,21 @@ async function seed() {
         database: process.env.DB_NAME || 'medilink',
         entities: [Product],
         synchronize: false,
+        // Managed Postgres (Supabase/RDS) requires SSL; localhost does not.
+        ssl: (process.env.DB_HOST || 'localhost').includes('localhost')
+            ? false
+            : { rejectUnauthorized: false },
     });
 
     await dataSource.initialize();
     const productRepo = dataSource.getRepository(Product);
 
-    // Target Manufacturer: PMS Ayurveda
-    const TARGET_MANUFACTURER_ID = 'e74ecbc2-060e-4ba4-aa7f-906f9f74b5d3';
-    console.log(`Seeding products for PMS Ayurveda (ID: ${TARGET_MANUFACTURER_ID})...`);
+    // Target Manufacturer: Ayurlahi Medicines (ayurlahiherbals@gmail.com)
+    const TARGET_MANUFACTURER_ID = '0c3b55a6-90d9-4017-b692-ee7ae982edb6';
+    console.log(`Seeding products for Ayurlahi Medicines (ID: ${TARGET_MANUFACTURER_ID})...`);
 
     // Delete existing products for this manufacturer to ensure fresh seed
-    await productRepo.query(`DELETE FROM products WHERE "manufacturerId" = '${TARGET_MANUFACTURER_ID}'`);
+    await productRepo.query(`DELETE FROM products WHERE manufacturer_id = $1`, [TARGET_MANUFACTURER_ID]);
 
     console.log(`Cleared existing products for manufacturer.`);
 
@@ -72,7 +76,6 @@ async function seed() {
             ...item,
             manufacturerId: TARGET_MANUFACTURER_ID,
             price: parseFloat((item.mrp * 0.8).toFixed(2)),
-            isActive: true,
             status: ProductStatus.ACTIVE,
             stockQuantity: 100,
             gstRate: 12,

@@ -19,6 +19,7 @@ import { RequestRegistrationOtpDto } from './dto/request-registration-otp.dto';
 import { VerifyRegistrationOtpDto } from './dto/verify-registration-otp.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
+import { Throttle } from '@nestjs/throttler';
 
 @Controller('auth')
 export class AuthController {
@@ -112,6 +113,7 @@ export class AuthController {
 
   // Phone-first registration: step 1 — send OTP to the phone number the user
   // is registering with. No login / no user-exists requirement.
+  @Throttle({ default: { limit: 3, ttl: 60000 } })
   @Post('request-registration-otp')
   async requestRegistrationOtp(@Body() dto: RequestRegistrationOtpDto) {
     return this.authService.requestRegistrationOtp(dto);

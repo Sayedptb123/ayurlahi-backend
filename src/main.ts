@@ -4,6 +4,9 @@ import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import helmet from 'helmet';
 import * as Sentry from '@sentry/nestjs';
 import { nodeProfilingIntegration } from '@sentry/profiling-node';
+import { DataSource } from 'typeorm';
+import * as fs from 'fs';
+import * as path from 'path';
 import { AppModule } from './app.module';
 
 if (process.env.SENTRY_DSN) {
@@ -20,6 +23,32 @@ async function bootstrap() {
   const app = await NestFactory.create(AppModule, {
     logger: ['error', 'warn', 'log', 'debug', 'verbose'],
   });
+
+  // Run SQL migrations on startup
+  const runMigrationFile = async (dataSource: DataSource, filename: string) => {
+    try {
+      const sqlPath = path.join(process.cwd(), 'src/migrations', filename);
+      if (fs.existsSync(sqlPath)) {
+        console.log(`🔄 Running SQL migration: ${filename}...`);
+        const sql = fs.readFileSync(sqlPath, 'utf8');
+        await dataSource.query(sql);
+        console.log(`✅ SQL migration completed: ${filename}`);
+      } else {
+        console.warn(`⚠️ Migration SQL file not found at: ${sqlPath}`);
+      }
+    } catch (error) {
+      console.error(`❌ Failed to run SQL migration (${filename}) on startup:`, error.message);
+    }
+  };
+
+  try {
+    const dataSource = app.get(DataSource);
+    await runMigrationFile(dataSource, '2026-06-05-leave-management.sql');
+    await runMigrationFile(dataSource, '2026-06-05-asset-management.sql');
+    await runMigrationFile(dataSource, '2026-06-05-recurring-bills.sql');
+  } catch (error) {
+    console.error('❌ Failed during database migrations bootstrap:', error.message);
+  }
 
   // Security headers
   app.use(helmet({

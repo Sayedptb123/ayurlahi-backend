@@ -140,4 +140,15 @@ export class CrmLeadsController {
   ) {
     return this.audit.findForEntity(organisationId, 'lead', id);
   }
+
+  /** DPDP Compliance (Phase 18P): Strips PII but keeps the record for analytics. */
+  @Post(':id/anonymise')
+  @CrmRoles(UserRole.SALES_MANAGER, UserRole.OWNER, UserRole.SUPER_ADMIN)
+  anonymise(
+    @Param('organisationId') organisationId: string,
+    @Param('id') id: string,
+    @Request() req: any,
+  ) {
+    return this.leadsService.anonymiseLead(organisationId, id, this.actor(req));
+  }
 }

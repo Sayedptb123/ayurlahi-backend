@@ -9,6 +9,7 @@ import { OrganisationUser } from '../organisation-users/entities/organisation-us
 import { InventoryItem } from '../inventory/entities/inventory-item.entity';
 import { NotificationsModule } from './notifications.module';
 import { NotificationCronService } from './notification-cron.service';
+import { CrmTask } from '../crm/entities/crm-task.entity';
 
 @Module({
     imports: [
@@ -20,6 +21,7 @@ import { NotificationCronService } from './notification-cron.service';
             Staff,
             OrganisationUser,
             InventoryItem,
+            CrmTask,
         ]),
         NotificationsModule,
     ],

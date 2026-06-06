@@ -358,10 +358,12 @@ export class OrdersService {
         await this.inventoryService.addStock(
           order.organisationId,
           order.items.map((item) => ({
+            productId: item.productId,
             sku: item.productSku,
             name: item.productName,
             quantity: item.quantity,
             unitPrice: Number(item.unitPrice),
+            orderId: order.id,
           })),
         );
       }
