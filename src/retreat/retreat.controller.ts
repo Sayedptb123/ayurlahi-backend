@@ -12,13 +12,15 @@ import {
 } from '@nestjs/common';
 import { RetreatService } from './retreat.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { ModuleGuard, RequireModule } from '../auth/guards/module.guard';
 import { CreateBookingDto, UpdateBookingDto, CheckAvailabilityDto } from './dto/booking.dto';
 import { CreateEnquiryDto, UpdateEnquiryDto, ConvertEnquiryDto } from './dto/enquiry.dto';
 import { BookingStatus } from './entities/room-booking.entity';
 import { EnquiryStatus } from './entities/booking-enquiry.entity';
 
 @Controller('retreat')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, ModuleGuard)
+@RequireModule('booking')
 export class RetreatController {
     constructor(private readonly retreatService: RetreatService) { }
 

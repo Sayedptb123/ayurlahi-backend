@@ -32,6 +32,9 @@ export class ClinicCapabilities {
   @Column({ type: 'boolean', default: true, name: 'has_opd' })
   hasOpd: boolean;
 
+  @Column({ type: 'jsonb', default: () => "'[]'", name: 'enabled_modules' })
+  enabledModules: string[];
+
   @UpdateDateColumn({ name: 'updated_at' })
   updatedAt: Date;
 }

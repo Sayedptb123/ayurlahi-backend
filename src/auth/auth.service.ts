@@ -80,6 +80,7 @@ export class AuthService {
       hasAyurveda: cap.hasAyurveda,
       hasIpd: cap.hasIpd,
       hasOpd: cap.hasOpd,
+      enabledModules: cap.enabledModules ?? [],
     };
   }
 

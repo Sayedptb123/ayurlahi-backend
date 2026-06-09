@@ -9,11 +9,12 @@ import { RoomBooking } from './entities/room-booking.entity';
 import { BookingEnquiry } from './entities/booking-enquiry.entity';
 import { OrganisationUser } from '../organisation-users/entities/organisation-user.entity';
 import { Patient } from '../patients/entities/patient.entity';
+import { ClinicCapabilities } from '../clinic-capabilities/entities/clinic-capabilities.entity';
 import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Room, TreatmentPackage, Admission, RoomBooking, BookingEnquiry, OrganisationUser, Patient]),
+    TypeOrmModule.forFeature([Room, TreatmentPackage, Admission, RoomBooking, BookingEnquiry, OrganisationUser, Patient, ClinicCapabilities]),
     NotificationsModule,
   ],
   controllers: [RetreatController],
