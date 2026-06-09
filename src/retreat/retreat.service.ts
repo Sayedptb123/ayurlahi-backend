@@ -1,13 +1,23 @@
-import { Injectable, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, Between, LessThanOrEqual, MoreThanOrEqual, In } from 'typeorm';
+import { Repository, Between, In, Not, DataSource, EntityManager } from 'typeorm';
 import { Room, RoomStatus } from './entities/room.entity';
 import { TreatmentPackage } from './entities/treatment-package.entity';
 import { Admission, AdmissionStatus } from './entities/admission.entity';
 import { RoomBooking, BookingStatus } from './entities/room-booking.entity';
 import { OrganisationUser } from '../organisation-users/entities/organisation-user.entity';
+import { Patient } from '../patients/entities/patient.entity';
 import { CreateBookingDto, UpdateBookingDto, CheckAvailabilityDto } from './dto/booking.dto';
 import { NotificationsService } from '../notifications/notifications.service';
+
+// Phase 0: half-open interval overlap. Two ranges [aStart,aEnd) and [bStart,bEnd)
+// overlap iff aStart < bEnd AND aEnd > bStart. Back-to-back (a ends when b starts)
+// does NOT overlap. Inputs are epoch-ms; an open-ended stay passes aEnd = +Infinity.
+export function rangesOverlap(aStart: number, aEnd: number, bStart: number, bEnd: number): boolean {
+    return aStart < bEnd && aEnd > bStart;
+}
+
+type BlockReason = 'admission' | 'maintenance' | 'booking';
 
 @Injectable()
 export class RetreatService {
@@ -22,6 +32,9 @@ export class RetreatService {
         private bookingRepo: Repository<RoomBooking>,
         @InjectRepository(OrganisationUser)
         private orgUserRepo: Repository<OrganisationUser>,
+        @InjectRepository(Patient)
+        private patientRepo: Repository<Patient>,
+        private dataSource: DataSource,
         private notificationsService: NotificationsService,
     ) { }
 
@@ -93,47 +106,92 @@ export class RetreatService {
         });
     }
 
+    // Dashboard stats: current ward occupancy + today's admits/discharges.
+    // "Today" is the IST calendar day (clinics operate in India) expressed as a UTC range.
+    async getAdmissionStats(clinicId: string) {
+        const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+        const istNow = new Date(Date.now() + IST_OFFSET_MS);
+        const y = istNow.getUTCFullYear();
+        const m = istNow.getUTCMonth();
+        const d = istNow.getUTCDate();
+        const startUtc = new Date(Date.UTC(y, m, d, 0, 0, 0, 0) - IST_OFFSET_MS);
+        const endUtc = new Date(Date.UTC(y, m, d, 23, 59, 59, 999) - IST_OFFSET_MS);
+
+        const [currentInpatients, admitsToday, dischargesToday] = await Promise.all([
+            this.admissionRepo.count({
+                where: { organisationId: clinicId, status: AdmissionStatus.ACTIVE },
+            }),
+            this.admissionRepo.count({
+                where: { organisationId: clinicId, checkInDate: Between(startUtc, endUtc) },
+            }),
+            this.admissionRepo.count({
+                where: {
+                    organisationId: clinicId,
+                    status: AdmissionStatus.DISCHARGED,
+                    actualCheckOutDate: Between(startUtc, endUtc),
+                },
+            }),
+        ]);
+
+        return { currentInpatients, admitsToday, dischargesToday };
+    }
+
     async checkIn(
         clinicId: string,
         data: { patientId: string; roomId: string; packageId?: string; checkInDate?: Date }
     ) {
         const { patientId, roomId, packageId, checkInDate } = data;
 
-        // 1. Verify Room Availability
-        const room = await this.roomRepo.findOne({ where: { id: roomId, organisationId: clinicId } });
-        if (!room) throw new NotFoundException('Room not found');
-        if (room.status !== RoomStatus.AVAILABLE) {
-            throw new ConflictException(`Room ${room.roomNumber} is not available (Status: ${room.status})`);
-        }
+        // Phase 0: serialise per-room + verify patient ownership + unified conflict, all
+        // inside one transaction. Notifications are dispatched AFTER commit (see below).
+        const { savedAdmission, room } = await this.dataSource.transaction(async (manager) => {
+            // 1. Patient must belong to this organisation (cross-tenant guard)
+            await this.assertPatientInOrg(clinicId, patientId, manager);
 
-        // 2. Create Admission
-        const admission = this.admissionRepo.create({
-            organisationId: clinicId,
-            patientId,
-            roomId,
-            packageId,
-            checkInDate: checkInDate || new Date(),
-            status: AdmissionStatus.ACTIVE,
+            // 2. Lock the room row (SELECT ... FOR UPDATE) before reading occupancy
+            const room = await manager.findOne(Room, {
+                where: { id: roomId, organisationId: clinicId },
+                lock: { mode: 'pessimistic_write' },
+            });
+            if (!room) throw new NotFoundException('Room not found');
+            if (room.status !== RoomStatus.AVAILABLE) {
+                throw new ConflictException(`Room ${room.roomNumber} is not available (Status: ${room.status})`);
+            }
+
+            // 3. Compute the stay window (expected checkout from package, else minimal 24h)
+            const start = checkInDate ? new Date(checkInDate) : new Date();
+            let expectedCheckOut: Date | null = null;
+            if (packageId) {
+                const pkg = await manager.findOne(TreatmentPackage, { where: { id: packageId } });
+                if (pkg) {
+                    expectedCheckOut = new Date(start);
+                    expectedCheckOut.setDate(expectedCheckOut.getDate() + pkg.durationDays);
+                }
+            }
+            const end = expectedCheckOut ?? new Date(start.getTime() + 24 * 60 * 60 * 1000);
+
+            // 4. Unified conflict check across admissions + room status + bookings
+            const block = await this.isRoomBlocked(manager, room, start, end);
+            if (block.blocked) throw new ConflictException(this.blockMessage(block.reason));
+
+            // 5. Create admission and occupy the room
+            const admission = manager.create(Admission, {
+                organisationId: clinicId,
+                patientId,
+                roomId,
+                packageId,
+                checkInDate: start,
+                expectedCheckOutDate: expectedCheckOut,
+                status: AdmissionStatus.ACTIVE,
+            });
+            room.status = RoomStatus.OCCUPIED;
+            await manager.save(room);
+            const savedAdmission = await manager.save(admission);
+            return { savedAdmission, room };
         });
 
-        // Calculate expected checkout if package selected
-        if (packageId) {
-            const pkg = await this.packageRepo.findOne({ where: { id: packageId } });
-            if (pkg) {
-                const checkout = new Date(admission.checkInDate);
-                checkout.setDate(checkout.getDate() + pkg.durationDays);
-                admission.expectedCheckOutDate = checkout;
-            }
-        }
-
-        // 3. Update Room Status
-        room.status = RoomStatus.OCCUPIED;
-
-        // Transactional save (simplified per method)
-        await this.roomRepo.save(room);
-        const savedAdmission = await this.admissionRepo.save(admission);
-
-        // Notify clinic doctors and managers about the new admission
+        // Post-commit, best-effort: notify clinic doctors and managers about the new admission.
+        // A notification failure is swallowed and never affects the committed admission.
         this.orgUserRepo
             .find({ where: { organisationId: clinicId, role: In(['DOCTOR', 'MANAGER', 'OWNER', 'ADMIN']), isActive: true } })
             .then((orgUsers) => {
@@ -209,44 +267,47 @@ export class RetreatService {
             throw new BadRequestException('Check-out date must be after check-in date');
         }
 
-        // Check room exists
-        const room = await this.roomRepo.findOne({ where: { id: roomId, organisationId: clinicId } });
-        if (!room) throw new NotFoundException('Room not found');
+        // Phase 0: serialise per-room + verify patient ownership + unified conflict in one txn.
+        return this.dataSource.transaction(async (manager) => {
+            // Patient must belong to this organisation (cross-tenant guard)
+            await this.assertPatientInOrg(clinicId, patientId, manager);
 
-        // Check availability (no overlapping bookings)
-        const hasConflict = await this.checkBookingConflict(roomId, checkIn, checkOut);
-        if (hasConflict) {
-            throw new ConflictException('Room is already booked for the selected dates');
-        }
+            // Lock the room row before reading occupancy
+            const room = await manager.findOne(Room, {
+                where: { id: roomId, organisationId: clinicId },
+                lock: { mode: 'pessimistic_write' },
+            });
+            if (!room) throw new NotFoundException('Room not found');
 
-        // Calculate total price
-        const days = Math.ceil((checkOut.getTime() - checkIn.getTime()) / (1000 * 60 * 60 * 24));
-        let totalPrice = Number(room.pricePerDay) * days;
+            // Unified conflict check across admissions + room status + bookings
+            const block = await this.isRoomBlocked(manager, room, checkIn, checkOut);
+            if (block.blocked) throw new ConflictException(this.blockMessage(block.reason));
 
-        // If package selected, use package price
-        if (packageId) {
-            const pkg = await this.packageRepo.findOne({ where: { id: packageId } });
-            if (pkg) {
-                totalPrice = Number(pkg.price);
+            // Calculate total price (decimal columns come back as strings → parseFloat)
+            const days = Math.ceil((checkOut.getTime() - checkIn.getTime()) / (1000 * 60 * 60 * 24));
+            let totalPrice = parseFloat(String(room.pricePerDay)) * days;
+            if (packageId) {
+                const pkg = await manager.findOne(TreatmentPackage, { where: { id: packageId } });
+                if (pkg) {
+                    totalPrice = parseFloat(String(pkg.price));
+                }
             }
-        }
 
-        // Create booking
-        const booking = this.bookingRepo.create({
-            organisationId: clinicId,
-            patientId,
-            roomId,
-            packageId,
-            checkInDate: checkIn,
-            checkOutDate: checkOut,
-            totalPrice,
-            advancePaid: advancePaid || 0,
-            status: BookingStatus.PENDING,
-            notes,
-            bookingDate: new Date(),
+            const booking = manager.create(RoomBooking, {
+                organisationId: clinicId,
+                patientId,
+                roomId,
+                packageId,
+                checkInDate: checkIn,
+                checkOutDate: checkOut,
+                totalPrice,
+                advancePaid: advancePaid || 0,
+                status: BookingStatus.PENDING,
+                notes,
+                bookingDate: new Date(),
+            });
+            return manager.save(booking);
         });
-
-        return this.bookingRepo.save(booking);
     }
 
     async getBookings(clinicId: string, filters?: {
@@ -297,36 +358,40 @@ export class RetreatService {
     }
 
     async updateBooking(clinicId: string, bookingId: string, dto: UpdateBookingDto) {
-        const booking = await this.getBookingById(clinicId, bookingId);
+        return this.dataSource.transaction(async (manager) => {
+            const booking = await manager.findOne(RoomBooking, {
+                where: { id: bookingId, organisationId: clinicId },
+            });
+            if (!booking) throw new NotFoundException('Booking not found');
 
-        // If dates are being changed, check for conflicts
-        if (dto.checkInDate || dto.checkOutDate) {
-            const newCheckIn = dto.checkInDate ? new Date(dto.checkInDate) : booking.checkInDate;
-            const newCheckOut = dto.checkOutDate ? new Date(dto.checkOutDate) : booking.checkOutDate;
+            // Re-check conflicts when dates or the target room change
+            if (dto.checkInDate || dto.checkOutDate || dto.roomId) {
+                const newCheckIn = dto.checkInDate ? new Date(dto.checkInDate) : new Date(booking.checkInDate);
+                const newCheckOut = dto.checkOutDate ? new Date(dto.checkOutDate) : new Date(booking.checkOutDate);
+                const targetRoomId = dto.roomId || booking.roomId;
 
-            const hasConflict = await this.checkBookingConflict(
-                dto.roomId || booking.roomId,
-                newCheckIn,
-                newCheckOut,
-                bookingId // Exclude current booking
-            );
+                const room = await manager.findOne(Room, {
+                    where: { id: targetRoomId, organisationId: clinicId },
+                    lock: { mode: 'pessimistic_write' },
+                });
+                if (!room) throw new NotFoundException('Room not found');
 
-            if (hasConflict) {
-                throw new ConflictException('Room is already booked for the selected dates');
+                const block = await this.isRoomBlocked(manager, room, newCheckIn, newCheckOut, bookingId);
+                if (block.blocked) throw new ConflictException(this.blockMessage(block.reason));
+
+                booking.checkInDate = newCheckIn;
+                booking.checkOutDate = newCheckOut;
             }
 
-            booking.checkInDate = newCheckIn;
-            booking.checkOutDate = newCheckOut;
-        }
+            // Update other fields
+            if (dto.roomId) booking.roomId = dto.roomId;
+            if (dto.packageId !== undefined) booking.packageId = dto.packageId;
+            if (dto.status) booking.status = dto.status;
+            if (dto.advancePaid !== undefined) booking.advancePaid = Number(dto.advancePaid);
+            if (dto.notes !== undefined) booking.notes = dto.notes;
 
-        // Update other fields
-        if (dto.roomId) booking.roomId = dto.roomId;
-        if (dto.packageId !== undefined) booking.packageId = dto.packageId;
-        if (dto.status) booking.status = dto.status;
-        if (dto.advancePaid !== undefined) booking.advancePaid = Number(dto.advancePaid);
-        if (dto.notes !== undefined) booking.notes = dto.notes;
-
-        return this.bookingRepo.save(booking);
+            return manager.save(booking);
+        });
     }
 
     async cancelBooking(clinicId: string, bookingId: string) {
@@ -346,10 +411,15 @@ export class RetreatService {
         const checkIn = new Date(checkInDate);
         const checkOut = new Date(checkOutDate);
 
-        const hasConflict = await this.checkBookingConflict(roomId, checkIn, checkOut, excludeBookingId);
+        // Read-only path: no lock needed. Resolve the room then run the unified check.
+        const room = await this.roomRepo.findOne({ where: { id: roomId, organisationId: clinicId } });
+        if (!room) throw new NotFoundException('Room not found');
+
+        const block = await this.isRoomBlocked(this.dataSource.manager, room, checkIn, checkOut, excludeBookingId);
 
         return {
-            available: !hasConflict,
+            available: !block.blocked,
+            reason: block.reason ?? null,
             roomId,
             checkInDate,
             checkOutDate,
@@ -418,28 +488,91 @@ export class RetreatService {
         };
     }
 
-    // Helper method to check booking conflicts
-    private async checkBookingConflict(
-        roomId: string,
-        checkIn: Date,
-        checkOut: Date,
-        excludeBookingId?: string
-    ): Promise<boolean> {
-        const query = this.bookingRepo.createQueryBuilder('booking')
-            .where('booking.roomId = :roomId', { roomId })
-            .andWhere('booking.status NOT IN (:...excludeStatuses)', {
-                excludeStatuses: [BookingStatus.CANCELLED, BookingStatus.COMPLETED]
-            })
-            .andWhere(
-                '(booking.checkInDate < :checkOut AND booking.checkOutDate > :checkIn)',
-                { checkIn, checkOut }
-            );
+    // ── Phase 0 safety helpers ──────────────────────────────────────────────
 
-        if (excludeBookingId) {
-            query.andWhere('booking.id != :excludeBookingId', { excludeBookingId });
+    // Cross-tenant guard: the patient must belong to this organisation. Soft-deleted
+    // patients are auto-excluded by the @DeleteDateColumn on `patients`.
+    private async assertPatientInOrg(
+        clinicId: string,
+        patientId: string,
+        manager?: EntityManager,
+    ): Promise<void> {
+        const repo = manager ? manager.getRepository(Patient) : this.patientRepo;
+        const patient = await repo.findOne({ where: { id: patientId, organisationId: clinicId } });
+        if (!patient) {
+            throw new ForbiddenException('Patient not found in this organisation');
+        }
+    }
+
+    // Single source of truth for "can this room be occupied over [start, end)".
+    // Scans live admissions (physical occupancy) → room maintenance → active
+    // reservations, in that precedence. `blocked` is the OR of all three; the
+    // reason reports the most authoritative blocker first. Overlap is half-open.
+    private async isRoomBlocked(
+        manager: EntityManager,
+        room: Room,
+        start: Date,
+        end: Date,
+        excludeBookingId?: string,
+    ): Promise<{ blocked: boolean; reason?: BlockReason }> {
+        const s = start.getTime();
+        const e = end.getTime();
+
+        // (a) Live admissions — ACTIVE/PLANNED occupy; DISCHARGED/CANCELLED do not.
+        // An ACTIVE stay with no ACTUAL checkout occupies indefinitely (expected is
+        // ignored on purpose — overstays still occupy until actually discharged).
+        const admissions = await manager.find(Admission, {
+            where: {
+                organisationId: room.organisationId,
+                roomId: room.id,
+                status: Not(In([AdmissionStatus.DISCHARGED, AdmissionStatus.CANCELLED])),
+            },
+        });
+        for (const a of admissions) {
+            const aStart = new Date(a.checkInDate).getTime();
+            const aEnd = a.actualCheckOutDate
+                ? new Date(a.actualCheckOutDate).getTime()
+                : Number.POSITIVE_INFINITY;
+            if (rangesOverlap(aStart, aEnd, s, e)) {
+                return { blocked: true, reason: 'admission' };
+            }
         }
 
-        const conflictingBooking = await query.getOne();
-        return !!conflictingBooking;
+        // (b) Room administratively out of service
+        if (room.status === RoomStatus.MAINTENANCE) {
+            return { blocked: true, reason: 'maintenance' };
+        }
+
+        // (c) Active reservations (current-schema active set; becomes HELD/CONFIRMED in Phase 1)
+        const bookings = await manager.find(RoomBooking, {
+            where: {
+                organisationId: room.organisationId,
+                roomId: room.id,
+                status: In([BookingStatus.PENDING, BookingStatus.CONFIRMED, BookingStatus.CHECKED_IN]),
+            },
+        });
+        for (const b of bookings) {
+            if (excludeBookingId && b.id === excludeBookingId) continue;
+            const bStart = new Date(b.checkInDate).getTime();
+            const bEnd = new Date(b.checkOutDate).getTime();
+            if (rangesOverlap(bStart, bEnd, s, e)) {
+                return { blocked: true, reason: 'booking' };
+            }
+        }
+
+        return { blocked: false };
+    }
+
+    private blockMessage(reason?: BlockReason): string {
+        switch (reason) {
+            case 'admission':
+                return 'Room is currently occupied by an active admission for the selected dates';
+            case 'maintenance':
+                return 'Room is under maintenance and cannot be booked';
+            case 'booking':
+                return 'Room is already booked for the selected dates';
+            default:
+                return 'Room is not available for the selected dates';
+        }
     }
 }

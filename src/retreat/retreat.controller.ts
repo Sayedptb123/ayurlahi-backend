@@ -62,6 +62,13 @@ export class RetreatController {
         return this.retreatService.getAdmissions(clinicId, { patientId, status });
     }
 
+    // NOTE: must be declared before 'admissions/:id' so it isn't matched as an :id param
+    @Get('admissions/stats')
+    getAdmissionStats(@Request() req) {
+        const clinicId = req.user.organisationId;
+        return this.retreatService.getAdmissionStats(clinicId);
+    }
+
     @Post('admissions')
     checkIn(@Request() req, @Body() body) {
         const clinicId = req.user.organisationId;
