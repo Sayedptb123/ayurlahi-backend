@@ -72,6 +72,7 @@ describe('RetreatService Phase 0 — isRoomBlocked', () => {
             {} as any, // packageRepo
             {} as any, // admissionRepo
             {} as any, // bookingRepo
+            {} as any, // enquiryRepo
             {} as any, // orgUserRepo
             {} as any, // patientRepo
             {} as any, // dataSource
@@ -135,7 +136,7 @@ describe('RetreatService Phase 0 — assertPatientInOrg', () => {
     let service: RetreatService;
     beforeEach(() => {
         service = new RetreatService(
-            {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any,
+            {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any,
         );
     });
 

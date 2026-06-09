@@ -5,9 +5,11 @@ import { Room, RoomStatus } from './entities/room.entity';
 import { TreatmentPackage } from './entities/treatment-package.entity';
 import { Admission, AdmissionStatus } from './entities/admission.entity';
 import { RoomBooking, BookingStatus } from './entities/room-booking.entity';
+import { BookingEnquiry, EnquiryStatus } from './entities/booking-enquiry.entity';
 import { OrganisationUser } from '../organisation-users/entities/organisation-user.entity';
 import { Patient } from '../patients/entities/patient.entity';
 import { CreateBookingDto, UpdateBookingDto, CheckAvailabilityDto } from './dto/booking.dto';
+import { CreateEnquiryDto, UpdateEnquiryDto, ConvertEnquiryDto } from './dto/enquiry.dto';
 import { NotificationsService } from '../notifications/notifications.service';
 
 // Phase 0: half-open interval overlap. Two ranges [aStart,aEnd) and [bStart,bEnd)
@@ -30,6 +32,8 @@ export class RetreatService {
         private admissionRepo: Repository<Admission>,
         @InjectRepository(RoomBooking)
         private bookingRepo: Repository<RoomBooking>,
+        @InjectRepository(BookingEnquiry)
+        private enquiryRepo: Repository<BookingEnquiry>,
         @InjectRepository(OrganisationUser)
         private orgUserRepo: Repository<OrganisationUser>,
         @InjectRepository(Patient)
@@ -138,19 +142,37 @@ export class RetreatService {
 
     async checkIn(
         clinicId: string,
-        data: { patientId: string; roomId: string; packageId?: string; checkInDate?: Date }
+        data: { patientId: string; roomId: string; packageId?: string; checkInDate?: Date; bookingId?: string }
     ) {
-        const { patientId, roomId, packageId, checkInDate } = data;
+        const { patientId, roomId, packageId, checkInDate, bookingId } = data;
 
-        // Phase 0: serialise per-room + verify patient ownership + unified conflict, all
-        // inside one transaction. Notifications are dispatched AFTER commit (see below).
+        // Phase 1: checkIn from booking or walk-in. If bookingId provided, validate the
+        // booking, promote enquiry if needed, transition booking → FULFILLED, and link
+        // admission.booking_id. All inside one locked transaction.
         const { savedAdmission, room } = await this.dataSource.transaction(async (manager) => {
             // 1. Patient must belong to this organisation (cross-tenant guard)
             await this.assertPatientInOrg(clinicId, patientId, manager);
 
+            let linkedBooking: RoomBooking | null = null;
+            if (bookingId) {
+                linkedBooking = await manager.findOne(RoomBooking, {
+                    where: { id: bookingId, organisationId: clinicId },
+                    relations: ['enquiry'],
+                });
+                if (!linkedBooking) throw new NotFoundException('Booking not found');
+                if (linkedBooking.status !== BookingStatus.CONFIRMED) {
+                    throw new ConflictException(`Booking must be CONFIRMED to check in (current: ${linkedBooking.status})`);
+                }
+                // Reject enquiry-only bookings — must promote to patient first
+                if (!linkedBooking.patientId && linkedBooking.enquiryId) {
+                    throw new ConflictException('Booking has no patient. Promote enquiry first.');
+                }
+            }
+
             // 2. Lock the room row (SELECT ... FOR UPDATE) before reading occupancy
+            const targetRoomId = linkedBooking?.roomId || roomId;
             const room = await manager.findOne(Room, {
-                where: { id: roomId, organisationId: clinicId },
+                where: { id: targetRoomId, organisationId: clinicId },
                 lock: { mode: 'pessimistic_write' },
             });
             if (!room) throw new NotFoundException('Room not found');
@@ -171,21 +193,29 @@ export class RetreatService {
             const end = expectedCheckOut ?? new Date(start.getTime() + 24 * 60 * 60 * 1000);
 
             // 4. Unified conflict check across admissions + room status + bookings
-            const block = await this.isRoomBlocked(manager, room, start, end);
+            const block = await this.isRoomBlocked(manager, room, start, end, bookingId ?? undefined);
             if (block.blocked) throw new ConflictException(this.blockMessage(block.reason));
 
             // 5. Create admission and occupy the room
             const admission = manager.create(Admission, {
                 organisationId: clinicId,
                 patientId,
-                roomId,
-                packageId,
+                roomId: targetRoomId,
+                packageId: packageId || linkedBooking?.packageId || null,
+                bookingId: linkedBooking?.id || null,
                 checkInDate: start,
                 expectedCheckOutDate: expectedCheckOut,
                 status: AdmissionStatus.ACTIVE,
             });
             room.status = RoomStatus.OCCUPIED;
             await manager.save(room);
+
+            // Transition booking → FULFILLED if linked
+            if (linkedBooking) {
+                linkedBooking.status = BookingStatus.FULFILLED;
+                await manager.save(linkedBooking);
+            }
+
             const savedAdmission = await manager.save(admission);
             return { savedAdmission, room };
         });
@@ -253,7 +283,12 @@ export class RetreatService {
 
     // --- BOOKINGS ---
     async createBooking(clinicId: string, dto: CreateBookingDto) {
-        const { patientId, roomId, packageId, checkInDate, checkOutDate, advancePaid, notes } = dto;
+        const { patientId, enquiryId, roomId, packageId, checkInDate, checkOutDate, advancePaid, notes } = dto;
+
+        // Validate identity: at least one of patientId or enquiryId must be present
+        if (!patientId && !enquiryId) {
+            throw new BadRequestException('Either patientId or enquiryId is required');
+        }
 
         // Validate dates
         const checkIn = new Date(checkInDate);
@@ -267,10 +302,20 @@ export class RetreatService {
             throw new BadRequestException('Check-out date must be after check-in date');
         }
 
-        // Phase 0: serialise per-room + verify patient ownership + unified conflict in one txn.
+        // Phase 1: serialise per-room + verify patient ownership + unified conflict in one txn.
         return this.dataSource.transaction(async (manager) => {
-            // Patient must belong to this organisation (cross-tenant guard)
-            await this.assertPatientInOrg(clinicId, patientId, manager);
+            // Patient ownership guard (when patientId provided)
+            if (patientId) {
+                await this.assertPatientInOrg(clinicId, patientId, manager);
+            }
+
+            // Verify enquiry belongs to org (when enquiryId provided)
+            if (enquiryId) {
+                const enquiry = await manager.findOne(BookingEnquiry, {
+                    where: { id: enquiryId, organisationId: clinicId },
+                });
+                if (!enquiry) throw new ForbiddenException('Enquiry not found in this organisation');
+            }
 
             // Lock the room row before reading occupancy
             const room = await manager.findOne(Room, {
@@ -295,15 +340,16 @@ export class RetreatService {
 
             const booking = manager.create(RoomBooking, {
                 organisationId: clinicId,
-                patientId,
+                patientId: patientId || null,
+                enquiryId: enquiryId || null,
                 roomId,
-                packageId,
+                packageId: packageId || null,
                 checkInDate: checkIn,
                 checkOutDate: checkOut,
                 totalPrice,
                 advancePaid: advancePaid || 0,
-                status: BookingStatus.PENDING,
-                notes,
+                status: BookingStatus.HELD,
+                notes: notes || null,
                 bookingDate: new Date(),
             });
             return manager.save(booking);
@@ -397,8 +443,8 @@ export class RetreatService {
     async cancelBooking(clinicId: string, bookingId: string) {
         const booking = await this.getBookingById(clinicId, bookingId);
 
-        if (booking.status === BookingStatus.CHECKED_IN) {
-            throw new BadRequestException('Cannot cancel a booking that is already checked in');
+        if (booking.status === BookingStatus.FULFILLED) {
+            throw new BadRequestException('Cannot cancel a booking that has already been fulfilled');
         }
 
         booking.status = BookingStatus.CANCELLED;
@@ -467,7 +513,8 @@ export class RetreatService {
                 const isBooked = bookings.some(booking =>
                     booking.roomId === room.id &&
                     booking.status !== 'CANCELLED' &&
-                    booking.status !== 'COMPLETED' &&
+                    booking.status !== 'FULFILLED' &&
+                    booking.status !== 'NO_SHOW' &&
                     new Date(booking.checkInDate) <= d &&
                     new Date(booking.checkOutDate) > d
                 );
@@ -518,7 +565,7 @@ export class RetreatService {
         const s = start.getTime();
         const e = end.getTime();
 
-        // (a) Live admissions — ACTIVE/PLANNED occupy; DISCHARGED/CANCELLED do not.
+        // (a) Live admissions — ACTIVE occupies; DISCHARGED/CANCELLED do not.
         // An ACTIVE stay with no ACTUAL checkout occupies indefinitely (expected is
         // ignored on purpose — overstays still occupy until actually discharged).
         const admissions = await manager.find(Admission, {
@@ -543,12 +590,12 @@ export class RetreatService {
             return { blocked: true, reason: 'maintenance' };
         }
 
-        // (c) Active reservations (current-schema active set; becomes HELD/CONFIRMED in Phase 1)
+        // (c) Active reservations — HELD/CONFIRMED block; FULFILLED/CANCELLED/NO_SHOW do not.
         const bookings = await manager.find(RoomBooking, {
             where: {
                 organisationId: room.organisationId,
                 roomId: room.id,
-                status: In([BookingStatus.PENDING, BookingStatus.CONFIRMED, BookingStatus.CHECKED_IN]),
+                status: In([BookingStatus.HELD, BookingStatus.CONFIRMED]),
             },
         });
         for (const b of bookings) {
@@ -561,6 +608,178 @@ export class RetreatService {
         }
 
         return { blocked: false };
+    }
+
+    // ── Enquiry methods ─────────────────────────────────────────────────────
+
+    async listEnquiries(clinicId: string, filters?: { status?: EnquiryStatus; assignedTo?: string }) {
+        const query = this.enquiryRepo.createQueryBuilder('enquiry')
+            .leftJoinAndSelect('enquiry.assignedToUser', 'assignedToUser')
+            .where('enquiry.organisationId = :organisationId', { organisationId: clinicId })
+            .andWhere('enquiry.deletedAt IS NULL');
+
+        if (filters?.status) {
+            query.andWhere('enquiry.status = :status', { status: filters.status });
+        }
+        if (filters?.assignedTo) {
+            query.andWhere('enquiry.assignedTo = :assignedTo', { assignedTo: filters.assignedTo });
+        }
+
+        query.orderBy('enquiry.createdAt', 'DESC');
+        return query.getMany();
+    }
+
+    async createEnquiry(clinicId: string, dto: CreateEnquiryDto) {
+        const enquiry = this.enquiryRepo.create({
+            organisationId: clinicId,
+            contactName: dto.contactName,
+            phone: dto.phone,
+            channel: dto.channel,
+            preferredRoomType: dto.preferredRoomType || null,
+            preferredCheckIn: dto.preferredCheckIn ? new Date(dto.preferredCheckIn) : null,
+            preferredCheckOut: dto.preferredCheckOut ? new Date(dto.preferredCheckOut) : null,
+            notes: dto.notes || null,
+            assignedTo: dto.assignedTo || null,
+            followUpAt: dto.followUpAt ? new Date(dto.followUpAt) : null,
+            status: EnquiryStatus.NEW,
+        });
+        return this.enquiryRepo.save(enquiry);
+    }
+
+    async updateEnquiry(clinicId: string, enquiryId: string, dto: UpdateEnquiryDto) {
+        const enquiry = await this.enquiryRepo.findOne({
+            where: { id: enquiryId, organisationId: clinicId },
+        });
+        if (!enquiry) throw new NotFoundException('Enquiry not found');
+
+        if (dto.contactName !== undefined) enquiry.contactName = dto.contactName;
+        if (dto.phone !== undefined) enquiry.phone = dto.phone;
+        if (dto.channel !== undefined) enquiry.channel = dto.channel;
+        if (dto.preferredRoomType !== undefined) enquiry.preferredRoomType = dto.preferredRoomType || null;
+        if (dto.preferredCheckIn !== undefined) enquiry.preferredCheckIn = dto.preferredCheckIn ? new Date(dto.preferredCheckIn) : null;
+        if (dto.preferredCheckOut !== undefined) enquiry.preferredCheckOut = dto.preferredCheckOut ? new Date(dto.preferredCheckOut) : null;
+        if (dto.status !== undefined) enquiry.status = dto.status;
+        if (dto.notes !== undefined) enquiry.notes = dto.notes || null;
+        if (dto.assignedTo !== undefined) enquiry.assignedTo = dto.assignedTo || null;
+        if (dto.followUpAt !== undefined) enquiry.followUpAt = dto.followUpAt ? new Date(dto.followUpAt) : null;
+        if (dto.lostReason !== undefined) enquiry.lostReason = dto.lostReason || null;
+
+        return this.enquiryRepo.save(enquiry);
+    }
+
+    async markEnquiryLost(clinicId: string, enquiryId: string, lostReason?: string) {
+        const enquiry = await this.enquiryRepo.findOne({
+            where: { id: enquiryId, organisationId: clinicId },
+        });
+        if (!enquiry) throw new NotFoundException('Enquiry not found');
+
+        enquiry.status = EnquiryStatus.LOST;
+        enquiry.lostReason = lostReason || null;
+        return this.enquiryRepo.save(enquiry);
+    }
+
+    async convertEnquiryToBooking(clinicId: string, enquiryId: string, dto: ConvertEnquiryDto) {
+        return this.dataSource.transaction(async (manager) => {
+            const enquiry = await manager.findOne(BookingEnquiry, {
+                where: { id: enquiryId, organisationId: clinicId },
+            });
+            if (!enquiry) throw new NotFoundException('Enquiry not found');
+
+            const room = await manager.findOne(Room, {
+                where: { id: dto.roomId, organisationId: clinicId },
+                lock: { mode: 'pessimistic_write' },
+            });
+            if (!room) throw new NotFoundException('Room not found');
+
+            const checkIn = new Date(dto.checkInDate);
+            const checkOut = new Date(dto.checkOutDate);
+            if (checkOut <= checkIn) {
+                throw new BadRequestException('Check-out date must be after check-in date');
+            }
+
+            const block = await this.isRoomBlocked(manager, room, checkIn, checkOut);
+            if (block.blocked) throw new ConflictException(this.blockMessage(block.reason));
+
+            const days = Math.ceil((checkOut.getTime() - checkIn.getTime()) / (1000 * 60 * 60 * 24));
+            let totalPrice = parseFloat(String(room.pricePerDay)) * days;
+            if (dto.packageId) {
+                const pkg = await manager.findOne(TreatmentPackage, { where: { id: dto.packageId } });
+                if (pkg) totalPrice = parseFloat(String(pkg.price));
+            }
+
+            const booking = manager.create(RoomBooking, {
+                organisationId: clinicId,
+                enquiryId,
+                patientId: null,
+                roomId: dto.roomId,
+                packageId: dto.packageId || null,
+                checkInDate: checkIn,
+                checkOutDate: checkOut,
+                totalPrice,
+                advancePaid: 0,
+                status: BookingStatus.HELD,
+                notes: dto.notes || null,
+                bookingDate: new Date(),
+            });
+            return manager.save(booking);
+        });
+    }
+
+    // Phone-dedup patient search / creation. Sets booking.patient_id only.
+    async promoteEnquiry(clinicId: string, bookingId: string) {
+        return this.dataSource.transaction(async (manager) => {
+            const booking = await manager.findOne(RoomBooking, {
+                where: { id: bookingId, organisationId: clinicId },
+                relations: ['enquiry'],
+            });
+            if (!booking) throw new NotFoundException('Booking not found');
+            if (booking.patientId) {
+                throw new BadRequestException('Booking already has a patient linked');
+            }
+            if (!booking.enquiry) {
+                throw new BadRequestException('Booking has no enquiry to promote');
+            }
+
+            // Phone dedup
+            const existingPatient = await manager.findOne(Patient, {
+                where: { phone: booking.enquiry.phone, organisationId: clinicId },
+            });
+
+            if (existingPatient) {
+                booking.patientId = existingPatient.id;
+            } else {
+                const newPatient = manager.create(Patient, {
+                    organisationId: clinicId,
+                    patientCode: `TMP-${Date.now()}`,
+                    firstName: booking.enquiry.contactName.split(' ')[0] || booking.enquiry.contactName,
+                    lastName: booking.enquiry.contactName.split(' ').slice(1).join(' ') || '',
+                    phone: booking.enquiry.phone,
+                    gender: 'other' as any,
+                    dateOfBirth: null,
+                });
+                const saved = await manager.save(newPatient);
+                booking.patientId = saved.id;
+            }
+
+            return manager.save(booking);
+        });
+    }
+
+    // Resolve contact identity for a booking: patient (if linked) else enquiry.
+    private resolveContact(booking: RoomBooking): { name: string; phone: string } {
+        if (booking.patient) {
+            return {
+                name: `${booking.patient.firstName} ${booking.patient.lastName}`.trim(),
+                phone: booking.patient.phone || '',
+            };
+        }
+        if (booking.enquiry) {
+            return {
+                name: booking.enquiry.contactName,
+                phone: booking.enquiry.phone,
+            };
+        }
+        return { name: 'Unknown', phone: '' };
     }
 
     private blockMessage(reason?: BlockReason): string {

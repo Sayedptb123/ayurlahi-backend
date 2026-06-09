@@ -3,7 +3,7 @@ import {
     PrimaryGeneratedColumn,
     Column,
     CreateDateColumn,
-  DeleteDateColumn,
+    DeleteDateColumn,
     UpdateDateColumn,
     ManyToOne,
     JoinColumn,
@@ -12,13 +12,14 @@ import { Organisation } from '../../organisations/entities/organisation.entity';
 import { Patient } from '../../patients/entities/patient.entity';
 import { Room } from './room.entity';
 import { TreatmentPackage } from './treatment-package.entity';
+import { BookingEnquiry } from './booking-enquiry.entity';
 
 export enum BookingStatus {
-    PENDING = 'PENDING',
+    HELD = 'HELD',
     CONFIRMED = 'CONFIRMED',
-    CHECKED_IN = 'CHECKED_IN',
-    COMPLETED = 'COMPLETED',
+    FULFILLED = 'FULFILLED',
     CANCELLED = 'CANCELLED',
+    NO_SHOW = 'NO_SHOW',
 }
 
 @Entity('room_bookings')
@@ -33,12 +34,19 @@ export class RoomBooking {
     @JoinColumn({ name: 'organisation_id' })
     organisation: Organisation;
 
-    @Column({ type: 'uuid', name: 'patient_id' })
-    patientId: string;
+    @Column({ type: 'uuid', name: 'patient_id', nullable: true })
+    patientId: string | null;
 
-    @ManyToOne(() => Patient)
+    @ManyToOne(() => Patient, { nullable: true })
     @JoinColumn({ name: 'patient_id' })
-    patient: Patient;
+    patient: Patient | null;
+
+    @Column({ type: 'uuid', name: 'enquiry_id', nullable: true })
+    enquiryId: string | null;
+
+    @ManyToOne(() => BookingEnquiry, { nullable: true })
+    @JoinColumn({ name: 'enquiry_id' })
+    enquiry: BookingEnquiry | null;
 
     @Column({ type: 'uuid', name: 'room_id' })
     roomId: string;
@@ -69,7 +77,7 @@ export class RoomBooking {
     @Column({
         type: 'enum',
         enum: BookingStatus,
-        default: BookingStatus.PENDING,
+        default: BookingStatus.HELD,
         name: 'status',
     })
     status: BookingStatus;
@@ -79,9 +87,6 @@ export class RoomBooking {
 
     @Column({ type: 'timestamp', nullable: true, name: 'booking_date' })
     bookingDate: Date | null;
-
-    @Column({ type: 'uuid', nullable: true, name: 'admission_id' })
-    admissionId: string | null;
 
     @DeleteDateColumn({ type: 'timestamp', nullable: true, name: 'deleted_at' })
     deletedAt: Date | null;

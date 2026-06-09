@@ -3,7 +3,7 @@ import {
     PrimaryGeneratedColumn,
     Column,
     CreateDateColumn,
-  DeleteDateColumn,
+    DeleteDateColumn,
     UpdateDateColumn,
     ManyToOne,
     JoinColumn,
@@ -12,12 +12,12 @@ import { Organisation } from '../../organisations/entities/organisation.entity';
 import { Patient } from '../../patients/entities/patient.entity';
 import { Room } from './room.entity';
 import { TreatmentPackage } from './treatment-package.entity';
+import { RoomBooking } from './room-booking.entity';
 
 export enum AdmissionStatus {
     ACTIVE = 'ACTIVE',
     DISCHARGED = 'DISCHARGED',
     CANCELLED = 'CANCELLED',
-    PLANNED = 'PLANNED',
 }
 
 @Entity('admissions')
@@ -52,6 +52,13 @@ export class Admission {
     @ManyToOne(() => TreatmentPackage, { nullable: true })
     @JoinColumn({ name: 'package_id' })
     treatmentPackage: TreatmentPackage | null;
+
+    @Column({ type: 'uuid', name: 'booking_id', nullable: true })
+    bookingId: string | null;
+
+    @ManyToOne(() => RoomBooking, { nullable: true })
+    @JoinColumn({ name: 'booking_id' })
+    booking: RoomBooking | null;
 
     @Column({ type: 'timestamp', name: 'check_in_date' })
     checkInDate: Date;

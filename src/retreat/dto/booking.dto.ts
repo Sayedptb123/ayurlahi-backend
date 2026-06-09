@@ -1,9 +1,14 @@
-import { IsUUID, IsDateString, IsOptional, IsNumber, IsString, IsEnum, Min } from 'class-validator';
+import { IsUUID, IsDateString, IsOptional, IsNumber, IsString, IsEnum, Min, ValidateIf } from 'class-validator';
 import { BookingStatus } from '../entities/room-booking.entity';
 
 export class CreateBookingDto {
+    @IsOptional()
     @IsUUID()
-    patientId: string;
+    patientId?: string;
+
+    @IsOptional()
+    @IsUUID()
+    enquiryId?: string;
 
     @IsUUID()
     roomId: string;
@@ -71,5 +76,5 @@ export class CheckAvailabilityDto {
 
     @IsOptional()
     @IsUUID()
-    excludeBookingId?: string; // For checking when updating existing booking
+    excludeBookingId?: string;
 }

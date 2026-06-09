@@ -13,7 +13,9 @@ import {
 import { RetreatService } from './retreat.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CreateBookingDto, UpdateBookingDto, CheckAvailabilityDto } from './dto/booking.dto';
+import { CreateEnquiryDto, UpdateEnquiryDto, ConvertEnquiryDto } from './dto/enquiry.dto';
 import { BookingStatus } from './entities/room-booking.entity';
+import { EnquiryStatus } from './entities/booking-enquiry.entity';
 
 @Controller('retreat')
 @UseGuards(JwtAuthGuard)
@@ -73,6 +75,47 @@ export class RetreatController {
     checkIn(@Request() req, @Body() body) {
         const clinicId = req.user.organisationId;
         return this.retreatService.checkIn(clinicId, body);
+    }
+
+    // --- ENQUIRY ENDPOINTS ---
+    @Get('enquiries')
+    listEnquiries(
+        @Request() req,
+        @Query('status') status?: EnquiryStatus,
+        @Query('assignedTo') assignedTo?: string,
+    ) {
+        const clinicId = req.user.organisationId;
+        return this.retreatService.listEnquiries(clinicId, { status, assignedTo });
+    }
+
+    @Post('enquiries')
+    createEnquiry(@Request() req, @Body() dto: CreateEnquiryDto) {
+        const clinicId = req.user.organisationId;
+        return this.retreatService.createEnquiry(clinicId, dto);
+    }
+
+    @Patch('enquiries/:id')
+    updateEnquiry(@Request() req, @Param('id') id: string, @Body() dto: UpdateEnquiryDto) {
+        const clinicId = req.user.organisationId;
+        return this.retreatService.updateEnquiry(clinicId, id, dto);
+    }
+
+    @Post('enquiries/:id/convert')
+    convertEnquiryToBooking(@Request() req, @Param('id') id: string, @Body() dto: ConvertEnquiryDto) {
+        const clinicId = req.user.organisationId;
+        return this.retreatService.convertEnquiryToBooking(clinicId, id, dto);
+    }
+
+    @Post('enquiries/:id/lost')
+    markEnquiryLost(@Request() req, @Param('id') id: string, @Body() body: { lostReason?: string }) {
+        const clinicId = req.user.organisationId;
+        return this.retreatService.markEnquiryLost(clinicId, id, body?.lostReason);
+    }
+
+    @Post('bookings/:id/promote')
+    promoteEnquiry(@Request() req, @Param('id') id: string) {
+        const clinicId = req.user.organisationId;
+        return this.retreatService.promoteEnquiry(clinicId, id);
     }
 
     @Post('admissions/:id/discharge')

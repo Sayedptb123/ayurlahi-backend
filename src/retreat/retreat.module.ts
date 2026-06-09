@@ -6,13 +6,14 @@ import { Room } from './entities/room.entity';
 import { TreatmentPackage } from './entities/treatment-package.entity';
 import { Admission } from './entities/admission.entity';
 import { RoomBooking } from './entities/room-booking.entity';
+import { BookingEnquiry } from './entities/booking-enquiry.entity';
 import { OrganisationUser } from '../organisation-users/entities/organisation-user.entity';
 import { Patient } from '../patients/entities/patient.entity';
 import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Room, TreatmentPackage, Admission, RoomBooking, OrganisationUser, Patient]),
+    TypeOrmModule.forFeature([Room, TreatmentPackage, Admission, RoomBooking, BookingEnquiry, OrganisationUser, Patient]),
     NotificationsModule,
   ],
   controllers: [RetreatController],
