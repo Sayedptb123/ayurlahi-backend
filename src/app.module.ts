@@ -96,6 +96,7 @@ import { Room } from './retreat/entities/room.entity';
 import { TreatmentPackage } from './retreat/entities/treatment-package.entity';
 import { Admission } from './retreat/entities/admission.entity';
 import { RoomBooking } from './retreat/entities/room-booking.entity';
+import { BookingEnquiry } from './retreat/entities/booking-enquiry.entity';
 import { VitalsModule } from './vitals/vitals.module';
 import { Vital } from './vitals/entities/vital.entity';
 import { FeedingLogsModule } from './feeding-logs/feeding-logs.module';
@@ -205,6 +206,7 @@ import { BillPayment } from './bills/entities/bill-payment.entity';
           TreatmentPackage,
           Admission,
           RoomBooking,
+          BookingEnquiry,
           Vital,
           FeedingLog,
           NewbornAssessment,
