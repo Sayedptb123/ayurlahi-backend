@@ -8,7 +8,7 @@
 BEGIN;
 
 ALTER TABLE "public"."clinic_capabilities"
-    ADD COLUMN IF NOT EXISTS "enabled_modules" JSONB DEFAULT '["postnatal_care","ayurveda","ipd","opd","appointments","billing","staff","inventory","patients","medical_records","prescriptions","lab_reports","analytics","expenses","payroll","tasks","manufacturing","promotions","crm","rooms","bookings","enquiries"]'::jsonb;
+    ADD COLUMN IF NOT EXISTS "enabled_modules" JSONB DEFAULT '["postnatal_care","ayurveda","ipd","opd","appointments","billing","staff","inventory","patients","medical_records","prescriptions","lab_reports","analytics","expenses","payroll","tasks","manufacturing","promotions","crm","rooms","booking","enquiries"]'::jsonb;
 
 -- Index for fast module lookups
 CREATE INDEX IF NOT EXISTS "idx_clinic_capabilities_modules"

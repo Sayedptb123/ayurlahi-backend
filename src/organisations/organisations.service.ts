@@ -321,7 +321,7 @@ export class OrganisationsService {
 
   async updateCapabilities(
     orgId: string,
-    dto: { hasPostnatalCare?: boolean; hasAyurveda?: boolean; hasIpd?: boolean; hasOpd?: boolean },
+    dto: { hasPostnatalCare?: boolean; hasAyurveda?: boolean; hasIpd?: boolean; hasOpd?: boolean; enabledModules?: string[] },
   ) {
     let cap = await this.capabilitiesRepository.findOne({ where: { organisationId: orgId } });
     if (!cap) {
@@ -331,12 +331,14 @@ export class OrganisationsService {
     if (dto.hasAyurveda !== undefined) cap.hasAyurveda = dto.hasAyurveda;
     if (dto.hasIpd !== undefined) cap.hasIpd = dto.hasIpd;
     if (dto.hasOpd !== undefined) cap.hasOpd = dto.hasOpd;
+    if (dto.enabledModules !== undefined) cap.enabledModules = dto.enabledModules;
     await this.capabilitiesRepository.save(cap);
     return {
       hasPostnatalCare: cap.hasPostnatalCare,
       hasAyurveda: cap.hasAyurveda,
       hasIpd: cap.hasIpd,
       hasOpd: cap.hasOpd,
+      enabledModules: cap.enabledModules,
     };
   }
 }

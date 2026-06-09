@@ -11,6 +11,7 @@ import { OrganisationUser } from '../organisation-users/entities/organisation-us
 import { Patient } from '../patients/entities/patient.entity';
 import { ClinicCapabilities } from '../clinic-capabilities/entities/clinic-capabilities.entity';
 import { NotificationsModule } from '../notifications/notifications.module';
+import { ModuleGuard } from '../auth/guards/module.guard';
 
 @Module({
   imports: [
@@ -18,6 +19,6 @@ import { NotificationsModule } from '../notifications/notifications.module';
     NotificationsModule,
   ],
   controllers: [RetreatController],
-  providers: [RetreatService],
+  providers: [RetreatService, ModuleGuard],
 })
 export class RetreatModule { }
