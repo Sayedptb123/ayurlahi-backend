@@ -30,6 +30,22 @@ export class RetreatController {
         return this.retreatService.getRooms(clinicId);
     }
 
+    @Get('today')
+    getTodaySummary(@Request() req) {
+        return this.retreatService.getTodaySummary(req.user.organisationId);
+    }
+
+    // Must be declared before any 'rooms/:id' route so 'available' isn't matched as :id
+    @Get('rooms/available')
+    getAvailableRooms(
+        @Request() req,
+        @Query('checkInDate') checkInDate: string,
+        @Query('checkOutDate') checkOutDate: string,
+    ) {
+        const clinicId = req.user.organisationId;
+        return this.retreatService.getAvailableRooms(clinicId, checkInDate, checkOutDate);
+    }
+
     @Post('rooms')
     createRoom(@Request() req, @Body() body) {
         const clinicId = req.user.organisationId;

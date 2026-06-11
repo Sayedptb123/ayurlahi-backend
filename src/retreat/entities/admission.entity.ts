@@ -80,6 +80,13 @@ export class Admission {
     @Column({ type: 'text', nullable: true, name: 'notes' })
     notes: string | null;
 
+    // Admission-level care-program classifier (postnatal | ayurveda | ipd | opd | …).
+    // Plain string, validated in-app against the org's clinic_capabilities — NOT a
+    // PG enum (new programs stay data-driven). Classification only; does not affect
+    // occupancy/room logic. See POSTNATAL-W1-A.
+    @Column({ type: 'varchar', length: 50, nullable: true, name: 'care_program' })
+    careProgram: string | null;
+
     @DeleteDateColumn({ type: 'timestamp', nullable: true, name: 'deleted_at' })
     deletedAt: Date | null;
 

@@ -16,6 +16,7 @@ import { CreateOrganisationDto } from './dto/create-organisation.dto';
 import { UpdateOrganisationDto } from './dto/update-organisation.dto';
 import { GetOrganisationsDto } from './dto/get-organisations.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { ALL_MODULES, MODULE_PRESETS } from '../auth/guards/module.guard';
 
 function requireTeam(req: any) {
   if (req.user?.organisationType !== 'AYURLAHI_TEAM') {
@@ -37,6 +38,12 @@ export class OrganisationsController {
   findAll(@Query() query: GetOrganisationsDto, @Request() req) {
     requireTeam(req);
     return this.organisationsService.findAll(query);
+  }
+
+  // Static module registry + onboarding presets (declared before :id routes)
+  @Get('module-catalog')
+  getModuleCatalog() {
+    return { modules: ALL_MODULES, presets: MODULE_PRESETS };
   }
 
   @Get(':id')
@@ -89,10 +96,13 @@ export class OrganisationsController {
 
   @Patch(':id/capabilities')
   updateCapabilities(@Param('id') id: string, @Body() body: any, @Request() req) {
-    const isOwnOrg = req.user?.organisationId === id;
-    const isOwnerOrManager = ['OWNER', 'MANAGER'].includes(req.user?.role);
-    if (!isOwnOrg || !isOwnerOrManager) {
-      throw new ForbiddenException('Only the clinic OWNER or MANAGER can update service capabilities');
+    // Ayurlahi Team can configure any org (onboarding); a clinic OWNER/MANAGER can
+    // configure their own. This is what lets module setup happen without SQL.
+    const isTeam = req.user?.organisationType === 'AYURLAHI_TEAM';
+    const isOwnOwnerOrManager =
+      req.user?.organisationId === id && ['OWNER', 'MANAGER'].includes(req.user?.role);
+    if (!isTeam && !isOwnOwnerOrManager) {
+      throw new ForbiddenException('Only Ayurlahi Team, or the clinic OWNER/MANAGER, can update capabilities');
     }
     return this.organisationsService.updateCapabilities(id, body);
   }

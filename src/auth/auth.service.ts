@@ -30,6 +30,16 @@ import { SmsService } from '../sms/sms.service';
 import { EmailService } from '../email/email.service';
 import { IsNull } from 'typeorm';
 import { normalizePhone } from '../common/utils/phone.util';
+
+// Default modules enabled for a newly-registered clinic. Without this a new clinic
+// gets enabled_modules=[] and the API-gated booking module (@RequireModule('booking'))
+// would 403. Ayurlahi Team can narrow this per client (e.g. booking-only for Anjala).
+const DEFAULT_CLINIC_MODULES = [
+  'postnatal_care', 'ayurveda', 'ipd', 'opd', 'appointments', 'billing', 'staff',
+  'inventory', 'patients', 'medical_records', 'prescriptions', 'lab_reports',
+  'analytics', 'expenses', 'payroll', 'tasks', 'manufacturing', 'promotions',
+  'crm', 'rooms', 'booking', 'enquiries',
+];
 import { ClinicProfile } from '../organisations/entities/clinic-profile.entity';
 import { ManufacturerProfile } from '../organisations/entities/manufacturer-profile.entity';
 import { OrganisationContact } from '../organisations/entities/organisation-contact.entity';
@@ -360,6 +370,7 @@ export class AuthService {
         hasAyurveda: true,
         hasIpd: true,
         hasOpd: true,
+        enabledModules: DEFAULT_CLINIC_MODULES,
       });
       await this.clinicCapabilitiesRepository.save(defaultCaps);
 

@@ -35,6 +35,21 @@ export type AppModule =
     | 'promotions'
     | 'crm';
 
+// Canonical module registry — source of truth for what can be enabled per org.
+export const ALL_MODULES: AppModule[] = [
+    'booking', 'rooms', 'enquiries', 'postnatal_care', 'ayurveda', 'ipd', 'opd',
+    'appointments', 'billing', 'staff', 'inventory', 'patients', 'medical_records',
+    'prescriptions', 'lab_reports', 'analytics', 'expenses', 'payroll', 'tasks',
+    'manufacturing', 'promotions', 'crm',
+];
+
+// Onboarding presets (resolved server-side; "Custom" sends an explicit list).
+export const MODULE_PRESETS: Record<string, AppModule[]> = {
+    BOOKING_ONLY: ['booking', 'rooms', 'enquiries'],
+    FULL_CLINIC: [...ALL_MODULES],
+    POSTNATAL_ONLY: ['booking', 'rooms', 'enquiries', 'postnatal_care', 'patients', 'medical_records', 'billing'],
+};
+
 /**
  * Decorator that marks a route as requiring a specific module to be enabled.
  *

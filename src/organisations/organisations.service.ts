@@ -10,6 +10,7 @@ import { Organisation } from './entities/organisation.entity';
 import { CreateOrganisationDto } from './dto/create-organisation.dto';
 import { UpdateOrganisationDto } from './dto/update-organisation.dto';
 import { GetOrganisationsDto } from './dto/get-organisations.dto';
+import { ALL_MODULES, MODULE_PRESETS } from '../auth/guards/module.guard';
 
 import { OrganisationUser } from '../organisation-users/entities/organisation-user.entity';
 import { ClinicCapabilities } from '../clinic-capabilities/entities/clinic-capabilities.entity';
@@ -61,6 +62,21 @@ export class OrganisationsService {
     });
 
     const savedOrg = await this.organisationsRepository.save(organisation);
+
+    // CLINIC orgs get the full default module set on creation so a new clinic is
+    // never in a module-less (booking-403) state — matches self-registration. The
+    // team narrows modules afterward via Manage Modules (e.g. Booking-only).
+    if (savedOrg.type === 'CLINIC') {
+      const caps = this.capabilitiesRepository.create({
+        organisationId: savedOrg.id,
+        hasPostnatalCare: true,
+        hasAyurveda: true,
+        hasIpd: true,
+        hasOpd: true,
+        enabledModules: [...MODULE_PRESETS.FULL_CLINIC],
+      });
+      await this.capabilitiesRepository.save(caps);
+    }
 
     // Notify team when a new org self-registers and is pending approval
     if (approvalStatus === 'pending') {
@@ -316,22 +332,37 @@ export class OrganisationsService {
       hasAyurveda: cap.hasAyurveda,
       hasIpd: cap.hasIpd,
       hasOpd: cap.hasOpd,
+      enabledModules: cap.enabledModules ?? [],
     };
   }
 
   async updateCapabilities(
     orgId: string,
-    dto: { hasPostnatalCare?: boolean; hasAyurveda?: boolean; hasIpd?: boolean; hasOpd?: boolean; enabledModules?: string[] },
+    dto: { hasPostnatalCare?: boolean; hasAyurveda?: boolean; hasIpd?: boolean; hasOpd?: boolean; enabledModules?: string[]; modulePreset?: string },
   ) {
     let cap = await this.capabilitiesRepository.findOne({ where: { organisationId: orgId } });
     if (!cap) {
       cap = this.capabilitiesRepository.create({ organisationId: orgId });
     }
+
+    // Resolve a preset to a module list (Custom sends enabledModules directly)
+    let enabledModules = dto.enabledModules;
+    if (dto.modulePreset) {
+      const preset = MODULE_PRESETS[dto.modulePreset];
+      if (!preset) throw new BadRequestException(`Unknown module preset: ${dto.modulePreset}`);
+      enabledModules = [...preset];
+    }
+    // Reject unknown module names
+    if (enabledModules !== undefined) {
+      const invalid = enabledModules.filter((m) => !ALL_MODULES.includes(m as any));
+      if (invalid.length) throw new BadRequestException(`Unknown modules: ${invalid.join(', ')}`);
+    }
+
     if (dto.hasPostnatalCare !== undefined) cap.hasPostnatalCare = dto.hasPostnatalCare;
     if (dto.hasAyurveda !== undefined) cap.hasAyurveda = dto.hasAyurveda;
     if (dto.hasIpd !== undefined) cap.hasIpd = dto.hasIpd;
     if (dto.hasOpd !== undefined) cap.hasOpd = dto.hasOpd;
-    if (dto.enabledModules !== undefined) cap.enabledModules = dto.enabledModules;
+    if (enabledModules !== undefined) cap.enabledModules = enabledModules;
     await this.capabilitiesRepository.save(cap);
     return {
       hasPostnatalCare: cap.hasPostnatalCare,

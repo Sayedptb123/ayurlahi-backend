@@ -8,6 +8,7 @@ import { RoomBooking, BookingStatus } from './entities/room-booking.entity';
 import { BookingEnquiry, EnquiryStatus } from './entities/booking-enquiry.entity';
 import { OrganisationUser } from '../organisation-users/entities/organisation-user.entity';
 import { Patient } from '../patients/entities/patient.entity';
+import { ClinicCapabilities } from '../clinic-capabilities/entities/clinic-capabilities.entity';
 import { CreateBookingDto, UpdateBookingDto, CheckAvailabilityDto } from './dto/booking.dto';
 import { CreateEnquiryDto, UpdateEnquiryDto, ConvertEnquiryDto } from './dto/enquiry.dto';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -38,9 +39,47 @@ export class RetreatService {
         private orgUserRepo: Repository<OrganisationUser>,
         @InjectRepository(Patient)
         private patientRepo: Repository<Patient>,
+        @InjectRepository(ClinicCapabilities)
+        private capabilitiesRepo: Repository<ClinicCapabilities>,
         private dataSource: DataSource,
         private notificationsService: NotificationsService,
     ) { }
+
+    // Map a clinic_capabilities row to the set of care programs the org is allowed
+    // to admit under. This is the single source of the care_program vocabulary —
+    // it reuses the capability taxonomy rather than forking a parallel enum.
+    private enabledCarePrograms(caps: ClinicCapabilities | null): string[] {
+        if (!caps) return [];
+        const programs: string[] = [];
+        if (caps.hasPostnatalCare) programs.push('postnatal');
+        if (caps.hasAyurveda) programs.push('ayurveda');
+        if (caps.hasIpd) programs.push('ipd');
+        if (caps.hasOpd) programs.push('opd');
+        return programs;
+    }
+
+    // Resolve the care_program to persist on an admission.
+    //  - explicit value  → must be one of the org's enabled programs
+    //  - omitted + single enabled program → auto-default to it
+    //  - omitted + multiple/zero programs → null (backward-compatible; the existing
+    //    booking check-in flow does not yet pass care_program, so we never hard-fail
+    //    a stay over a missing classifier — the intake UIs we control set it).
+    private async resolveCareProgram(clinicId: string, requested?: string | null): Promise<string | null> {
+        const caps = await this.capabilitiesRepo.findOne({ where: { organisationId: clinicId } });
+        const enabled = this.enabledCarePrograms(caps);
+
+        if (requested) {
+            const value = requested.toLowerCase();
+            if (!enabled.includes(value)) {
+                throw new BadRequestException(
+                    `care_program '${requested}' is not enabled for this organisation (enabled: ${enabled.join(', ') || 'none'})`,
+                );
+            }
+            return value;
+        }
+
+        return enabled.length === 1 ? enabled[0] : null;
+    }
 
     // --- ROOMS ---
     async getRooms(clinicId: string) {
@@ -48,6 +87,73 @@ export class RetreatService {
             where: { organisationId: clinicId },
             order: { roomNumber: 'ASC' },
         });
+    }
+
+    // Rooms that are free for the given date range — reuses the unified conflict
+    // check (admissions + bookings + maintenance). Powers the date-aware room
+    // selector in the booking form, so reception only sees what they can book.
+    async getAvailableRooms(clinicId: string, checkInDate: string, checkOutDate: string) {
+        const checkIn = new Date(checkInDate);
+        const checkOut = new Date(checkOutDate);
+        if (isNaN(checkIn.getTime()) || isNaN(checkOut.getTime())) {
+            throw new BadRequestException('Valid check-in and check-out dates are required');
+        }
+        if (checkOut <= checkIn) {
+            throw new BadRequestException('Check-out date must be after check-in date');
+        }
+
+        const rooms = await this.roomRepo.find({
+            where: { organisationId: clinicId },
+            order: { roomNumber: 'ASC' },
+        });
+        const manager = this.dataSource.manager;
+        const checked = await Promise.all(
+            rooms.map(async (room) => {
+                const block = await this.isRoomBlocked(manager, room, checkIn, checkOut);
+                return block.blocked ? null : room;
+            }),
+        );
+        return checked.filter((r): r is Room => r !== null);
+    }
+
+    // Operational "Today" worklist counts for reception: arrivals, departures,
+    // outstanding holds, and leads awaiting follow-up. "Today" is the IST calendar day.
+    async getTodaySummary(clinicId: string) {
+        const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+        const istNow = new Date(Date.now() + IST_OFFSET_MS);
+        const y = istNow.getUTCFullYear();
+        const m = istNow.getUTCMonth();
+        const d = istNow.getUTCDate();
+        const startUtc = new Date(Date.UTC(y, m, d, 0, 0, 0, 0) - IST_OFFSET_MS);
+        const endUtc = new Date(Date.UTC(y, m, d, 23, 59, 59, 999) - IST_OFFSET_MS);
+
+        const [arrivals, departures, holds, followUps] = await Promise.all([
+            this.bookingRepo.count({
+                where: {
+                    organisationId: clinicId,
+                    status: In([BookingStatus.HELD, BookingStatus.CONFIRMED]),
+                    checkInDate: Between(startUtc, endUtc),
+                },
+            }),
+            this.admissionRepo.count({
+                where: {
+                    organisationId: clinicId,
+                    status: AdmissionStatus.ACTIVE,
+                    expectedCheckOutDate: Between(startUtc, endUtc),
+                },
+            }),
+            this.bookingRepo.count({
+                where: { organisationId: clinicId, status: BookingStatus.HELD },
+            }),
+            this.enquiryRepo.count({
+                where: {
+                    organisationId: clinicId,
+                    status: In([EnquiryStatus.NEW, EnquiryStatus.FOLLOW_UP]),
+                },
+            }),
+        ]);
+
+        return { arrivals, departures, holds, followUps };
     }
 
     async createRoom(clinicId: string, data: Partial<Room>) {
@@ -142,18 +248,22 @@ export class RetreatService {
 
     async checkIn(
         clinicId: string,
-        data: { patientId: string; roomId: string; packageId?: string; checkInDate?: Date; bookingId?: string }
+        data: { patientId: string; roomId: string; packageId?: string; checkInDate?: Date; bookingId?: string; careProgram?: string }
     ) {
-        const { patientId, roomId, packageId, checkInDate, bookingId } = data;
+        const { patientId: bodyPatientId, roomId, packageId, checkInDate, bookingId } = data;
+
+        // Resolve the care-program classifier up front (capability read, no occupancy
+        // impact). Postnatal intake passes 'postnatal'; single-program clinics default.
+        const careProgram = await this.resolveCareProgram(clinicId, data.careProgram);
 
         // Phase 1: checkIn from booking or walk-in. If bookingId provided, validate the
-        // booking, promote enquiry if needed, transition booking → FULFILLED, and link
-        // admission.booking_id. All inside one locked transaction.
+        // booking, transition booking → FULFILLED, and link admission.booking_id. All
+        // inside one locked transaction.
         const { savedAdmission, room } = await this.dataSource.transaction(async (manager) => {
-            // 1. Patient must belong to this organisation (cross-tenant guard)
-            await this.assertPatientInOrg(clinicId, patientId, manager);
-
+            // 1. Resolve the patient. From a booking, the patient comes from the booking
+            // (not the request body); for a walk-in it comes from the body.
             let linkedBooking: RoomBooking | null = null;
+            let patientId = bodyPatientId;
             if (bookingId) {
                 linkedBooking = await manager.findOne(RoomBooking, {
                     where: { id: bookingId, organisationId: clinicId },
@@ -163,11 +273,19 @@ export class RetreatService {
                 if (linkedBooking.status !== BookingStatus.CONFIRMED) {
                     throw new ConflictException(`Booking must be CONFIRMED to check in (current: ${linkedBooking.status})`);
                 }
-                // Reject enquiry-only bookings — must promote to patient first
-                if (!linkedBooking.patientId && linkedBooking.enquiryId) {
+                // Enquiry-only bookings must be promoted to a patient first
+                if (!linkedBooking.patientId) {
                     throw new ConflictException('Booking has no patient. Promote enquiry first.');
                 }
+                patientId = linkedBooking.patientId;
             }
+
+            if (!patientId) {
+                throw new BadRequestException('Either bookingId or patientId is required to check in');
+            }
+
+            // 2. Patient must belong to this organisation (cross-tenant guard)
+            await this.assertPatientInOrg(clinicId, patientId, manager);
 
             // 2. Lock the room row (SELECT ... FOR UPDATE) before reading occupancy
             const targetRoomId = linkedBooking?.roomId || roomId;
@@ -206,6 +324,7 @@ export class RetreatService {
                 checkInDate: start,
                 expectedCheckOutDate: expectedCheckOut,
                 status: AdmissionStatus.ACTIVE,
+                careProgram,
             });
             room.status = RoomStatus.OCCUPIED;
             await manager.save(room);
@@ -365,6 +484,7 @@ export class RetreatService {
         try {
             const query = this.bookingRepo.createQueryBuilder('booking')
                 .leftJoinAndSelect('booking.patient', 'patient')
+                .leftJoinAndSelect('booking.enquiry', 'enquiry')
                 .leftJoinAndSelect('booking.room', 'room')
                 .leftJoinAndSelect('booking.treatmentPackage', 'package')
                 .where('booking.organisationId = :organisationId', { organisationId: clinicId });
@@ -386,7 +506,10 @@ export class RetreatService {
 
             query.orderBy('booking.checkInDate', 'ASC');
 
-            return await query.getMany();
+            const bookings = await query.getMany();
+            // Attach a resolved contact (patient → else enquiry) so the UI has one field
+            // to display regardless of whether the booking has a patient yet.
+            return bookings.map((b) => Object.assign(b, { contact: this.resolveContact(b) }));
         } catch (error) {
             console.error('Error fetching bookings:', error);
             throw error; // Re-throw to let global filter handle it, but now it's logged
@@ -396,11 +519,11 @@ export class RetreatService {
     async getBookingById(clinicId: string, bookingId: string) {
         const booking = await this.bookingRepo.findOne({
             where: { id: bookingId, organisationId: clinicId },
-            relations: ['patient', 'room', 'treatmentPackage'],
+            relations: ['patient', 'enquiry', 'room', 'treatmentPackage'],
         });
 
         if (!booking) throw new NotFoundException('Booking not found');
-        return booking;
+        return Object.assign(booking, { contact: this.resolveContact(booking) });
     }
 
     async updateBooking(clinicId: string, bookingId: string, dto: UpdateBookingDto) {
@@ -485,6 +608,7 @@ export class RetreatService {
         // Initialize all rooms as available for all dates
         const start = new Date(startDate);
         const end = new Date(endDate);
+        const todayMs = new Date(new Date().toISOString().split('T')[0]).getTime();
 
         rooms.forEach(room => {
             availability[room.id] = {};
@@ -496,13 +620,24 @@ export class RetreatService {
                 // Default to available
                 availability[room.id][dateKey] = 'available';
 
-                // Check if occupied by current admission
-                const isOccupied = admissions.some(admission =>
-                    admission.roomId === room.id &&
-                    admission.status === 'ACTIVE' &&
-                    new Date(admission.checkInDate) <= d &&
-                    (!admission.actualCheckOutDate || new Date(admission.actualCheckOutDate) >= d)
-                );
+                // Occupied by an ACTIVE admission. Occupancy ends at actual checkout;
+                // else the planned checkout, but never before today (an undischarged
+                // overstay still occupies up to now) and never past today (so future
+                // months don't show stale occupancy). Conflict logic keeps actual ?? ∞.
+                const isOccupied = admissions.some(admission => {
+                    if (admission.roomId !== room.id || admission.status !== 'ACTIVE') return false;
+                    if (new Date(admission.checkInDate) > d) return false;
+                    let endMs: number;
+                    if (admission.actualCheckOutDate) {
+                        endMs = new Date(admission.actualCheckOutDate).getTime();
+                    } else {
+                        const expMs = admission.expectedCheckOutDate
+                            ? new Date(admission.expectedCheckOutDate).getTime()
+                            : todayMs;
+                        endMs = Math.max(expMs, todayMs);
+                    }
+                    return d.getTime() <= endMs;
+                });
 
                 if (isOccupied) {
                     availability[room.id][dateKey] = 'occupied';
@@ -626,7 +761,36 @@ export class RetreatService {
         }
 
         query.orderBy('enquiry.createdAt', 'DESC');
-        return query.getMany();
+        const enquiries = await query.getMany();
+
+        // Derive conversion state (never stored — see ADR D6). A lead is "converted"
+        // if it has a FULFILLED booking; it has a live reservation if HELD/CONFIRMED.
+        // A cancelled/no-show booking leaves the lead open for follow-up.
+        const ids = enquiries.map((e) => e.id);
+        const liveByEnquiry = new Set<string>();
+        const convertedByEnquiry = new Set<string>();
+        if (ids.length > 0) {
+            const bookings = await this.bookingRepo.find({
+                where: { organisationId: clinicId, enquiryId: In(ids) },
+                select: ['enquiryId', 'status'],
+            });
+            for (const b of bookings) {
+                if (!b.enquiryId) continue;
+                if (b.status === BookingStatus.HELD || b.status === BookingStatus.CONFIRMED) {
+                    liveByEnquiry.add(b.enquiryId);
+                }
+                if (b.status === BookingStatus.FULFILLED) {
+                    convertedByEnquiry.add(b.enquiryId);
+                }
+            }
+        }
+
+        return enquiries.map((e) =>
+            Object.assign(e, {
+                hasActiveBooking: liveByEnquiry.has(e.id),
+                converted: convertedByEnquiry.has(e.id),
+            }),
+        );
     }
 
     async createEnquiry(clinicId: string, dto: CreateEnquiryDto) {
