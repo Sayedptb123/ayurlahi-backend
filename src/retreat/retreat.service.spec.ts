@@ -1,4 +1,4 @@
-import { ForbiddenException } from '@nestjs/common';
+import { ForbiddenException, BadRequestException } from '@nestjs/common';
 import { RetreatService, rangesOverlap } from './retreat.service';
 import { RoomStatus } from './entities/room.entity';
 import { AdmissionStatus } from './entities/admission.entity';
@@ -75,6 +75,7 @@ describe('RetreatService Phase 0 — isRoomBlocked', () => {
             {} as any, // enquiryRepo
             {} as any, // orgUserRepo
             {} as any, // patientRepo
+            {} as any, // capabilitiesRepo
             {} as any, // dataSource
             {} as any, // notificationsService
         );
@@ -136,7 +137,7 @@ describe('RetreatService Phase 0 — assertPatientInOrg', () => {
     let service: RetreatService;
     beforeEach(() => {
         service = new RetreatService(
-            {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any,
+            {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any,
         );
     });
 
@@ -149,5 +150,49 @@ describe('RetreatService Phase 0 — assertPatientInOrg', () => {
     it('resolves when the patient belongs to the organisation', async () => {
         const mgr = fakeManager({ patient: { id: 'patient-1', organisationId: 'org-1' } });
         await expect((service as any).assertPatientInOrg('org-1', 'patient-1', mgr)).resolves.toBeUndefined();
+    });
+});
+
+// W1-A.1: care_program resolution/validation against clinic_capabilities.
+// Covers the backward-compat defaulting rules (no DB — capability repo mocked).
+describe('RetreatService W1-A.1 — resolveCareProgram', () => {
+    const caps = (flags: Partial<Record<'hasPostnatalCare' | 'hasAyurveda' | 'hasIpd' | 'hasOpd', boolean>>) => ({
+        hasPostnatalCare: false, hasAyurveda: false, hasIpd: false, hasOpd: false, ...flags,
+    });
+
+    // Build a service whose capabilitiesRepo.findOne returns the given caps row.
+    const makeService = (capsRow: any) => new RetreatService(
+        {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any,
+        { findOne: jest.fn(() => Promise.resolve(capsRow)) } as any, // capabilitiesRepo
+        {} as any, {} as any,
+    );
+
+    const resolve = (svc: RetreatService, requested?: string) =>
+        (svc as any).resolveCareProgram('org-1', requested);
+
+    it('#4 single-program clinic → auto-defaults to that program', async () => {
+        const svc = makeService(caps({ hasPostnatalCare: true }));
+        await expect(resolve(svc)).resolves.toBe('postnatal');
+    });
+
+    it('#3 mixed clinic, no value supplied → null (no hard-fail; backward compatible)', async () => {
+        const svc = makeService(caps({ hasPostnatalCare: true, hasAyurveda: true }));
+        await expect(resolve(svc)).resolves.toBeNull();
+    });
+
+    it('#3 mixed clinic, valid enabled value → accepted (normalised to lowercase)', async () => {
+        const svc = makeService(caps({ hasPostnatalCare: true, hasAyurveda: true }));
+        await expect(resolve(svc, 'POSTNATAL')).resolves.toBe('postnatal');
+    });
+
+    it('#3 value not enabled for the org → rejected', async () => {
+        const svc = makeService(caps({ hasPostnatalCare: true })); // ipd disabled
+        await expect(resolve(svc, 'ipd')).rejects.toBeInstanceOf(BadRequestException);
+    });
+
+    it('no capabilities row → any explicit value rejected, omitted → null', async () => {
+        const svc = makeService(null);
+        await expect(resolve(svc, 'postnatal')).rejects.toBeInstanceOf(BadRequestException);
+        await expect(resolve(makeService(null))).resolves.toBeNull();
     });
 });
