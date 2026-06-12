@@ -148,6 +148,12 @@ export class RetreatController {
         return this.retreatService.getAdmission(clinicId, id);
     }
 
+    @Patch('packages/:id')
+    updatePackage(@Request() req, @Param('id') id: string, @Body() body) {
+        const clinicId = req.user.organisationId;
+        return this.retreatService.updatePackage(clinicId, id, body);
+    }
+
     @Delete('packages/:id')
     deletePackage(@Request() req, @Param('id') id: string) {
         const clinicId = req.user.organisationId;

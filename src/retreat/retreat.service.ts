@@ -116,8 +116,10 @@ export class RetreatService {
         return checked.filter((r): r is Room => r !== null);
     }
 
-    // Operational "Today" worklist counts for reception: arrivals, departures,
-    // outstanding holds, and leads awaiting follow-up. "Today" is the IST calendar day.
+    // Operational "Today" worklist for reception: arrivals, departures, outstanding
+    // holds, and leads awaiting follow-up. Returns the actual items so that tile
+    // counts (.length) and detail sheets are derived from exactly the same dataset —
+    // one IST timezone calculation, one filtering implementation, zero drift.
     async getTodaySummary(clinicId: string) {
         const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
         const istNow = new Date(Date.now() + IST_OFFSET_MS);
@@ -128,28 +130,35 @@ export class RetreatService {
         const endUtc = new Date(Date.UTC(y, m, d, 23, 59, 59, 999) - IST_OFFSET_MS);
 
         const [arrivals, departures, holds, followUps] = await Promise.all([
-            this.bookingRepo.count({
+            this.bookingRepo.find({
                 where: {
                     organisationId: clinicId,
                     status: In([BookingStatus.HELD, BookingStatus.CONFIRMED]),
                     checkInDate: Between(startUtc, endUtc),
                 },
+                relations: ['patient', 'room', 'treatmentPackage'],
+                order: { checkInDate: 'ASC' },
             }),
-            this.admissionRepo.count({
+            this.admissionRepo.find({
                 where: {
                     organisationId: clinicId,
                     status: AdmissionStatus.ACTIVE,
                     expectedCheckOutDate: Between(startUtc, endUtc),
                 },
+                relations: ['patient', 'room', 'treatmentPackage'],
+                order: { expectedCheckOutDate: 'ASC' },
             }),
-            this.bookingRepo.count({
+            this.bookingRepo.find({
                 where: { organisationId: clinicId, status: BookingStatus.HELD },
+                relations: ['patient', 'room'],
+                order: { checkInDate: 'ASC' },
             }),
-            this.enquiryRepo.count({
+            this.enquiryRepo.find({
                 where: {
                     organisationId: clinicId,
                     status: In([EnquiryStatus.NEW, EnquiryStatus.FOLLOW_UP]),
                 },
+                order: { createdAt: 'ASC' },
             }),
         ]);
 
@@ -194,6 +203,13 @@ export class RetreatService {
         });
         if (!admission) throw new NotFoundException('Admission not found');
         return admission;
+    }
+
+    async updatePackage(clinicId: string, id: string, data: Partial<TreatmentPackage>) {
+        const pkg = await this.packageRepo.findOne({ where: { id, organisationId: clinicId } });
+        if (!pkg) throw new NotFoundException('Package not found');
+        Object.assign(pkg, data);
+        return this.packageRepo.save(pkg);
     }
 
     async deletePackage(clinicId: string, id: string) {
