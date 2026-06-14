@@ -1,4 +1,4 @@
-import { IsString, IsOptional, IsEnum, IsUUID, IsDateString } from 'class-validator';
+import { IsString, IsOptional, IsEnum, IsUUID, IsDateString, IsNumber, Min } from 'class-validator';
 import { EnquiryChannel, EnquiryStatus } from '../entities/booking-enquiry.entity';
 
 export class CreateEnquiryDto {
@@ -103,6 +103,15 @@ export class ConvertEnquiryDto {
 
     @IsDateString()
     checkOutDate: string;
+
+    @IsOptional()
+    @IsNumber()
+    @Min(0)
+    totalPrice?: number;
+
+    @IsOptional()
+    @IsString()
+    discountReason?: string;
 
     @IsOptional()
     @IsString()

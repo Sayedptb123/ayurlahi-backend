@@ -15,11 +15,11 @@ export class TreatmentPackage {
     @PrimaryGeneratedColumn('uuid')
     id: string;
 
-    @Column({ type: 'uuid', name: 'clinicId' })
+    @Column({ type: 'uuid', name: 'organisation_id' })
     organisationId: string;
 
     @ManyToOne(() => Organisation)
-    @JoinColumn({ name: 'clinicId' })
+    @JoinColumn({ name: 'organisation_id' })
     organisation: Organisation;
 
     @Column({ type: 'varchar', length: 255, name: 'name' })
@@ -30,9 +30,6 @@ export class TreatmentPackage {
 
     @Column({ type: 'int', default: 1, name: 'duration_days' })
     durationDays: number;
-
-    @Column({ type: 'decimal', precision: 10, scale: 2, default: 0, name: 'price' })
-    price: number;
 
     @Column({ type: 'jsonb', nullable: true, name: 'inclusions' })
     inclusions: string[] | null;

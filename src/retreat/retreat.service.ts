@@ -2,6 +2,9 @@ import { Injectable, NotFoundException, BadRequestException, ConflictException, 
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, Between, In, Not, DataSource, EntityManager } from 'typeorm';
 import { Room, RoomStatus } from './entities/room.entity';
+import { RoomCategory } from './entities/room-category.entity';
+import { RoomCategoryPricing } from './entities/room-category-pricing.entity';
+import { RoomPricingOverride } from './entities/room-pricing-override.entity';
 import { TreatmentPackage } from './entities/treatment-package.entity';
 import { Admission, AdmissionStatus } from './entities/admission.entity';
 import { RoomBooking, BookingStatus } from './entities/room-booking.entity';
@@ -41,6 +44,12 @@ export class RetreatService {
         private patientRepo: Repository<Patient>,
         @InjectRepository(ClinicCapabilities)
         private capabilitiesRepo: Repository<ClinicCapabilities>,
+        @InjectRepository(RoomCategory)
+        private categoryRepo: Repository<RoomCategory>,
+        @InjectRepository(RoomCategoryPricing)
+        private categoryPricingRepo: Repository<RoomCategoryPricing>,
+        @InjectRepository(RoomPricingOverride)
+        private roomPricingOverrideRepo: Repository<RoomPricingOverride>,
         private dataSource: DataSource,
         private notificationsService: NotificationsService,
     ) { }
@@ -82,11 +91,143 @@ export class RetreatService {
     }
 
     // --- ROOMS ---
-    async getRooms(clinicId: string) {
-        return this.roomRepo.find({
+    async getRoomCategories(clinicId: string) {
+        return this.categoryRepo.find({
             where: { organisationId: clinicId },
+            order: { name: 'ASC' },
+        });
+    }
+
+    async createRoomCategory(clinicId: string, data: { name: string }) {
+        const existing = await this.categoryRepo.findOne({
+            where: { organisationId: clinicId, name: data.name },
+            withDeleted: true,
+        });
+        if (existing && !existing.deletedAt) {
+            throw new ConflictException(`Room category "${data.name}" already exists`);
+        }
+        const category = this.categoryRepo.create({ name: data.name, organisationId: clinicId });
+        return this.categoryRepo.save(category);
+    }
+
+    async updateRoomCategory(clinicId: string, id: string, data: { name?: string; isActive?: boolean }) {
+        const category = await this.categoryRepo.findOne({ where: { id, organisationId: clinicId } });
+        if (!category) throw new NotFoundException('Room category not found');
+        if (data.name !== undefined) category.name = data.name;
+        if (data.isActive !== undefined) category.isActive = data.isActive;
+        return this.categoryRepo.save(category);
+    }
+
+    async deleteRoomCategory(clinicId: string, id: string) {
+        const category = await this.categoryRepo.findOne({ where: { id, organisationId: clinicId } });
+        if (!category) throw new NotFoundException('Room category not found');
+        await this.categoryRepo.softDelete(id);
+    }
+
+    // --- Pricing Matrix (category × package → price) ---
+
+    async getPricingMatrix(clinicId: string) {
+        return this.categoryPricingRepo.find({
+            where: { organisationId: clinicId },
+            relations: ['roomCategory', 'package'],
+            order: { roomCategory: { name: 'ASC' } },
+        });
+    }
+
+    async setPricingMatrix(clinicId: string, data: { roomCategoryId: string; packageId: string; price: number }) {
+        const category = await this.categoryRepo.findOne({ where: { id: data.roomCategoryId, organisationId: clinicId } });
+        if (!category) throw new NotFoundException('Room category not found');
+        if (!category.isActive) throw new BadRequestException('Cannot set pricing for an inactive room category');
+
+        const existing = await this.categoryPricingRepo.findOne({
+            where: { roomCategoryId: data.roomCategoryId, packageId: data.packageId },
+            withDeleted: true,
+        });
+
+        if (existing) {
+            existing.price = data.price;
+            existing.deletedAt = null;
+            return this.categoryPricingRepo.save(existing);
+        }
+
+        const entry = this.categoryPricingRepo.create({ ...data, organisationId: clinicId });
+        return this.categoryPricingRepo.save(entry);
+    }
+
+    async deletePricingMatrixEntry(clinicId: string, id: string) {
+        const entry = await this.categoryPricingRepo.findOne({ where: { id, organisationId: clinicId } });
+        if (!entry) throw new NotFoundException('Pricing entry not found');
+        await this.categoryPricingRepo.softDelete(id);
+    }
+
+    // --- Room-Level Price Overrides ---
+
+    async getRoomPricingOverrides(clinicId: string) {
+        return this.roomPricingOverrideRepo.find({
+            where: { organisationId: clinicId },
+            relations: ['room', 'package'],
+            order: { room: { roomNumber: 'ASC' } },
+        });
+    }
+
+    async setRoomPricingOverride(clinicId: string, data: { roomId: string; packageId: string; price: number }) {
+        const room = await this.roomRepo.findOne({ where: { id: data.roomId, organisationId: clinicId } });
+        if (!room) throw new NotFoundException('Room not found');
+
+        const existing = await this.roomPricingOverrideRepo.findOne({
+            where: { roomId: data.roomId, packageId: data.packageId },
+            withDeleted: true,
+        });
+
+        if (existing) {
+            existing.price = data.price;
+            existing.deletedAt = null;
+            return this.roomPricingOverrideRepo.save(existing);
+        }
+
+        const override = this.roomPricingOverrideRepo.create({ ...data, organisationId: clinicId });
+        return this.roomPricingOverrideRepo.save(override);
+    }
+
+    async deleteRoomPricingOverride(clinicId: string, id: string) {
+        const override = await this.roomPricingOverrideRepo.findOne({ where: { id, organisationId: clinicId } });
+        if (!override) throw new NotFoundException('Room pricing override not found');
+        await this.roomPricingOverrideRepo.softDelete(id);
+    }
+
+    // --- Pricing Resolution (ADR-002 D2) ---
+
+    async resolvePrice(clinicId: string, roomId: string, packageId: string): Promise<{
+        price: number | null;
+        source: 'room_override' | 'category_matrix' | 'manual';
+    }> {
+        const override = await this.roomPricingOverrideRepo.findOne({
+            where: { roomId, packageId, organisationId: clinicId },
+        });
+        if (override) return { price: parseFloat(override.price as any), source: 'room_override' };
+
+        const room = await this.roomRepo.findOne({ where: { id: roomId, organisationId: clinicId } });
+        if (room?.roomCategoryId) {
+            const matrix = await this.categoryPricingRepo.findOne({
+                where: { roomCategoryId: room.roomCategoryId, packageId },
+            });
+            if (matrix) return { price: parseFloat(matrix.price as any), source: 'category_matrix' };
+        }
+
+        return { price: null, source: 'manual' };
+    }
+
+    async getRooms(clinicId: string) {
+        const rooms = await this.roomRepo.find({
+            where: { organisationId: clinicId },
+            relations: ['roomCategory'],
             order: { roomNumber: 'ASC' },
         });
+        return rooms.map((r) => ({
+            ...r,
+            roomCategoryId: r.roomCategoryId ?? null,
+            roomCategory: r.roomCategory?.name ?? null,
+        }));
     }
 
     // Rooms that are free for the given date range — reuses the unified conflict
@@ -104,6 +245,7 @@ export class RetreatService {
 
         const rooms = await this.roomRepo.find({
             where: { organisationId: clinicId },
+            relations: ['roomCategory'],
             order: { roomNumber: 'ASC' },
         });
         const manager = this.dataSource.manager;
@@ -113,7 +255,9 @@ export class RetreatService {
                 return block.blocked ? null : room;
             }),
         );
-        return checked.filter((r): r is Room => r !== null);
+        return checked
+            .filter((r): r is Room => r !== null)
+            .map((r) => ({ ...r, roomCategory: r.roomCategory?.name ?? null }));
     }
 
     // Operational "Today" worklist for reception: arrivals, departures, outstanding
@@ -165,16 +309,44 @@ export class RetreatService {
         return { arrivals, departures, holds, followUps };
     }
 
-    async createRoom(clinicId: string, data: Partial<Room>) {
-        const room = this.roomRepo.create({ ...data, organisationId: clinicId });
-        return this.roomRepo.save(room);
+    async createRoom(clinicId: string, data: { roomNumber: string; floor?: string; roomCategoryId?: string; capacity?: number; amenities?: string[]; description?: string }) {
+        if (data.roomCategoryId) {
+            const cat = await this.categoryRepo.findOne({ where: { id: data.roomCategoryId, organisationId: clinicId } });
+            if (!cat) throw new NotFoundException('Room category not found');
+        }
+        const room = this.roomRepo.create({
+            roomNumber: data.roomNumber,
+            floor: data.floor ?? null,
+            description: data.description ?? null,
+            roomCategoryId: data.roomCategoryId ?? null,
+            capacity: data.capacity ?? null,
+            amenities: data.amenities ?? null,
+            organisationId: clinicId,
+        });
+        const saved = await this.roomRepo.save(room);
+        const cat = saved.roomCategoryId ? await this.categoryRepo.findOne({ where: { id: saved.roomCategoryId } }) : null;
+        return { ...saved, roomCategory: cat?.name ?? null };
     }
 
-    async updateRoomStatus(clinicId: string, id: string, status: string) {
+    async updateRoom(clinicId: string, id: string, data: { roomNumber?: string; floor?: string; roomCategoryId?: string; capacity?: number; amenities?: string[]; description?: string; status?: string }) {
         const room = await this.roomRepo.findOne({ where: { id, organisationId: clinicId } });
         if (!room) throw new NotFoundException('Room not found');
-        room.status = status as RoomStatus;
-        return this.roomRepo.save(room);
+        if (data.roomCategoryId !== undefined) {
+            if (data.roomCategoryId) {
+                const cat = await this.categoryRepo.findOne({ where: { id: data.roomCategoryId, organisationId: clinicId } });
+                if (!cat) throw new NotFoundException('Room category not found');
+            }
+            room.roomCategoryId = data.roomCategoryId || null;
+        }
+        if (data.roomNumber !== undefined) room.roomNumber = data.roomNumber;
+        if (data.floor !== undefined) room.floor = data.floor || null;
+        if (data.description !== undefined) room.description = data.description || null;
+        if (data.capacity !== undefined) room.capacity = data.capacity ?? null;
+        if (data.amenities !== undefined) room.amenities = data.amenities ?? null;
+        if (data.status !== undefined) room.status = data.status as RoomStatus;
+        const saved = await this.roomRepo.save(room);
+        const cat = saved.roomCategoryId ? await this.categoryRepo.findOne({ where: { id: saved.roomCategoryId } }) : null;
+        return { ...saved, roomCategory: cat?.name ?? null };
     }
 
     async deleteRoom(clinicId: string, id: string) {
@@ -187,7 +359,7 @@ export class RetreatService {
     async getPackages(clinicId: string) {
         return this.packageRepo.find({
             where: { organisationId: clinicId },
-            order: { price: 'ASC' },
+            order: { durationDays: 'ASC' },
         });
     }
 
@@ -418,7 +590,7 @@ export class RetreatService {
 
     // --- BOOKINGS ---
     async createBooking(clinicId: string, dto: CreateBookingDto) {
-        const { patientId, enquiryId, roomId, packageId, checkInDate, checkOutDate, advancePaid, notes } = dto;
+        const { patientId, enquiryId, roomId, packageId, checkInDate, checkOutDate, advancePaid, notes, discountReason } = dto;
 
         // Validate identity: at least one of patientId or enquiryId must be present
         if (!patientId && !enquiryId) {
@@ -463,15 +635,13 @@ export class RetreatService {
             const block = await this.isRoomBlocked(manager, room, checkIn, checkOut);
             if (block.blocked) throw new ConflictException(this.blockMessage(block.reason));
 
-            // Calculate total price (decimal columns come back as strings → parseFloat)
-            const days = Math.ceil((checkOut.getTime() - checkIn.getTime()) / (1000 * 60 * 60 * 24));
-            let totalPrice = parseFloat(String(room.pricePerDay)) * days;
-            if (packageId) {
-                const pkg = await manager.findOne(TreatmentPackage, { where: { id: packageId } });
-                if (pkg) {
-                    totalPrice = parseFloat(String(pkg.price));
-                }
-            }
+            // Resolve suggested price from pricing matrix (ADR-002 D2)
+            const resolved = await this.resolvePrice(clinicId, roomId, packageId || '');
+            const suggestedPrice = resolved.price;
+            // Explicit totalPrice from DTO wins; fall back to matrix suggestion; fall back to 0
+            const totalPrice = dto.totalPrice != null
+                ? dto.totalPrice
+                : (suggestedPrice ?? 0);
 
             const booking = manager.create(RoomBooking, {
                 organisationId: clinicId,
@@ -481,7 +651,9 @@ export class RetreatService {
                 packageId: packageId || null,
                 checkInDate: checkIn,
                 checkOutDate: checkOut,
+                suggestedPrice,
                 totalPrice,
+                discountReason: discountReason || null,
                 advancePaid: advancePaid || 0,
                 status: BookingStatus.HELD,
                 notes: notes || null,
@@ -572,7 +744,9 @@ export class RetreatService {
             if (dto.roomId) booking.roomId = dto.roomId;
             if (dto.packageId !== undefined) booking.packageId = dto.packageId;
             if (dto.status) booking.status = dto.status;
+            if (dto.totalPrice !== undefined) booking.totalPrice = dto.totalPrice;
             if (dto.advancePaid !== undefined) booking.advancePaid = Number(dto.advancePaid);
+            if (dto.discountReason !== undefined) booking.discountReason = dto.discountReason;
             if (dto.notes !== undefined) booking.notes = dto.notes;
 
             return manager.save(booking);
@@ -882,12 +1056,9 @@ export class RetreatService {
             const block = await this.isRoomBlocked(manager, room, checkIn, checkOut);
             if (block.blocked) throw new ConflictException(this.blockMessage(block.reason));
 
-            const days = Math.ceil((checkOut.getTime() - checkIn.getTime()) / (1000 * 60 * 60 * 24));
-            let totalPrice = parseFloat(String(room.pricePerDay)) * days;
-            if (dto.packageId) {
-                const pkg = await manager.findOne(TreatmentPackage, { where: { id: dto.packageId } });
-                if (pkg) totalPrice = parseFloat(String(pkg.price));
-            }
+            const resolved = await this.resolvePrice(clinicId, dto.roomId, dto.packageId || '');
+            const suggestedPrice = resolved.price;
+            const totalPrice = dto.totalPrice != null ? dto.totalPrice : (suggestedPrice ?? 0);
 
             const booking = manager.create(RoomBooking, {
                 organisationId: clinicId,
@@ -897,7 +1068,9 @@ export class RetreatService {
                 packageId: dto.packageId || null,
                 checkInDate: checkIn,
                 checkOutDate: checkOut,
+                suggestedPrice,
                 totalPrice,
+                discountReason: dto.discountReason || null,
                 advancePaid: 0,
                 status: BookingStatus.HELD,
                 notes: dto.notes || null,

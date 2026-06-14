@@ -24,6 +24,66 @@ import { EnquiryStatus } from './entities/booking-enquiry.entity';
 export class RetreatController {
     constructor(private readonly retreatService: RetreatService) { }
 
+    @Get('room-categories')
+    getRoomCategories(@Request() req) {
+        return this.retreatService.getRoomCategories(req.user.organisationId);
+    }
+
+    @Post('room-categories')
+    createRoomCategory(@Request() req, @Body() body: { name: string }) {
+        return this.retreatService.createRoomCategory(req.user.organisationId, body);
+    }
+
+    @Patch('room-categories/:id')
+    updateRoomCategory(@Request() req, @Param('id') id: string, @Body() body: { name?: string; isActive?: boolean }) {
+        return this.retreatService.updateRoomCategory(req.user.organisationId, id, body);
+    }
+
+    @Delete('room-categories/:id')
+    deleteRoomCategory(@Request() req, @Param('id') id: string) {
+        return this.retreatService.deleteRoomCategory(req.user.organisationId, id);
+    }
+
+    // Must be declared before rooms/:id to avoid 'available' being matched as :id
+    @Get('rooms/resolve-price')
+    resolvePrice(
+        @Request() req,
+        @Query('roomId') roomId: string,
+        @Query('packageId') packageId: string,
+    ) {
+        return this.retreatService.resolvePrice(req.user.organisationId, roomId, packageId);
+    }
+
+    @Get('pricing-matrix')
+    getPricingMatrix(@Request() req) {
+        return this.retreatService.getPricingMatrix(req.user.organisationId);
+    }
+
+    @Post('pricing-matrix')
+    setPricingMatrix(@Request() req, @Body() body: { roomCategoryId: string; packageId: string; price: number }) {
+        return this.retreatService.setPricingMatrix(req.user.organisationId, body);
+    }
+
+    @Delete('pricing-matrix/:id')
+    deletePricingMatrixEntry(@Request() req, @Param('id') id: string) {
+        return this.retreatService.deletePricingMatrixEntry(req.user.organisationId, id);
+    }
+
+    @Get('room-pricing-overrides')
+    getRoomPricingOverrides(@Request() req) {
+        return this.retreatService.getRoomPricingOverrides(req.user.organisationId);
+    }
+
+    @Post('room-pricing-overrides')
+    setRoomPricingOverride(@Request() req, @Body() body: { roomId: string; packageId: string; price: number }) {
+        return this.retreatService.setRoomPricingOverride(req.user.organisationId, body);
+    }
+
+    @Delete('room-pricing-overrides/:id')
+    deleteRoomPricingOverride(@Request() req, @Param('id') id: string) {
+        return this.retreatService.deleteRoomPricingOverride(req.user.organisationId, id);
+    }
+
     @Get('rooms')
     getRooms(@Request() req) {
         const clinicId = req.user.organisationId;
@@ -53,9 +113,9 @@ export class RetreatController {
     }
 
     @Patch('rooms/:id')
-    updateRoomStatus(@Request() req, @Param('id') id: string, @Body() body: { status: string }) {
+    updateRoom(@Request() req, @Param('id') id: string, @Body() body: { roomNumber?: string; floor?: string; roomCategoryId?: string; capacity?: number; amenities?: string[]; description?: string; status?: string }) {
         const clinicId = req.user.organisationId;
-        return this.retreatService.updateRoomStatus(clinicId, id, body.status);
+        return this.retreatService.updateRoom(clinicId, id, body);
     }
 
     @Delete('rooms/:id')

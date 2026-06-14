@@ -3,19 +3,13 @@ import {
     PrimaryGeneratedColumn,
     Column,
     CreateDateColumn,
-  DeleteDateColumn,
+    DeleteDateColumn,
     UpdateDateColumn,
     ManyToOne,
     JoinColumn,
 } from 'typeorm';
 import { Organisation } from '../../organisations/entities/organisation.entity';
-
-export enum RoomType {
-    SUITE = 'SUITE',
-    DELUXE = 'DELUXE',
-    PRIVATE = 'PRIVATE',
-    WARD = 'WARD',
-}
+import { RoomCategory } from './room-category.entity';
 
 export enum RoomStatus {
     AVAILABLE = 'AVAILABLE',
@@ -42,13 +36,12 @@ export class Room {
     @Column({ type: 'varchar', length: 50, nullable: true, name: 'floor' })
     floor: string | null;
 
-    @Column({
-        type: 'enum',
-        enum: RoomType,
-        default: RoomType.PRIVATE,
-        name: 'type',
-    })
-    type: RoomType;
+    @Column({ type: 'uuid', nullable: true, name: 'room_category_id' })
+    roomCategoryId: string | null;
+
+    @ManyToOne(() => RoomCategory, { nullable: true })
+    @JoinColumn({ name: 'room_category_id' })
+    roomCategory: RoomCategory | null;
 
     @Column({
         type: 'enum',
@@ -58,8 +51,8 @@ export class Room {
     })
     status: RoomStatus;
 
-    @Column({ type: 'decimal', precision: 10, scale: 2, default: 0, name: 'price_per_day' })
-    pricePerDay: number;
+    @Column({ type: 'integer', nullable: true, name: 'capacity' })
+    capacity: number | null;
 
     @Column({ type: 'jsonb', nullable: true, name: 'amenities' })
     amenities: string[] | null;

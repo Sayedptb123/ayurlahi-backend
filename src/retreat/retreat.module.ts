@@ -3,6 +3,9 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { RetreatService } from './retreat.service';
 import { RetreatController } from './retreat.controller';
 import { Room } from './entities/room.entity';
+import { RoomCategory } from './entities/room-category.entity';
+import { RoomCategoryPricing } from './entities/room-category-pricing.entity';
+import { RoomPricingOverride } from './entities/room-pricing-override.entity';
 import { TreatmentPackage } from './entities/treatment-package.entity';
 import { Admission } from './entities/admission.entity';
 import { RoomBooking } from './entities/room-booking.entity';
@@ -15,7 +18,7 @@ import { ModuleGuard } from '../auth/guards/module.guard';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Room, TreatmentPackage, Admission, RoomBooking, BookingEnquiry, OrganisationUser, Patient, ClinicCapabilities]),
+    TypeOrmModule.forFeature([Room, RoomCategory, RoomCategoryPricing, RoomPricingOverride, TreatmentPackage, Admission, RoomBooking, BookingEnquiry, OrganisationUser, Patient, ClinicCapabilities]),
     NotificationsModule,
   ],
   controllers: [RetreatController],

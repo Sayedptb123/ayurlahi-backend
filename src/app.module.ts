@@ -93,6 +93,9 @@ import { SalaryStructure } from './payroll/entities/salary-structure.entity';
 import { CustomNamingStrategy } from './common/naming-strategy';
 import { RetreatModule } from './retreat/retreat.module';
 import { Room } from './retreat/entities/room.entity';
+import { RoomCategory } from './retreat/entities/room-category.entity';
+import { RoomCategoryPricing } from './retreat/entities/room-category-pricing.entity';
+import { RoomPricingOverride } from './retreat/entities/room-pricing-override.entity';
 import { TreatmentPackage } from './retreat/entities/treatment-package.entity';
 import { Admission } from './retreat/entities/admission.entity';
 import { RoomBooking } from './retreat/entities/room-booking.entity';
@@ -203,6 +206,9 @@ import { BillPayment } from './bills/entities/bill-payment.entity';
           BatchStage,
           WastageLog,
           Room,
+          RoomCategory,
+          RoomCategoryPricing,
+          RoomPricingOverride,
           TreatmentPackage,
           Admission,
           RoomBooking,

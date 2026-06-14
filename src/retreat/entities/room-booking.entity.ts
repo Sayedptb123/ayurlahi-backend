@@ -68,8 +68,14 @@ export class RoomBooking {
     @Column({ type: 'date', name: 'check_out_date' })
     checkOutDate: Date;
 
+    @Column({ type: 'decimal', precision: 10, scale: 2, nullable: true, name: 'suggested_price' })
+    suggestedPrice: number | null;
+
     @Column({ type: 'decimal', precision: 10, scale: 2, name: 'total_price' })
     totalPrice: number;
+
+    @Column({ type: 'text', nullable: true, name: 'discount_reason' })
+    discountReason: string | null;
 
     @Column({ type: 'decimal', precision: 10, scale: 2, default: 0, name: 'advance_paid' })
     advancePaid: number;

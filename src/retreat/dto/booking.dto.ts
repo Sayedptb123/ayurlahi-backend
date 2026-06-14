@@ -26,7 +26,16 @@ export class CreateBookingDto {
     @IsOptional()
     @IsNumber()
     @Min(0)
+    totalPrice?: number;
+
+    @IsOptional()
+    @IsNumber()
+    @Min(0)
     advancePaid?: number;
+
+    @IsOptional()
+    @IsString()
+    discountReason?: string;
 
     @IsOptional()
     @IsString()
@@ -57,7 +66,16 @@ export class UpdateBookingDto {
     @IsOptional()
     @IsNumber()
     @Min(0)
+    totalPrice?: number;
+
+    @IsOptional()
+    @IsNumber()
+    @Min(0)
     advancePaid?: number;
+
+    @IsOptional()
+    @IsString()
+    discountReason?: string;
 
     @IsOptional()
     @IsString()
