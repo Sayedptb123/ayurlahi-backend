@@ -58,6 +58,9 @@ export class BookingEnquiry {
     @Column({ type: 'date', nullable: true, name: 'preferred_check_out' })
     preferredCheckOut: Date | null;
 
+    @Column({ type: 'date', nullable: true, name: 'expected_delivery_date' })
+    expectedDeliveryDate: Date | null;
+
     @Column({
         type: 'enum',
         enum: EnquiryStatus,

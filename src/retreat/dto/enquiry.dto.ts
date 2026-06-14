@@ -34,6 +34,10 @@ export class CreateEnquiryDto {
     @IsOptional()
     @IsDateString()
     followUpAt?: string;
+
+    @IsOptional()
+    @IsDateString()
+    expectedDeliveryDate?: string;
 }
 
 export class UpdateEnquiryDto {
@@ -80,6 +84,10 @@ export class UpdateEnquiryDto {
     @IsOptional()
     @IsString()
     lostReason?: string;
+
+    @IsOptional()
+    @IsDateString()
+    expectedDeliveryDate?: string;
 }
 
 export class ConvertEnquiryDto {

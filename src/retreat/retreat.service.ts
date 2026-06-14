@@ -821,6 +821,7 @@ export class RetreatService {
             notes: dto.notes || null,
             assignedTo: dto.assignedTo || null,
             followUpAt: dto.followUpAt ? new Date(dto.followUpAt) : null,
+            expectedDeliveryDate: dto.expectedDeliveryDate ? new Date(dto.expectedDeliveryDate) : null,
             status: EnquiryStatus.NEW,
         });
         return this.enquiryRepo.save(enquiry);
@@ -843,6 +844,7 @@ export class RetreatService {
         if (dto.assignedTo !== undefined) enquiry.assignedTo = dto.assignedTo || null;
         if (dto.followUpAt !== undefined) enquiry.followUpAt = dto.followUpAt ? new Date(dto.followUpAt) : null;
         if (dto.lostReason !== undefined) enquiry.lostReason = dto.lostReason || null;
+        if (dto.expectedDeliveryDate !== undefined) enquiry.expectedDeliveryDate = dto.expectedDeliveryDate ? new Date(dto.expectedDeliveryDate) : null;
 
         return this.enquiryRepo.save(enquiry);
     }
