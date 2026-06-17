@@ -88,6 +88,9 @@ export class RoomBooking {
     })
     status: BookingStatus;
 
+    @Column({ type: 'boolean', default: false, name: 'ac_required' })
+    acRequired: boolean;
+
     @Column({ type: 'text', nullable: true, name: 'notes' })
     notes: string | null;
 

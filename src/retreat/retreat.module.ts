@@ -13,12 +13,16 @@ import { BookingEnquiry } from './entities/booking-enquiry.entity';
 import { OrganisationUser } from '../organisation-users/entities/organisation-user.entity';
 import { Patient } from '../patients/entities/patient.entity';
 import { ClinicCapabilities } from '../clinic-capabilities/entities/clinic-capabilities.entity';
+import { PatientBill } from '../patient-billing/entities/patient-bill.entity';
+import { BillItem } from '../patient-billing/entities/bill-item.entity';
+import { PatientBillPayment } from '../patient-billing/entities/patient-bill-payment.entity';
+import { BookingFieldDefinition } from './entities/booking-field-definition.entity';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { ModuleGuard } from '../auth/guards/module.guard';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Room, RoomCategory, RoomCategoryPricing, RoomPricingOverride, TreatmentPackage, Admission, RoomBooking, BookingEnquiry, OrganisationUser, Patient, ClinicCapabilities]),
+    TypeOrmModule.forFeature([Room, RoomCategory, RoomCategoryPricing, RoomPricingOverride, TreatmentPackage, Admission, RoomBooking, BookingEnquiry, OrganisationUser, Patient, ClinicCapabilities, PatientBill, BillItem, PatientBillPayment, BookingFieldDefinition]),
     NotificationsModule,
   ],
   controllers: [RetreatController],

@@ -1,4 +1,5 @@
 import { Injectable, NotFoundException, BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
+import * as XLSX from 'xlsx';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, Between, In, Not, DataSource, EntityManager } from 'typeorm';
 import { Room, RoomStatus } from './entities/room.entity';
@@ -12,8 +13,13 @@ import { BookingEnquiry, EnquiryStatus } from './entities/booking-enquiry.entity
 import { OrganisationUser } from '../organisation-users/entities/organisation-user.entity';
 import { Patient } from '../patients/entities/patient.entity';
 import { ClinicCapabilities } from '../clinic-capabilities/entities/clinic-capabilities.entity';
+import { PatientBill, BillStatus, PaymentMethod } from '../patient-billing/entities/patient-bill.entity';
+import { BillItem, BillItemType } from '../patient-billing/entities/bill-item.entity';
+import { PatientBillPayment } from '../patient-billing/entities/patient-bill-payment.entity';
 import { CreateBookingDto, UpdateBookingDto, CheckAvailabilityDto } from './dto/booking.dto';
 import { CreateEnquiryDto, UpdateEnquiryDto, ConvertEnquiryDto } from './dto/enquiry.dto';
+import { BookingFieldDefinition } from './entities/booking-field-definition.entity';
+import { CreateFieldDefinitionDto, UpdateFieldDefinitionDto } from './dto/field-definition.dto';
 import { NotificationsService } from '../notifications/notifications.service';
 
 // Phase 0: half-open interval overlap. Two ranges [aStart,aEnd) and [bStart,bEnd)
@@ -50,6 +56,14 @@ export class RetreatService {
         private categoryPricingRepo: Repository<RoomCategoryPricing>,
         @InjectRepository(RoomPricingOverride)
         private roomPricingOverrideRepo: Repository<RoomPricingOverride>,
+        @InjectRepository(PatientBill)
+        private billRepo: Repository<PatientBill>,
+        @InjectRepository(BillItem)
+        private billItemRepo: Repository<BillItem>,
+        @InjectRepository(PatientBillPayment)
+        private billPaymentRepo: Repository<PatientBillPayment>,
+        @InjectRepository(BookingFieldDefinition)
+        private fieldDefinitionRepo: Repository<BookingFieldDefinition>,
         private dataSource: DataSource,
         private notificationsService: NotificationsService,
     ) { }
@@ -134,7 +148,7 @@ export class RetreatService {
         });
     }
 
-    async setPricingMatrix(clinicId: string, data: { roomCategoryId: string; packageId: string; price: number }) {
+    async setPricingMatrix(clinicId: string, data: { roomCategoryId: string; packageId: string; basePrice: number; acSupplementPerDay?: number | null }) {
         const category = await this.categoryRepo.findOne({ where: { id: data.roomCategoryId, organisationId: clinicId } });
         if (!category) throw new NotFoundException('Room category not found');
         if (!category.isActive) throw new BadRequestException('Cannot set pricing for an inactive room category');
@@ -145,12 +159,19 @@ export class RetreatService {
         });
 
         if (existing) {
-            existing.price = data.price;
+            existing.basePrice = data.basePrice;
+            existing.acSupplementPerDay = data.acSupplementPerDay ?? null;
             existing.deletedAt = null;
             return this.categoryPricingRepo.save(existing);
         }
 
-        const entry = this.categoryPricingRepo.create({ ...data, organisationId: clinicId });
+        const entry = this.categoryPricingRepo.create({
+            roomCategoryId: data.roomCategoryId,
+            packageId: data.packageId,
+            basePrice: data.basePrice,
+            acSupplementPerDay: data.acSupplementPerDay ?? null,
+            organisationId: clinicId,
+        });
         return this.categoryPricingRepo.save(entry);
     }
 
@@ -197,24 +218,51 @@ export class RetreatService {
 
     // --- Pricing Resolution (ADR-002 D2) ---
 
-    async resolvePrice(clinicId: string, roomId: string, packageId: string): Promise<{
+    async resolvePrice(
+        clinicId: string,
+        roomId: string,
+        packageId: string | null | undefined,
+        acRequired: boolean = false,
+    ): Promise<{
         price: number | null;
+        basePrice: number | null;
+        acSupplement: number | null;
+        acSupplementPerDay: number | null;
         source: 'room_override' | 'category_matrix' | 'manual';
     }> {
+        const none = { price: null, basePrice: null, acSupplement: null, acSupplementPerDay: null, source: 'manual' as const };
+        if (!packageId) return none;
+
         const override = await this.roomPricingOverrideRepo.findOne({
             where: { roomId, packageId, organisationId: clinicId },
         });
-        if (override) return { price: parseFloat(override.price as any), source: 'room_override' };
+        if (override) {
+            const price = parseFloat(override.price as any);
+            // Room overrides set a specific price; AC supplement is not applied on top — receptionist adjusts manually.
+            return { price, basePrice: price, acSupplement: null, acSupplementPerDay: null, source: 'room_override' };
+        }
 
         const room = await this.roomRepo.findOne({ where: { id: roomId, organisationId: clinicId } });
         if (room?.roomCategoryId) {
             const matrix = await this.categoryPricingRepo.findOne({
                 where: { roomCategoryId: room.roomCategoryId, packageId },
+                relations: ['package'],
             });
-            if (matrix) return { price: parseFloat(matrix.price as any), source: 'category_matrix' };
+            if (matrix) {
+                const basePrice = parseFloat(matrix.basePrice as any);
+                const supplementPerDay = matrix.acSupplementPerDay
+                    ? parseFloat(matrix.acSupplementPerDay as any)
+                    : null;
+                const durationDays = matrix.package?.durationDays ?? 0;
+                const acSupplement = (acRequired && supplementPerDay && durationDays)
+                    ? supplementPerDay * durationDays
+                    : null;
+                const price = basePrice + (acSupplement ?? 0);
+                return { price, basePrice, acSupplement, acSupplementPerDay: supplementPerDay, source: 'category_matrix' };
+            }
         }
 
-        return { price: null, source: 'manual' };
+        return none;
     }
 
     async getRooms(clinicId: string) {
@@ -436,7 +484,7 @@ export class RetreatService {
 
     async checkIn(
         clinicId: string,
-        data: { patientId: string; roomId: string; packageId?: string; checkInDate?: Date; bookingId?: string; careProgram?: string }
+        data: { patientId: string; roomId: string; packageId?: string; checkInDate?: Date; bookingId?: string; careProgram?: string; actualDeliveryDate?: string }
     ) {
         const { patientId: bodyPatientId, roomId, packageId, checkInDate, bookingId } = data;
 
@@ -489,8 +537,10 @@ export class RetreatService {
             // 3. Compute the stay window (expected checkout from package, else minimal 24h)
             const start = checkInDate ? new Date(checkInDate) : new Date();
             let expectedCheckOut: Date | null = null;
-            if (packageId) {
-                const pkg = await manager.findOne(TreatmentPackage, { where: { id: packageId } });
+            const effectivePkgId = packageId || linkedBooking?.packageId || null;
+            let pkg: TreatmentPackage | null = null;
+            if (effectivePkgId) {
+                pkg = await manager.findOne(TreatmentPackage, { where: { id: effectivePkgId } });
                 if (pkg) {
                     expectedCheckOut = new Date(start);
                     expectedCheckOut.setDate(expectedCheckOut.getDate() + pkg.durationDays);
@@ -507,12 +557,13 @@ export class RetreatService {
                 organisationId: clinicId,
                 patientId,
                 roomId: targetRoomId,
-                packageId: packageId || linkedBooking?.packageId || null,
+                packageId: effectivePkgId,
                 bookingId: linkedBooking?.id || null,
                 checkInDate: start,
                 expectedCheckOutDate: expectedCheckOut,
                 status: AdmissionStatus.ACTIVE,
                 careProgram,
+                actualDeliveryDate: data.actualDeliveryDate || null,
             });
             room.status = RoomStatus.OCCUPIED;
             await manager.save(room);
@@ -524,6 +575,96 @@ export class RetreatService {
             }
 
             const savedAdmission = await manager.save(admission);
+
+            // 6. Auto-create a stay bill linked to this admission (ADR-003 Phase 2).
+            //    Resolve pricing for line-item breakdown. resolvePrice() is read-only so
+            //    calling it here (without the transaction manager) is safe.
+            const acReq = linkedBooking?.acRequired ?? false;
+            const priceInfo = effectivePkgId
+                ? await this.resolvePrice(clinicId, targetRoomId, effectivePkgId, acReq)
+                : { price: null, basePrice: null, acSupplement: null, acSupplementPerDay: null, source: 'manual' as const };
+
+            const bookingTotal = linkedBooking ? parseFloat(String(linkedBooking.totalPrice ?? 0)) : 0;
+            const advancePaid  = linkedBooking ? parseFloat(String(linkedBooking.advancePaid  ?? 0)) : 0;
+
+            // Build accommodation line items
+            type LineItem = { name: string; unitPrice: number };
+            const lineItems: LineItem[] = [];
+            if (priceInfo.price != null) {
+                lineItems.push({
+                    name: pkg ? `Accommodation — ${pkg.name}` : 'Accommodation',
+                    unitPrice: priceInfo.basePrice ?? priceInfo.price,
+                });
+                if ((priceInfo.acSupplement ?? 0) > 0) {
+                    const days = pkg?.durationDays ?? 0;
+                    lineItems.push({
+                        name: `AC Supplement${days && priceInfo.acSupplementPerDay ? ` (${days} days × ₹${priceInfo.acSupplementPerDay}/day)` : ''}`,
+                        unitPrice: priceInfo.acSupplement!,
+                    });
+                }
+            } else if (bookingTotal > 0) {
+                // Pricing not resolvable but booking has a confirmed total — single line item
+                lineItems.push({
+                    name: pkg ? `Accommodation — ${pkg.name}` : 'Accommodation',
+                    unitPrice: bookingTotal,
+                });
+            }
+
+            const subtotal = lineItems.reduce((s, i) => s + i.unitPrice, 0);
+            const billStatus =
+                advancePaid <= 0       ? BillStatus.PENDING
+                : subtotal > 0 && advancePaid >= subtotal ? BillStatus.PAID
+                : subtotal > 0         ? BillStatus.PARTIAL
+                :                        BillStatus.PENDING;
+
+            const billCount = await manager.count(PatientBill, { where: { organisationId: clinicId } });
+            const billNumber = `BILL-${String(billCount + 1).padStart(5, '0')}`;
+
+            const bill = manager.create(PatientBill, {
+                organisationId: clinicId,
+                patientId,
+                bookingId:   linkedBooking?.id   ?? null,
+                admissionId: savedAdmission.id,
+                billNumber,
+                billDate:    new Date().toISOString().slice(0, 10) as unknown as Date,
+                subtotal,
+                discount: 0,
+                tax: 0,
+                paidAmount: advancePaid,
+                status: billStatus,
+            });
+            const savedBill = await manager.save(PatientBill, bill);
+
+            if (lineItems.length > 0) {
+                await manager.save(
+                    BillItem,
+                    lineItems.map(i =>
+                        manager.create(BillItem, {
+                            billId:    savedBill.id,
+                            itemType:  BillItemType.ACCOMMODATION,
+                            itemName:  i.name,
+                            quantity:  1,
+                            unitPrice: i.unitPrice,
+                            discount:  0,
+                            total:     i.unitPrice,
+                        })
+                    )
+                );
+            }
+
+            // Migrate booking advance into the payment ledger
+            if (advancePaid > 0) {
+                const advance = manager.create(PatientBillPayment, {
+                    organisationId: clinicId,
+                    billId:         savedBill.id,
+                    amount:         advancePaid,
+                    paidAt:         new Date().toISOString().slice(0, 10),
+                    paymentMethod:  PaymentMethod.CASH,
+                    notes:          'Advance paid at booking',
+                });
+                await manager.save(PatientBillPayment, advance);
+            }
+
             return { savedAdmission, room };
         });
 
@@ -545,6 +686,28 @@ export class RetreatService {
             .catch(() => {});
 
         return savedAdmission;
+    }
+
+    // "Mark Delivery Occurred" — record (or clear) the actual delivery date on an
+    // admission. Postnatal third date (ADR-002 D10). Idempotent; date is a plain
+    // calendar day 'YYYY-MM-DD'. Cannot be in the future.
+    async recordDelivery(clinicId: string, admissionId: string, actualDeliveryDate: string | null) {
+        const admission = await this.admissionRepo.findOne({
+            where: { id: admissionId, organisationId: clinicId },
+        });
+        if (!admission) throw new NotFoundException('Admission not found');
+
+        if (actualDeliveryDate) {
+            const d = new Date(actualDeliveryDate);
+            if (isNaN(d.getTime())) throw new BadRequestException('Invalid delivery date');
+            // Compare calendar days in UTC; a future delivery date is not meaningful.
+            const today = new Date(); today.setUTCHours(0, 0, 0, 0);
+            if (d > today) throw new BadRequestException('Delivery date cannot be in the future');
+            admission.actualDeliveryDate = actualDeliveryDate.slice(0, 10);
+        } else {
+            admission.actualDeliveryDate = null;
+        }
+        return this.admissionRepo.save(admission);
     }
 
     async discharge(clinicId: string, admissionId: string) {
@@ -590,7 +753,7 @@ export class RetreatService {
 
     // --- BOOKINGS ---
     async createBooking(clinicId: string, dto: CreateBookingDto) {
-        const { patientId, enquiryId, roomId, packageId, checkInDate, checkOutDate, advancePaid, notes, discountReason } = dto;
+        const { patientId, enquiryId, roomId, packageId, checkInDate, checkOutDate, advancePaid, notes, discountReason, acRequired = false } = dto;
 
         // Validate identity: at least one of patientId or enquiryId must be present
         if (!patientId && !enquiryId) {
@@ -635,8 +798,8 @@ export class RetreatService {
             const block = await this.isRoomBlocked(manager, room, checkIn, checkOut);
             if (block.blocked) throw new ConflictException(this.blockMessage(block.reason));
 
-            // Resolve suggested price from pricing matrix (ADR-002 D2)
-            const resolved = await this.resolvePrice(clinicId, roomId, packageId || '');
+            // Resolve suggested price from pricing matrix (ADR-002 D2 + D12)
+            const resolved = await this.resolvePrice(clinicId, roomId, packageId, acRequired);
             const suggestedPrice = resolved.price;
             // Explicit totalPrice from DTO wins; fall back to matrix suggestion; fall back to 0
             const totalPrice = dto.totalPrice != null
@@ -655,6 +818,7 @@ export class RetreatService {
                 totalPrice,
                 discountReason: discountReason || null,
                 advancePaid: advancePaid || 0,
+                acRequired,
                 status: BookingStatus.HELD,
                 notes: notes || null,
                 bookingDate: new Date(),
@@ -747,6 +911,7 @@ export class RetreatService {
             if (dto.totalPrice !== undefined) booking.totalPrice = dto.totalPrice;
             if (dto.advancePaid !== undefined) booking.advancePaid = Number(dto.advancePaid);
             if (dto.discountReason !== undefined) booking.discountReason = dto.discountReason;
+            if (dto.acRequired !== undefined) booking.acRequired = dto.acRequired;
             if (dto.notes !== undefined) booking.notes = dto.notes;
 
             return manager.save(booking);
@@ -754,14 +919,20 @@ export class RetreatService {
     }
 
     async cancelBooking(clinicId: string, bookingId: string) {
-        const booking = await this.getBookingById(clinicId, bookingId);
+        // Load without relations — status check only needs the scalar columns.
+        const booking = await this.bookingRepo.findOne({
+            where: { id: bookingId, organisationId: clinicId },
+        });
+        if (!booking) throw new NotFoundException('Booking not found');
 
         if (booking.status === BookingStatus.FULFILLED) {
             throw new BadRequestException('Cannot cancel a booking that has already been fulfilled');
         }
 
-        booking.status = BookingStatus.CANCELLED;
-        return this.bookingRepo.save(booking);
+        // Use update() so TypeORM only writes the status column — avoids save() serialising
+        // loaded relation objects as null FKs on non-nullable columns (room_id).
+        await this.bookingRepo.update({ id: bookingId }, { status: BookingStatus.CANCELLED });
+        return { ...booking, status: BookingStatus.CANCELLED };
     }
 
     async checkAvailability(clinicId: string, dto: CheckAvailabilityDto) {
@@ -996,6 +1167,7 @@ export class RetreatService {
             assignedTo: dto.assignedTo || null,
             followUpAt: dto.followUpAt ? new Date(dto.followUpAt) : null,
             expectedDeliveryDate: dto.expectedDeliveryDate ? new Date(dto.expectedDeliveryDate) : null,
+            additionalInfo: dto.additionalInfo ?? null,
             status: EnquiryStatus.NEW,
         });
         return this.enquiryRepo.save(enquiry);
@@ -1019,6 +1191,7 @@ export class RetreatService {
         if (dto.followUpAt !== undefined) enquiry.followUpAt = dto.followUpAt ? new Date(dto.followUpAt) : null;
         if (dto.lostReason !== undefined) enquiry.lostReason = dto.lostReason || null;
         if (dto.expectedDeliveryDate !== undefined) enquiry.expectedDeliveryDate = dto.expectedDeliveryDate ? new Date(dto.expectedDeliveryDate) : null;
+        if (dto.additionalInfo !== undefined) enquiry.additionalInfo = dto.additionalInfo ?? null;
 
         return this.enquiryRepo.save(enquiry);
     }
@@ -1056,7 +1229,8 @@ export class RetreatService {
             const block = await this.isRoomBlocked(manager, room, checkIn, checkOut);
             if (block.blocked) throw new ConflictException(this.blockMessage(block.reason));
 
-            const resolved = await this.resolvePrice(clinicId, dto.roomId, dto.packageId || '');
+            const acRequired = dto.acRequired ?? false;
+            const resolved = await this.resolvePrice(clinicId, dto.roomId, dto.packageId, acRequired);
             const suggestedPrice = resolved.price;
             const totalPrice = dto.totalPrice != null ? dto.totalPrice : (suggestedPrice ?? 0);
 
@@ -1072,6 +1246,7 @@ export class RetreatService {
                 totalPrice,
                 discountReason: dto.discountReason || null,
                 advancePaid: 0,
+                acRequired,
                 status: BookingStatus.HELD,
                 notes: dto.notes || null,
                 bookingDate: new Date(),
@@ -1148,5 +1323,384 @@ export class RetreatService {
             default:
                 return 'Room is not available for the selected dates';
         }
+    }
+
+    // ── Export ────────────────────────────────────────────────────────────────
+
+    async exportXlsx(orgId: string): Promise<Buffer> {
+        const [categories, rooms, packages, pricing] = await Promise.all([
+            this.categoryRepo.find({ where: { organisationId: orgId }, order: { name: 'ASC' } }),
+            this.roomRepo.find({ where: { organisationId: orgId }, relations: ['roomCategory'], order: { roomNumber: 'ASC' } }),
+            this.packageRepo.find({ where: { organisationId: orgId }, order: { name: 'ASC' } }),
+            this.categoryPricingRepo.find({ where: { organisationId: orgId }, relations: ['roomCategory', 'package'] }),
+        ]);
+
+        const wb = XLSX.utils.book_new();
+
+        // The leading "ID" column is the stable identity used on re-import so that
+        // renaming a category/package/room updates the existing record instead of
+        // creating a duplicate. Do not edit or delete the ID column.
+
+        // Sheet 1 — Room Categories
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(
+            categories.map(c => ({ ID: c.id, Name: c.name, Active: c.isActive ? 'Yes' : 'No' }))
+        ), 'Room Categories');
+
+        // Sheet 2 — Rooms
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(
+            rooms.map(r => ({
+                ID: r.id,
+                'Room Number': r.roomNumber,
+                Category: r.roomCategory?.name ?? '',
+                Floor: r.floor ?? '',
+                Capacity: r.capacity ?? '',
+                'AC Available': r.amenities?.includes('AC_AVAILABLE') ? 'Yes' : 'No',
+                'Other Amenities': (r.amenities ?? []).filter(a => a !== 'AC_AVAILABLE').join(', '),
+                Description: r.description ?? '',
+            }))
+        ), 'Rooms');
+
+        // Sheet 3 — Packages
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(
+            packages.map(p => ({
+                ID: p.id,
+                Name: p.name,
+                'Duration (Days)': p.durationDays,
+                Description: p.description ?? '',
+                Inclusions: (p.inclusions ?? []).join(', '),
+            }))
+        ), 'Packages');
+
+        // Sheet 4 — Pricing Matrix (flat rows)
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(
+            pricing.map(m => ({
+                ID: m.id,
+                Category: m.roomCategory?.name ?? '',
+                Package: m.package?.name ?? '',
+                'Base Price (₹)': parseFloat(m.basePrice as any),
+                'AC Supplement ₹/day': m.acSupplementPerDay ? parseFloat(m.acSupplementPerDay as any) : '',
+            }))
+        ), 'Pricing Matrix');
+
+        return Buffer.from(XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }));
+    }
+
+    // ── Import ────────────────────────────────────────────────────────────────
+
+    async importXlsx(orgId: string, buffer: Buffer, dryRun = false): Promise<{
+        dryRun: boolean;
+        categories: { created: number; updated: number; unchanged: number };
+        rooms: { created: number; updated: number; unchanged: number; skipped: string[] };
+        packages: { created: number; updated: number; unchanged: number };
+        pricing: { created: number; updated: number; unchanged: number; skipped: string[] };
+    }> {
+        const wb = XLSX.read(buffer, { type: 'buffer' });
+
+        // Sentinel error used to roll back the transaction in dry-run (preview) mode.
+        const DRY_RUN_ROLLBACK = Symbol('dry-run-rollback');
+
+        const run = async (manager: EntityManager) => {
+            const categoryRepo = manager.getRepository(RoomCategory);
+            const roomRepo = manager.getRepository(Room);
+            const packageRepo = manager.getRepository(TreatmentPackage);
+            const pricingRepo = manager.getRepository(RoomCategoryPricing);
+
+            const result = {
+                dryRun,
+                categories: { created: 0, updated: 0, unchanged: 0 },
+                rooms: { created: 0, updated: 0, unchanged: 0, skipped: [] as string[] },
+                packages: { created: 0, updated: 0, unchanged: 0 },
+                pricing: { created: 0, updated: 0, unchanged: 0, skipped: [] as string[] },
+            };
+
+            // name→id maps, populated as we upsert. We register BOTH the previous and
+            // the new name for each record so that a rename in one sheet still resolves
+            // references in the linked sheets (rooms→category, pricing→category/package).
+            const catNameToId = new Map<string, string>();
+            const pkgNameToId = new Map<string, string>();
+            const reg = (map: Map<string, string>, name: string | null | undefined, id: string) => {
+                if (name) map.set(name.trim().toLowerCase(), id);
+            };
+
+            // Order-insensitive array equality (for amenities / inclusions) and a
+            // numeric-aware equality so "90000.00" (decimal string from PG) === 90000.
+            const arrEq = (a: any[] | null | undefined, b: any[] | null | undefined) => {
+                const x = [...(a ?? [])].map(String).sort();
+                const y = [...(b ?? [])].map(String).sort();
+                return x.length === y.length && x.every((v, i) => v === y[i]);
+            };
+            const numEq = (a: any, b: any) => {
+                if (a == null && b == null) return true;
+                if (a == null || b == null) return false;
+                return parseFloat(a as any) === parseFloat(b as any);
+            };
+            // Empty string and null are equivalent for nullable text columns — the DB
+            // may hold '' where the import normalises blanks to null (and vice versa).
+            const strEq = (a: any, b: any) => (a ?? '') === (b ?? '');
+
+            // ── 1. Room Categories ──────────────────────────────────────────
+            const catSheet = wb.Sheets['Room Categories'];
+            if (catSheet) {
+                const rows: any[] = XLSX.utils.sheet_to_json(catSheet);
+                for (const row of rows) {
+                    const id = String(row['ID'] ?? '').trim();
+                    const name = String(row['Name'] ?? '').trim();
+                    if (!name) continue;
+                    const isActive = String(row['Active'] ?? 'Yes').trim().toLowerCase() !== 'no';
+
+                    // Match by ID first (rename-safe), then by name.
+                    let existing = id
+                        ? await categoryRepo.findOne({ where: { id, organisationId: orgId } })
+                        : null;
+                    if (!existing) existing = await categoryRepo.findOne({ where: { organisationId: orgId, name } });
+
+                    if (existing) {
+                        reg(catNameToId, existing.name, existing.id); // old name still resolves
+                        const changed = existing.name !== name || existing.isActive !== isActive;
+                        if (changed) {
+                            existing.name = name;
+                            existing.isActive = isActive;
+                            await categoryRepo.save(existing);
+                            result.categories.updated++;
+                        } else {
+                            result.categories.unchanged++;
+                        }
+                        reg(catNameToId, name, existing.id);          // new name resolves too
+                    } else {
+                        const created = await categoryRepo.save(categoryRepo.create({ organisationId: orgId, name, isActive }));
+                        reg(catNameToId, name, created.id);
+                        result.categories.created++;
+                    }
+                }
+            }
+            // Seed maps with any categories not present in the sheet, so linked sheets still resolve.
+            for (const c of await categoryRepo.find({ where: { organisationId: orgId } })) reg(catNameToId, c.name, c.id);
+
+            // ── 2. Packages (moved before rooms is unnecessary; rooms don't ref packages) ──
+            const pkgSheet = wb.Sheets['Packages'];
+            if (pkgSheet) {
+                const rows: any[] = XLSX.utils.sheet_to_json(pkgSheet);
+                for (const row of rows) {
+                    const id = String(row['ID'] ?? '').trim();
+                    const name = String(row['Name'] ?? '').trim();
+                    if (!name) continue;
+                    const durationDays = parseInt(String(row['Duration (Days)'] ?? '1'), 10) || 1;
+                    const inclusions = String(row['Inclusions'] ?? '').split(',').map(s => s.trim()).filter(Boolean);
+                    const description = String(row['Description'] ?? '').trim() || null;
+
+                    let existing = id
+                        ? await packageRepo.findOne({ where: { id, organisationId: orgId } })
+                        : null;
+                    if (!existing) existing = await packageRepo.findOne({ where: { organisationId: orgId, name } });
+
+                    if (existing) {
+                        reg(pkgNameToId, existing.name, existing.id);
+                        const newInclusions = inclusions.length ? inclusions : null;
+                        const changed = existing.name !== name
+                            || existing.durationDays !== durationDays
+                            || !strEq(existing.description, description)
+                            || !arrEq(existing.inclusions, newInclusions);
+                        if (changed) {
+                            existing.name = name;
+                            existing.durationDays = durationDays;
+                            existing.description = description;
+                            existing.inclusions = newInclusions;
+                            await packageRepo.save(existing);
+                            result.packages.updated++;
+                        } else {
+                            result.packages.unchanged++;
+                        }
+                        reg(pkgNameToId, name, existing.id);
+                    } else {
+                        const created = await packageRepo.save(packageRepo.create({
+                            organisationId: orgId, name, durationDays, description,
+                            inclusions: inclusions.length ? inclusions : null,
+                        }));
+                        reg(pkgNameToId, name, created.id);
+                        result.packages.created++;
+                    }
+                }
+            }
+            for (const p of await packageRepo.find({ where: { organisationId: orgId } })) reg(pkgNameToId, p.name, p.id);
+
+            // ── 3. Rooms ────────────────────────────────────────────────────
+            const roomSheet = wb.Sheets['Rooms'];
+            if (roomSheet) {
+                const rows: any[] = XLSX.utils.sheet_to_json(roomSheet);
+                for (const row of rows) {
+                    const id = String(row['ID'] ?? '').trim();
+                    const roomNumber = String(row['Room Number'] ?? '').trim();
+                    if (!roomNumber) continue;
+
+                    const catName = String(row['Category'] ?? '').trim();
+                    const roomCategoryId = catName ? (catNameToId.get(catName.toLowerCase()) ?? null) : null;
+                    if (catName && !roomCategoryId) {
+                        result.rooms.skipped.push(`${roomNumber}: category "${catName}" not found`);
+                        continue;
+                    }
+
+                    const hasAc = String(row['AC Available'] ?? 'No').trim().toLowerCase() === 'yes';
+                    const otherAmenities = String(row['Other Amenities'] ?? '').split(',').map(s => s.trim()).filter(Boolean);
+                    const amenities = hasAc ? ['AC_AVAILABLE', ...otherAmenities] : otherAmenities;
+
+                    let existing = id
+                        ? await roomRepo.findOne({ where: { id, organisationId: orgId } })
+                        : null;
+                    if (!existing) existing = await roomRepo.findOne({ where: { organisationId: orgId, roomNumber } });
+
+                    const data = {
+                        organisationId: orgId,
+                        roomNumber,
+                        roomCategoryId,
+                        floor: String(row['Floor'] ?? '').trim() || null,
+                        capacity: row['Capacity'] ? parseInt(String(row['Capacity']), 10) : null,
+                        amenities,
+                        description: String(row['Description'] ?? '').trim() || null,
+                    };
+                    if (existing) {
+                        const changed = existing.roomNumber !== data.roomNumber
+                            || (existing.roomCategoryId ?? null) !== data.roomCategoryId
+                            || !strEq(existing.floor, data.floor)
+                            || (existing.capacity ?? null) !== data.capacity
+                            || !strEq(existing.description, data.description)
+                            || !arrEq(existing.amenities, data.amenities);
+                        if (changed) {
+                            await roomRepo.save({ ...existing, ...data });
+                            result.rooms.updated++;
+                        } else {
+                            result.rooms.unchanged++;
+                        }
+                    } else {
+                        await roomRepo.save(roomRepo.create(data));
+                        result.rooms.created++;
+                    }
+                }
+            }
+
+            // ── 4. Pricing Matrix ────────────────────────────────────────────
+            const priceSheet = wb.Sheets['Pricing Matrix'];
+            if (priceSheet) {
+                const rows: any[] = XLSX.utils.sheet_to_json(priceSheet);
+                for (const row of rows) {
+                    const id = String(row['ID'] ?? '').trim();
+                    const catName = String(row['Category'] ?? '').trim();
+                    const pkgName = String(row['Package'] ?? '').trim();
+
+                    const basePrice = parseFloat(String(row['Base Price (₹)'] ?? '0'));
+                    const acRaw = String(row['AC Supplement ₹/day'] ?? '').trim();
+                    const acSupplementPerDay = acRaw && !isNaN(parseFloat(acRaw)) ? parseFloat(acRaw) : null;
+
+                    // Match by ID first — lets a row's category/package/price change without
+                    // creating a duplicate. Fall back to (category, package) name pair.
+                    let existing = id
+                        ? await pricingRepo.findOne({ where: { id, organisationId: orgId } })
+                        : null;
+
+                    const roomCategoryId = catName ? catNameToId.get(catName.toLowerCase()) : undefined;
+                    const packageId = pkgName ? pkgNameToId.get(pkgName.toLowerCase()) : undefined;
+
+                    if (!existing) {
+                        if (!catName || !pkgName) continue;
+                        if (!roomCategoryId) { result.pricing.skipped.push(`Category "${catName}" not found`); continue; }
+                        if (!packageId) { result.pricing.skipped.push(`Package "${pkgName}" not found`); continue; }
+                        existing = await pricingRepo.findOne({ where: { roomCategoryId, packageId } });
+                    }
+
+                    if (!basePrice || isNaN(basePrice)) {
+                        result.pricing.skipped.push(`${catName || 'row'} × ${pkgName || ''}: invalid base price`);
+                        continue;
+                    }
+
+                    if (existing) {
+                        const changed = !numEq(existing.basePrice, basePrice)
+                            || !numEq(existing.acSupplementPerDay, acSupplementPerDay)
+                            || (roomCategoryId && existing.roomCategoryId !== roomCategoryId)
+                            || (packageId && existing.packageId !== packageId);
+                        if (changed) {
+                            existing.basePrice = basePrice;
+                            existing.acSupplementPerDay = acSupplementPerDay;
+                            if (roomCategoryId) existing.roomCategoryId = roomCategoryId;
+                            if (packageId) existing.packageId = packageId;
+                            await pricingRepo.save(existing);
+                            result.pricing.updated++;
+                        } else {
+                            result.pricing.unchanged++;
+                        }
+                    } else {
+                        if (!roomCategoryId || !packageId) {
+                            result.pricing.skipped.push(`${catName || 'row'} × ${pkgName || ''}: cannot resolve category/package`);
+                            continue;
+                        }
+                        await pricingRepo.save(pricingRepo.create({
+                            organisationId: orgId, roomCategoryId, packageId, basePrice, acSupplementPerDay,
+                        }));
+                        result.pricing.created++;
+                    }
+                }
+            }
+
+            if (dryRun) {
+                // Roll the transaction back: preview computed the exact counts a real
+                // import would produce, but persists nothing.
+                throw { [DRY_RUN_ROLLBACK]: true, result };
+            }
+            return result;
+        };
+
+        try {
+            return await this.dataSource.transaction(run);
+        } catch (e: any) {
+            if (e && e[DRY_RUN_ROLLBACK]) return e.result;
+            throw e;
+        }
+    }
+
+    // ─── Custom Field Definitions ────────────────────────────────────────────
+
+    async getFieldDefinitions(orgId: string): Promise<BookingFieldDefinition[]> {
+        return this.fieldDefinitionRepo.find({
+            where: { organisationId: orgId, isActive: true },
+            order: { displayOrder: 'ASC', createdAt: 'ASC' },
+        });
+    }
+
+    async createFieldDefinition(orgId: string, dto: CreateFieldDefinitionDto): Promise<BookingFieldDefinition> {
+        const existing = await this.fieldDefinitionRepo.findOne({
+            where: { organisationId: orgId, fieldKey: dto.fieldKey },
+        });
+        if (existing) throw new ConflictException(`field_key '${dto.fieldKey}' already exists for this organisation`);
+
+        const def = this.fieldDefinitionRepo.create({
+            organisationId: orgId,
+            label: dto.label,
+            fieldKey: dto.fieldKey,
+            fieldType: dto.fieldType as any,
+            required: dto.required ?? false,
+            optionsJson: dto.options ?? null,
+            displayOrder: dto.displayOrder ?? 0,
+            isActive: true,
+        });
+        return this.fieldDefinitionRepo.save(def);
+    }
+
+    async updateFieldDefinition(orgId: string, id: string, dto: UpdateFieldDefinitionDto): Promise<BookingFieldDefinition> {
+        const def = await this.fieldDefinitionRepo.findOne({ where: { id, organisationId: orgId } });
+        if (!def) throw new NotFoundException('Field definition not found');
+
+        if (dto.label !== undefined) def.label = dto.label;
+        if (dto.fieldType !== undefined) def.fieldType = dto.fieldType as any;
+        if (dto.required !== undefined) def.required = dto.required;
+        if (dto.options !== undefined) def.optionsJson = dto.options ?? null;
+        if (dto.displayOrder !== undefined) def.displayOrder = dto.displayOrder;
+        if (dto.isActive !== undefined) def.isActive = dto.isActive;
+
+        return this.fieldDefinitionRepo.save(def);
+    }
+
+    async deleteFieldDefinition(orgId: string, id: string): Promise<void> {
+        const def = await this.fieldDefinitionRepo.findOne({ where: { id, organisationId: orgId } });
+        if (!def) throw new NotFoundException('Field definition not found');
+        def.isActive = false;
+        await this.fieldDefinitionRepo.save(def);
     }
 }

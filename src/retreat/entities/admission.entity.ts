@@ -87,6 +87,13 @@ export class Admission {
     @Column({ type: 'varchar', length: 50, nullable: true, name: 'care_program' })
     careProgram: string | null;
 
+    // Calendar date the baby was actually born (postnatal). Third postnatal date
+    // after EDD (booking_enquiries) and preferred check-in (room_bookings). Lives
+    // here — not on the booking — so walk-in mothers (admission, no booking) can
+    // record it. Set at check-in if known, else later via "Mark Delivery". ADR-002 D10.
+    @Column({ type: 'date', nullable: true, name: 'actual_delivery_date' })
+    actualDeliveryDate: string | null;
+
     @DeleteDateColumn({ type: 'timestamp', nullable: true, name: 'deleted_at' })
     deletedAt: Date | null;
 

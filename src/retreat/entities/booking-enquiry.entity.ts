@@ -85,6 +85,9 @@ export class BookingEnquiry {
     @Column({ type: 'text', nullable: true, name: 'lost_reason' })
     lostReason: string | null;
 
+    @Column({ type: 'jsonb', nullable: true, name: 'additional_info' })
+    additionalInfo: Record<string, any> | null;
+
     @DeleteDateColumn({ type: 'timestamp', nullable: true, name: 'deleted_at' })
     deletedAt: Date | null;
 

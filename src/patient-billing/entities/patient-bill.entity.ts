@@ -44,6 +44,12 @@ export class PatientBill {
   @Column({ type: 'uuid', nullable: true, name: 'appointment_id' })
   appointmentId: string | null;
 
+  @Column({ type: 'uuid', nullable: true, name: 'booking_id' })
+  bookingId: string | null;
+
+  @Column({ type: 'uuid', nullable: true, name: 'admission_id' })
+  admissionId: string | null;
+
   @Column({ type: 'varchar', length: 100, name: 'bill_number' })
   billNumber: string;
 

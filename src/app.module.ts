@@ -77,6 +77,7 @@ import { LabReport } from './lab-reports/entities/lab-report.entity';
 import { LabTest } from './lab-reports/entities/lab-test.entity';
 import { PatientBill } from './patient-billing/entities/patient-bill.entity';
 import { BillItem } from './patient-billing/entities/bill-item.entity';
+import { PatientBillPayment } from './patient-billing/entities/patient-bill-payment.entity';
 import { RawMaterial } from './manufacturing/entities/raw-material.entity';
 import { InventoryTransaction } from './manufacturing/entities/inventory-transaction.entity';
 import { ManufacturingFormula } from './manufacturing/entities/manufacturing-formula.entity';
@@ -100,6 +101,7 @@ import { TreatmentPackage } from './retreat/entities/treatment-package.entity';
 import { Admission } from './retreat/entities/admission.entity';
 import { RoomBooking } from './retreat/entities/room-booking.entity';
 import { BookingEnquiry } from './retreat/entities/booking-enquiry.entity';
+import { BookingFieldDefinition } from './retreat/entities/booking-field-definition.entity';
 import { VitalsModule } from './vitals/vitals.module';
 import { Vital } from './vitals/entities/vital.entity';
 import { FeedingLogsModule } from './feeding-logs/feeding-logs.module';
@@ -196,6 +198,7 @@ import { BillPayment } from './bills/entities/bill-payment.entity';
           LabTest,
           PatientBill,
           BillItem,
+          PatientBillPayment,
           RawMaterial,
           InventoryTransaction,
           ManufacturingFormula,
@@ -213,6 +216,7 @@ import { BillPayment } from './bills/entities/bill-payment.entity';
           Admission,
           RoomBooking,
           BookingEnquiry,
+          BookingFieldDefinition,
           Vital,
           FeedingLog,
           NewbornAssessment,

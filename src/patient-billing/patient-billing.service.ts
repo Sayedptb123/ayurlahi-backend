@@ -6,9 +6,10 @@ import {
   ConflictException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In } from 'typeorm';
+import { Repository, In, EntityManager } from 'typeorm';
 import { PatientBill, BillStatus } from './entities/patient-bill.entity';
 import { BillItem } from './entities/bill-item.entity';
+import { PatientBillPayment } from './entities/patient-bill-payment.entity';
 import { Patient } from '../patients/entities/patient.entity';
 import { Appointment } from '../appointments/entities/appointment.entity';
 import { OrganisationUser } from '../organisation-users/entities/organisation-user.entity';
@@ -25,6 +26,8 @@ export class PatientBillingService {
     private billsRepository: Repository<PatientBill>,
     @InjectRepository(BillItem)
     private billItemsRepository: Repository<BillItem>,
+    @InjectRepository(PatientBillPayment)
+    private billPaymentsRepository: Repository<PatientBillPayment>,
     @InjectRepository(Patient)
     private patientsRepository: Repository<Patient>,
     @InjectRepository(Appointment)
@@ -408,31 +411,44 @@ export class PatientBillingService {
       throw new BadRequestException('Cannot record payment for cancelled bill');
     }
 
-    const newPaidAmount = Number(bill.paidAmount) + paymentDto.amount;
-    const newBalance = Number(bill.total) - newPaidAmount;
+    // Insert the payment into the ledger and reconcile the bill's cached
+    // paid_amount + status atomically. SUM(ledger) is the source of truth (ADR-003 D3);
+    // the row is locked so concurrent payments can't both pass the overpayment guard.
+    const saved = await this.billsRepository.manager.transaction(async (manager) => {
+      const billRepo = manager.getRepository(PatientBill);
+      const payRepo = manager.getRepository(PatientBillPayment);
 
-    if (newPaidAmount > Number(bill.total)) {
-      throw new BadRequestException(
-        'Payment amount exceeds bill total. Overpayment not allowed.',
+      // Lock only the patient_bills row (QueryBuilder doesn't auto-join the eager
+      // relations that would otherwise make FOR UPDATE fail on an outer join).
+      const locked = await billRepo
+        .createQueryBuilder('b')
+        .setLock('pessimistic_write')
+        .where('b.id = :id', { id: bill.id })
+        .getOne();
+      if (!locked) throw new NotFoundException('Bill not found');
+
+      const prior = await this.sumPayments(payRepo, bill.id);
+      if (prior + paymentDto.amount > Number(locked.total) + 0.001) {
+        throw new BadRequestException(
+          'Payment amount exceeds bill total. Overpayment not allowed.',
+        );
+      }
+
+      await payRepo.save(
+        payRepo.create({
+          organisationId: bill.organisationId,
+          billId: bill.id,
+          amount: paymentDto.amount,
+          paidAt: (paymentDto.paidAt ?? new Date().toISOString()).slice(0, 10),
+          paymentMethod: paymentDto.paymentMethod,
+          referenceNo: paymentDto.referenceNo ?? null,
+          notes: paymentDto.notes ?? null,
+          createdBy: userId ?? null,
+        }),
       );
-    }
 
-    bill.paidAmount = newPaidAmount;
-    bill.paymentMethod = paymentDto.paymentMethod;
-
-    if (newBalance <= 0) {
-      bill.status = BillStatus.PAID;
-    } else {
-      bill.status = BillStatus.PARTIAL;
-    }
-
-    if (paymentDto.notes) {
-      bill.notes = bill.notes
-        ? `${bill.notes}\nPayment: ${paymentDto.notes}`
-        : `Payment: ${paymentDto.notes}`;
-    }
-
-    const saved = await this.billsRepository.save(bill);
+      return this.reconcileBill(manager, bill.id);
+    });
 
     // Notify OWNER+MANAGER about payment
     if (saved.organisationId) {
@@ -463,6 +479,86 @@ export class PatientBillingService {
     }
 
     return saved;
+  }
+
+  // ── Payment ledger helpers (ADR-003) ──────────────────────────────────────
+
+  // Source of truth for "how much is paid": SUM over the live (non-voided) ledger.
+  private async sumPayments(
+    payRepo: Repository<PatientBillPayment>,
+    billId: string,
+  ): Promise<number> {
+    const row = await payRepo
+      .createQueryBuilder('p')
+      .select('COALESCE(SUM(p.amount), 0)', 'sum')
+      .where('p.bill_id = :billId', { billId })
+      .andWhere('p.deleted_at IS NULL')
+      .getRawOne<{ sum: string }>();
+    return Number(row?.sum ?? 0);
+  }
+
+  // Recompute the cached paid_amount + status from the ledger. Cancelled bills
+  // keep their status. Returns the saved bill.
+  private async reconcileBill(
+    manager: EntityManager,
+    billId: string,
+  ): Promise<PatientBill> {
+    const billRepo = manager.getRepository(PatientBill);
+    const payRepo = manager.getRepository(PatientBillPayment);
+
+    const bill = await billRepo.findOne({ where: { id: billId } });
+    if (!bill) throw new NotFoundException('Bill not found');
+
+    const paid = await this.sumPayments(payRepo, billId);
+    bill.paidAmount = paid;
+    // CANCELLED is terminal — never reopened by payment math. Otherwise the status
+    // follows the ledger: PENDING (issued, unpaid — the codebase default, and where
+    // voiding all payments returns) → PARTIAL → PAID.
+    if (bill.status !== BillStatus.CANCELLED) {
+      const balance = Number(bill.total) - paid;
+      bill.status =
+        paid <= 0
+          ? BillStatus.PENDING
+          : balance <= 0.001
+            ? BillStatus.PAID
+            : BillStatus.PARTIAL;
+    }
+    return billRepo.save(bill);
+  }
+
+  // List the payment history (ledger) for a bill, newest first.
+  async getPayments(
+    id: string,
+    userId: string,
+    userRole: string,
+    organisationId: string | undefined,
+    organisationType: string | undefined,
+  ): Promise<PatientBillPayment[]> {
+    await this.findOne(id, userId, userRole, organisationId, organisationType); // org-scope guard
+    return this.billPaymentsRepository.find({
+      where: { billId: id },
+      order: { paidAt: 'DESC', createdAt: 'DESC' },
+    });
+  }
+
+  // Void a payment (soft delete) and re-reconcile the bill.
+  async voidPayment(
+    id: string,
+    paymentId: string,
+    userId: string,
+    userRole: string,
+    organisationId: string | undefined,
+    organisationType: string | undefined,
+  ): Promise<PatientBill> {
+    await this.findOne(id, userId, userRole, organisationId, organisationType); // org-scope guard
+
+    return this.billsRepository.manager.transaction(async (manager) => {
+      const payRepo = manager.getRepository(PatientBillPayment);
+      const payment = await payRepo.findOne({ where: { id: paymentId, billId: id } });
+      if (!payment) throw new NotFoundException('Payment not found');
+      await payRepo.softRemove(payment);
+      return this.reconcileBill(manager, id);
+    });
   }
 
   async remove(

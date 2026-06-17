@@ -38,8 +38,11 @@ export class RoomCategoryPricing {
     @JoinColumn({ name: 'package_id' })
     package: TreatmentPackage;
 
-    @Column({ type: 'decimal', precision: 10, scale: 2, name: 'price' })
-    price: number;
+    @Column({ type: 'decimal', precision: 10, scale: 2, name: 'base_price' })
+    basePrice: number;
+
+    @Column({ type: 'decimal', precision: 10, scale: 2, nullable: true, name: 'ac_supplement_per_day' })
+    acSupplementPerDay: number | null;
 
     @DeleteDateColumn({ type: 'timestamp', nullable: true, name: 'deleted_at' })
     deletedAt: Date | null;

@@ -1,4 +1,4 @@
-import { IsString, IsOptional, IsEnum, IsUUID, IsDateString, IsNumber, Min } from 'class-validator';
+import { IsString, IsOptional, IsEnum, IsUUID, IsDateString, IsNumber, IsBoolean, IsObject, Min } from 'class-validator';
 import { EnquiryChannel, EnquiryStatus } from '../entities/booking-enquiry.entity';
 
 export class CreateEnquiryDto {
@@ -38,6 +38,10 @@ export class CreateEnquiryDto {
     @IsOptional()
     @IsDateString()
     expectedDeliveryDate?: string;
+
+    @IsOptional()
+    @IsObject()
+    additionalInfo?: Record<string, any>;
 }
 
 export class UpdateEnquiryDto {
@@ -88,6 +92,10 @@ export class UpdateEnquiryDto {
     @IsOptional()
     @IsDateString()
     expectedDeliveryDate?: string;
+
+    @IsOptional()
+    @IsObject()
+    additionalInfo?: Record<string, any>;
 }
 
 export class ConvertEnquiryDto {
@@ -112,6 +120,10 @@ export class ConvertEnquiryDto {
     @IsOptional()
     @IsString()
     discountReason?: string;
+
+    @IsOptional()
+    @IsBoolean()
+    acRequired?: boolean;
 
     @IsOptional()
     @IsString()

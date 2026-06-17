@@ -12,6 +12,7 @@ export enum BillItemType {
   MEDICINE = 'medicine',
   LAB_TEST = 'lab-test',
   PROCEDURE = 'procedure',
+  ACCOMMODATION = 'accommodation',
   OTHER = 'other',
 }
 

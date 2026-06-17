@@ -8,13 +8,19 @@ import {
     Param,
     Query,
     UseGuards,
-    Request
+    Request,
+    Res,
+    UseInterceptors,
+    UploadedFile,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import type { Response } from 'express';
 import { RetreatService } from './retreat.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { ModuleGuard, RequireModule } from '../auth/guards/module.guard';
 import { CreateBookingDto, UpdateBookingDto, CheckAvailabilityDto } from './dto/booking.dto';
 import { CreateEnquiryDto, UpdateEnquiryDto, ConvertEnquiryDto } from './dto/enquiry.dto';
+import { CreateFieldDefinitionDto, UpdateFieldDefinitionDto } from './dto/field-definition.dto';
 import { BookingStatus } from './entities/room-booking.entity';
 import { EnquiryStatus } from './entities/booking-enquiry.entity';
 
@@ -50,8 +56,9 @@ export class RetreatController {
         @Request() req,
         @Query('roomId') roomId: string,
         @Query('packageId') packageId: string,
+        @Query('acRequired') acRequired: string,
     ) {
-        return this.retreatService.resolvePrice(req.user.organisationId, roomId, packageId);
+        return this.retreatService.resolvePrice(req.user.organisationId, roomId, packageId, acRequired === 'true');
     }
 
     @Get('pricing-matrix')
@@ -60,7 +67,7 @@ export class RetreatController {
     }
 
     @Post('pricing-matrix')
-    setPricingMatrix(@Request() req, @Body() body: { roomCategoryId: string; packageId: string; price: number }) {
+    setPricingMatrix(@Request() req, @Body() body: { roomCategoryId: string; packageId: string; basePrice: number; acSupplementPerDay?: number | null }) {
         return this.retreatService.setPricingMatrix(req.user.organisationId, body);
     }
 
@@ -202,6 +209,13 @@ export class RetreatController {
         return this.retreatService.discharge(clinicId, id);
     }
 
+    // Mark Delivery Occurred — set/clear the admission's actual delivery date.
+    @Patch('admissions/:id/delivery')
+    recordDelivery(@Request() req, @Param('id') id: string, @Body('actualDeliveryDate') actualDeliveryDate: string | null) {
+        const clinicId = req.user.organisationId;
+        return this.retreatService.recordDelivery(clinicId, id, actualDeliveryDate ?? null);
+    }
+
     @Get('admissions/:id')
     getAdmission(@Request() req, @Param('id') id: string) {
         const clinicId = req.user.organisationId;
@@ -271,5 +285,49 @@ export class RetreatController {
     checkAvailability(@Request() req, @Body() dto: CheckAvailabilityDto) {
         const clinicId = req.user.organisationId;
         return this.retreatService.checkAvailability(clinicId, dto);
+    }
+
+    @Get('export')
+    async exportXlsx(@Request() req, @Res() res: Response) {
+        const buffer = await this.retreatService.exportXlsx(req.user.organisationId);
+        res.set({
+            'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'Content-Disposition': 'attachment; filename="ayurlahi-setup.xlsx"',
+            'Content-Length': buffer.length,
+        });
+        res.end(buffer);
+    }
+
+    @Post('import')
+    @UseInterceptors(FileInterceptor('file'))
+    importXlsx(
+        @Request() req,
+        @UploadedFile() file: Express.Multer.File,
+        @Query('dryRun') dryRun?: string,
+    ) {
+        if (!file) throw new Error('No file uploaded');
+        return this.retreatService.importXlsx(req.user.organisationId, file.buffer, dryRun === 'true');
+    }
+
+    // ─── Custom Field Definitions ────────────────────────────────────────────
+
+    @Get('field-definitions')
+    getFieldDefinitions(@Request() req) {
+        return this.retreatService.getFieldDefinitions(req.user.organisationId);
+    }
+
+    @Post('field-definitions')
+    createFieldDefinition(@Request() req, @Body() dto: CreateFieldDefinitionDto) {
+        return this.retreatService.createFieldDefinition(req.user.organisationId, dto);
+    }
+
+    @Patch('field-definitions/:id')
+    updateFieldDefinition(@Request() req, @Param('id') id: string, @Body() dto: UpdateFieldDefinitionDto) {
+        return this.retreatService.updateFieldDefinition(req.user.organisationId, id, dto);
+    }
+
+    @Delete('field-definitions/:id')
+    deleteFieldDefinition(@Request() req, @Param('id') id: string) {
+        return this.retreatService.deleteFieldDefinition(req.user.organisationId, id);
     }
 }

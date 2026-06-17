@@ -1,4 +1,4 @@
-import { IsUUID, IsDateString, IsOptional, IsNumber, IsString, IsEnum, Min, ValidateIf } from 'class-validator';
+import { IsUUID, IsDateString, IsOptional, IsNumber, IsString, IsEnum, IsBoolean, Min } from 'class-validator';
 import { BookingStatus } from '../entities/room-booking.entity';
 
 export class CreateBookingDto {
@@ -36,6 +36,10 @@ export class CreateBookingDto {
     @IsOptional()
     @IsString()
     discountReason?: string;
+
+    @IsOptional()
+    @IsBoolean()
+    acRequired?: boolean;
 
     @IsOptional()
     @IsString()
@@ -76,6 +80,10 @@ export class UpdateBookingDto {
     @IsOptional()
     @IsString()
     discountReason?: string;
+
+    @IsOptional()
+    @IsBoolean()
+    acRequired?: boolean;
 
     @IsOptional()
     @IsString()

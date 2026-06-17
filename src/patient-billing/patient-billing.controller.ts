@@ -88,6 +88,35 @@ export class PatientBillingController {
     );
   }
 
+  // Payment history (ledger) for a bill.
+  @Get(':id/payments')
+  getPayments(@Param('id', ParseUUIDPipe) id: string, @Request() req) {
+    return this.patientBillingService.getPayments(
+      id,
+      req.user.userId,
+      req.user.role,
+      req.user.organisationId,
+      req.user.organisationType,
+    );
+  }
+
+  // Void a payment (soft delete) and re-reconcile the bill.
+  @Delete(':id/payments/:paymentId')
+  voidPayment(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('paymentId', ParseUUIDPipe) paymentId: string,
+    @Request() req,
+  ) {
+    return this.patientBillingService.voidPayment(
+      id,
+      paymentId,
+      req.user.userId,
+      req.user.role,
+      req.user.organisationId,
+      req.user.organisationType,
+    );
+  }
+
   @Delete(':id')
   remove(@Param('id', ParseUUIDPipe) id: string, @Request() req) {
     return this.patientBillingService.remove(
