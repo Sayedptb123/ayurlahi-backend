@@ -306,6 +306,15 @@ export class StaffService {
             'A user with this email or phone already belongs to this organisation',
           );
         }
+        // Reuse existing user but always apply the new password and activate the account.
+        // An existing user may have been created by the invitation flow with null passwordHash
+        // and isActive=false — without this update they cannot log in.
+        await this.usersRepository.update(existingUser.id, {
+          passwordHash: hashedPassword,
+          isActive: true,
+        });
+        existingUser.passwordHash = hashedPassword;
+        existingUser.isActive = true;
         savedUser = existingUser;
       } else {
         const user = this.usersRepository.create({

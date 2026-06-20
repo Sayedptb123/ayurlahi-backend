@@ -935,6 +935,20 @@ export class RetreatService {
         return { ...booking, status: BookingStatus.CANCELLED };
     }
 
+    async removeBooking(clinicId: string, bookingId: string) {
+        const booking = await this.bookingRepo.findOne({
+            where: { id: bookingId, organisationId: clinicId },
+        });
+        if (!booking) throw new NotFoundException('Booking not found');
+        if (booking.status !== BookingStatus.CANCELLED) {
+            throw new BadRequestException('Only cancelled bookings can be removed');
+        }
+        if (booking.advancePaid && parseFloat(String(booking.advancePaid)) > 0) {
+            throw new BadRequestException('Refund the advance payment before removing this booking');
+        }
+        await this.bookingRepo.softDelete({ id: bookingId });
+    }
+
     async checkAvailability(clinicId: string, dto: CheckAvailabilityDto) {
         const { roomId, checkInDate, checkOutDate, excludeBookingId } = dto;
 

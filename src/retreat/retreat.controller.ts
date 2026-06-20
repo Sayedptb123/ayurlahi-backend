@@ -281,6 +281,11 @@ export class RetreatController {
         return this.retreatService.cancelBooking(clinicId, id);
     }
 
+    @Delete('bookings/:id/remove')
+    removeBooking(@Request() req, @Param('id') id: string) {
+        return this.retreatService.removeBooking(req.user.organisationId, id);
+    }
+
     @Post('bookings/check-availability')
     checkAvailability(@Request() req, @Body() dto: CheckAvailabilityDto) {
         const clinicId = req.user.organisationId;
