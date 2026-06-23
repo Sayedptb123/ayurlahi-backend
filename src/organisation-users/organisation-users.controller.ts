@@ -71,6 +71,23 @@ export class OrganisationUsersController {
     );
   }
 
+  @Patch('by-user/:userId/role')
+  updateRoleByUser(
+    @Param('userId') targetUserId: string,
+    @Body('role') role: string,
+    @Request() req,
+  ) {
+    if (!PERMISSION_MANAGERS.includes(req.user?.role)) {
+      throw new ForbiddenException('Only managers and owners can update staff roles');
+    }
+    const organisationId = req.user?.organisationId;
+    return this.organisationUsersService.updateRoleByUserId(
+      targetUserId,
+      organisationId,
+      role,
+    );
+  }
+
   @Get('user/:userId/organisations')
   getUserOrganisations(@Param('userId') userId: string) {
     return this.organisationUsersService.getUserOrganisations(userId);

@@ -160,6 +160,23 @@ export class OrganisationUsersService {
     await this.organisationUsersRepository.softDelete(organisationUser.id);
   }
 
+  async updateRoleByUserId(
+    targetUserId: string,
+    organisationId: string,
+    role: string,
+  ): Promise<OrganisationUser> {
+    const orgUser = await this.organisationUsersRepository.findOne({
+      where: { userId: targetUserId, organisationId },
+    });
+    if (!orgUser) {
+      throw new NotFoundException(
+        `Organisation user not found for userId ${targetUserId} in this organisation`,
+      );
+    }
+    orgUser.role = role as any;
+    return await this.organisationUsersRepository.save(orgUser);
+  }
+
   async updatePermissionsByUserId(
     targetUserId: string,
     organisationId: string,
