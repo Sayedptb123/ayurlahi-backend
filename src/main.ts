@@ -67,10 +67,16 @@ async function bootstrap() {
     }),
   );
 
-  // CORS — in production restrict to known origins via FRONTEND_URL env var
-  const allowedOrigins = process.env.FRONTEND_URL
-    ? [process.env.FRONTEND_URL, /^http:\/\/localhost(:\d+)?$/, /^http:\/\/10\.\d+\.\d+\.\d+(:\d+)?$/]
-    : true; // dev: allow all
+  // CORS — comma-separated list of allowed origins via FRONTEND_URL env var.
+  // Always allows localhost and LAN IPs for dev. Netlify preview URLs allowed via regex.
+  const allowedOrigins: (string | RegExp)[] = [
+    /^https?:\/\/localhost(:\d+)?$/,
+    /^http:\/\/10\.\d+\.\d+\.\d+(:\d+)?$/,
+    /^https:\/\/[\w-]+\.netlify\.app$/,
+  ];
+  if (process.env.FRONTEND_URL) {
+    process.env.FRONTEND_URL.split(',').forEach((u) => allowedOrigins.push(u.trim()));
+  }
   app.enableCors({
     origin: allowedOrigins,
     credentials: true,
