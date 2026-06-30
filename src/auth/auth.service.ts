@@ -101,44 +101,28 @@ export class AuthService {
     return staff.position.split('_').map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
   }
 
-  async validateUser(email: string, password: string): Promise<User | null> {
+  async validateUser(identifier: string, password: string, byPhone = false): Promise<User | null> {
     try {
-      // Find user by email (email is optional, so also check phone if needed)
-      const user = await this.usersRepository.findOne({
-        where: { email },
-      });
+      const where = byPhone
+        ? { phone: normalizePhone(identifier) as string }
+        : { email: identifier };
+
+      const user = await this.usersRepository.findOne({ where });
 
       if (!user) {
-        console.log('[AuthService] validateUser - User not found:', email);
+        console.log('[AuthService] validateUser - User not found:', identifier);
         return null;
       }
 
       if (!user.passwordHash) {
-        console.log(
-          '[AuthService] validateUser - No password hash found for user:',
-          email,
-        );
+        console.log('[AuthService] validateUser - No password hash for user:', identifier);
         return null;
       }
 
-      console.log('[AuthService] validateUser - User found:', {
-        email: user.email,
-        hasPasswordHash: !!user.passwordHash,
-        isActive: user.isActive,
-      });
-
       const isPasswordValid = await bcrypt.compare(password, user.passwordHash);
 
-      console.log('[AuthService] validateUser - Password comparison result:', {
-        email,
-        isValid: isPasswordValid,
-      });
-
       if (!isPasswordValid) {
-        console.log(
-          '[AuthService] validateUser - Password mismatch for user:',
-          email,
-        );
+        console.log('[AuthService] validateUser - Password mismatch for user:', identifier);
         return null;
       }
 
@@ -151,7 +135,9 @@ export class AuthService {
 
   async login(loginDto: LoginDto) {
     try {
-      const user = await this.validateUser(loginDto.email, loginDto.password);
+      const byPhone = !!loginDto.phone && !loginDto.email;
+      const identifier = byPhone ? loginDto.phone! : loginDto.email!;
+      const user = await this.validateUser(identifier, loginDto.password, byPhone);
 
       if (!user) {
         throw new UnauthorizedException('Invalid credentials');
