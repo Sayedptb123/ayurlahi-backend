@@ -14,8 +14,13 @@ import { ALL_MODULES, MODULE_PRESETS } from '../auth/guards/module.guard';
 
 import { OrganisationUser } from '../organisation-users/entities/organisation-user.entity';
 import { ClinicCapabilities } from '../clinic-capabilities/entities/clinic-capabilities.entity';
+import { ClinicProfile } from './entities/clinic-profile.entity';
+import { ManufacturerProfile } from './entities/manufacturer-profile.entity';
+import { OrganisationContact } from './entities/organisation-contact.entity';
+import { UpdateOrgDetailsDto } from './dto/update-org-details.dto';
 import { UsersService } from '../users/users.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { normalizePhone } from '../common/utils/phone.util';
 
 @Injectable()
 export class OrganisationsService {
@@ -26,6 +31,12 @@ export class OrganisationsService {
     private readonly organisationUserRepository: Repository<OrganisationUser>,
     @InjectRepository(ClinicCapabilities)
     private readonly capabilitiesRepository: Repository<ClinicCapabilities>,
+    @InjectRepository(ClinicProfile)
+    private readonly clinicProfileRepository: Repository<ClinicProfile>,
+    @InjectRepository(ManufacturerProfile)
+    private readonly manufacturerProfileRepository: Repository<ManufacturerProfile>,
+    @InjectRepository(OrganisationContact)
+    private readonly orgContactRepository: Repository<OrganisationContact>,
     private readonly usersService: UsersService,
     private readonly notificationsService: NotificationsService,
   ) { }
@@ -320,6 +331,100 @@ export class OrganisationsService {
     }).catch(() => {});
 
     return saved;
+  }
+
+  // Profile (license/GSTIN) + primary contact (address/phone) for one org.
+  // Used by the PendingApproval details form and, later, org settings.
+  async getDetails(orgId: string) {
+    const org = await this.organisationsRepository.findOne({
+      where: { id: orgId, deletedAt: IsNull() },
+    });
+    if (!org) throw new NotFoundException(`Organisation with ID ${orgId} not found`);
+
+    const profile =
+      org.type === 'CLINIC'
+        ? await this.clinicProfileRepository.findOne({ where: { organisationId: orgId } })
+        : org.type === 'MANUFACTURER'
+          ? await this.manufacturerProfileRepository.findOne({ where: { organisationId: orgId } })
+          : null;
+
+    const contact = await this.orgContactRepository.findOne({
+      where: { organisationId: orgId, isPrimary: true },
+    });
+
+    return {
+      licenseNumber: profile?.licenseNumber ?? null,
+      gstin: profile?.gstin ?? null,
+      address: contact?.addressLine1 ?? null,
+      city: contact?.city ?? null,
+      state: contact?.state ?? null,
+      pincode: contact?.pincode ?? null,
+      orgPhone: contact?.phone ?? null,
+    };
+  }
+
+  async updateDetails(orgId: string, dto: UpdateOrgDetailsDto) {
+    const org = await this.organisationsRepository.findOne({
+      where: { id: orgId, deletedAt: IsNull() },
+    });
+    if (!org) throw new NotFoundException(`Organisation with ID ${orgId} not found`);
+
+    if (dto.licenseNumber !== undefined || dto.gstin !== undefined) {
+      if (org.type === 'CLINIC') {
+        let profile = await this.clinicProfileRepository.findOne({
+          where: { organisationId: orgId },
+        });
+        if (!profile) {
+          profile = this.clinicProfileRepository.create({
+            organisationId: orgId,
+            clinicName: org.name,
+          });
+        }
+        if (dto.licenseNumber !== undefined) profile.licenseNumber = dto.licenseNumber.trim() || null;
+        if (dto.gstin !== undefined) profile.gstin = dto.gstin.trim() || null;
+        await this.clinicProfileRepository.save(profile);
+      } else if (org.type === 'MANUFACTURER') {
+        let profile = await this.manufacturerProfileRepository.findOne({
+          where: { organisationId: orgId },
+        });
+        if (!profile) {
+          profile = this.manufacturerProfileRepository.create({
+            organisationId: orgId,
+            companyName: org.name,
+          });
+        }
+        if (dto.licenseNumber !== undefined) profile.licenseNumber = dto.licenseNumber.trim() || null;
+        if (dto.gstin !== undefined) profile.gstin = dto.gstin.trim() || null;
+        await this.manufacturerProfileRepository.save(profile);
+      }
+    }
+
+    const touchesContact =
+      dto.address !== undefined ||
+      dto.city !== undefined ||
+      dto.state !== undefined ||
+      dto.pincode !== undefined ||
+      dto.orgPhone !== undefined;
+    if (touchesContact) {
+      let contact = await this.orgContactRepository.findOne({
+        where: { organisationId: orgId, isPrimary: true },
+      });
+      if (!contact) {
+        contact = this.orgContactRepository.create({
+          organisationId: orgId,
+          type: 'primary',
+          isPrimary: true,
+        });
+      }
+      if (dto.address !== undefined) contact.addressLine1 = dto.address.trim() || null;
+      if (dto.city !== undefined) contact.city = dto.city.trim() || null;
+      if (dto.state !== undefined) contact.state = dto.state.trim() || null;
+      if (dto.pincode !== undefined) contact.pincode = dto.pincode.trim() || null;
+      if (dto.orgPhone !== undefined) contact.phone = normalizePhone(dto.orgPhone) || null;
+      await this.orgContactRepository.save(contact);
+    }
+
+    return this.getDetails(orgId);
   }
 
   async getCapabilities(orgId: string) {

@@ -5,12 +5,22 @@ import { OrganisationsService } from './organisations.service';
 import { Organisation } from './entities/organisation.entity';
 import { OrganisationUser } from '../organisation-users/entities/organisation-user.entity';
 import { ClinicCapabilities } from '../clinic-capabilities/entities/clinic-capabilities.entity';
+import { ClinicProfile } from './entities/clinic-profile.entity';
+import { ManufacturerProfile } from './entities/manufacturer-profile.entity';
+import { OrganisationContact } from './entities/organisation-contact.entity';
 import { UsersModule } from '../users/users.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Organisation, OrganisationUser, ClinicCapabilities]),
+    TypeOrmModule.forFeature([
+      Organisation,
+      OrganisationUser,
+      ClinicCapabilities,
+      ClinicProfile,
+      ManufacturerProfile,
+      OrganisationContact,
+    ]),
     UsersModule,
     NotificationsModule,
   ],

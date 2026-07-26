@@ -19,6 +19,7 @@ import { StockMovement } from '../inventory/entities/stock-movement.entity';
 import { Supplier } from '../suppliers/entities/supplier.entity';
 import { Admission } from '../retreat/entities/admission.entity';
 import { Room } from '../retreat/entities/room.entity';
+import { OrganisationUser } from '../organisation-users/entities/organisation-user.entity';
 
 @Injectable()
 export class AnalyticsService {
@@ -55,6 +56,8 @@ export class AnalyticsService {
     private admissionsRepository: Repository<Admission>,
     @InjectRepository(Room)
     private roomsRepository: Repository<Room>,
+    @InjectRepository(OrganisationUser)
+    private organisationUsersRepository: Repository<OrganisationUser>,
   ) { }
 
   async getDashboardStats(
@@ -955,6 +958,139 @@ export class AnalyticsService {
       platformSplit,
       dau,
     };
+  }
+
+  /**
+   * 20M — which clinics use which features/modules most (usage_events grouped
+   * by organisation, with each org's top screens nested underneath).
+   */
+  async getFeatureUsageByOrg(startDate?: string, endDate?: string, limit: number = 15) {
+    const orgTotalsQb = this.usageEventRepository
+      .createQueryBuilder('u')
+      .select('u.organisation_id', 'orgId')
+      .addSelect('COUNT(*)', 'totalEvents')
+      .where('u.organisation_id IS NOT NULL');
+    if (startDate) orgTotalsQb.andWhere('u.occurredAt >= :startDate', { startDate });
+    if (endDate) orgTotalsQb.andWhere('u.occurredAt <= :endDate', { endDate });
+    const orgTotals = await orgTotalsQb
+      .groupBy('u.organisation_id')
+      .orderBy('COUNT(*)', 'DESC')
+      .limit(limit)
+      .getRawMany();
+
+    const orgIds = orgTotals.map((r) => r.orgId);
+    if (!orgIds.length) return [];
+
+    const featuresQb = this.usageEventRepository
+      .createQueryBuilder('u')
+      .select('u.organisation_id', 'orgId')
+      .addSelect('u.screenName', 'screenName')
+      .addSelect('COUNT(*)', 'count')
+      .where('u.organisation_id IN (:...orgIds)', { orgIds })
+      .andWhere('u.screenName IS NOT NULL');
+    if (startDate) featuresQb.andWhere('u.occurredAt >= :startDate', { startDate });
+    if (endDate) featuresQb.andWhere('u.occurredAt <= :endDate', { endDate });
+    const featureRows = await featuresQb
+      .groupBy('u.organisation_id')
+      .addGroupBy('u.screenName')
+      .orderBy('COUNT(*)', 'DESC')
+      .getRawMany();
+
+    const orgs = await this.organisationsRepository
+      .createQueryBuilder('org')
+      .select(['org.id AS id', 'org.name AS name'])
+      .where('org.id IN (:...orgIds)', { orgIds })
+      .getRawMany();
+    const nameById = new Map(orgs.map((o) => [o.id, o.name]));
+
+    const featuresByOrg = new Map<string, { screenName: string; count: number }[]>();
+    for (const r of featureRows) {
+      const list = featuresByOrg.get(r.orgId) ?? [];
+      if (list.length < 5) list.push({ screenName: r.screenName, count: parseInt(r.count, 10) || 0 });
+      featuresByOrg.set(r.orgId, list);
+    }
+
+    return orgTotals.map((r) => ({
+      organisationId: r.orgId,
+      organisationName: nameById.get(r.orgId) ?? 'Unknown',
+      totalEvents: parseInt(r.totalEvents, 10) || 0,
+      topFeatures: featuresByOrg.get(r.orgId) ?? [],
+    }));
+  }
+
+  /**
+   * 20M — which staff use which features/modules most. Optionally scoped to
+   * one organisation (used by the dashboard's drill-in from getFeatureUsageByOrg).
+   * Role is the user's *current* organisation_users role, not role-at-event-time.
+   */
+  async getFeatureUsageByUser(
+    organisationId?: string,
+    startDate?: string,
+    endDate?: string,
+    limit: number = 20,
+  ) {
+    const userTotalsQb = this.usageEventRepository
+      .createQueryBuilder('u')
+      .select('u.user_id', 'userId')
+      .addSelect('COUNT(*)', 'totalEvents')
+      .where('u.user_id IS NOT NULL');
+    if (organisationId) userTotalsQb.andWhere('u.organisation_id = :organisationId', { organisationId });
+    if (startDate) userTotalsQb.andWhere('u.occurredAt >= :startDate', { startDate });
+    if (endDate) userTotalsQb.andWhere('u.occurredAt <= :endDate', { endDate });
+    const userTotals = await userTotalsQb
+      .groupBy('u.user_id')
+      .orderBy('COUNT(*)', 'DESC')
+      .limit(limit)
+      .getRawMany();
+
+    const userIds = userTotals.map((r) => r.userId);
+    if (!userIds.length) return [];
+
+    const featuresQb = this.usageEventRepository
+      .createQueryBuilder('u')
+      .select('u.user_id', 'userId')
+      .addSelect('u.screenName', 'screenName')
+      .addSelect('COUNT(*)', 'count')
+      .where('u.user_id IN (:...userIds)', { userIds })
+      .andWhere('u.screenName IS NOT NULL');
+    if (organisationId) featuresQb.andWhere('u.organisation_id = :organisationId', { organisationId });
+    if (startDate) featuresQb.andWhere('u.occurredAt >= :startDate', { startDate });
+    if (endDate) featuresQb.andWhere('u.occurredAt <= :endDate', { endDate });
+    const featureRows = await featuresQb
+      .groupBy('u.user_id')
+      .addGroupBy('u.screenName')
+      .orderBy('COUNT(*)', 'DESC')
+      .getRawMany();
+
+    const users = await this.usersRepository
+      .createQueryBuilder('user')
+      .select(['user.id AS id', 'user.firstName AS "firstName"', 'user.lastName AS "lastName"'])
+      .where('user.id IN (:...userIds)', { userIds })
+      .getRawMany();
+    const userById = new Map(users.map((u) => [u.id, `${u.firstName} ${u.lastName}`]));
+
+    const roleQb = this.organisationUsersRepository
+      .createQueryBuilder('ou')
+      .select(['ou.userId AS "userId"', 'ou.role AS role', 'ou.organisationId AS "organisationId"'])
+      .where('ou.userId IN (:...userIds)', { userIds });
+    if (organisationId) roleQb.andWhere('ou.organisationId = :organisationId', { organisationId });
+    const roleRows = await roleQb.getRawMany();
+    const roleByUser = new Map(roleRows.map((r) => [r.userId, r.role]));
+
+    const featuresByUser = new Map<string, { screenName: string; count: number }[]>();
+    for (const r of featureRows) {
+      const list = featuresByUser.get(r.userId) ?? [];
+      if (list.length < 5) list.push({ screenName: r.screenName, count: parseInt(r.count, 10) || 0 });
+      featuresByUser.set(r.userId, list);
+    }
+
+    return userTotals.map((r) => ({
+      userId: r.userId,
+      userName: userById.get(r.userId) ?? 'Unknown',
+      role: roleByUser.get(r.userId) ?? null,
+      totalEvents: parseInt(r.totalEvents, 10) || 0,
+      topFeatures: featuresByUser.get(r.userId) ?? [],
+    }));
   }
 
   async getMarketplaceAnalytics(days: number = 30) {

@@ -18,6 +18,7 @@ import { InventoryItem } from '../inventory/entities/inventory-item.entity';
 import { StockMovement } from '../inventory/entities/stock-movement.entity';
 import { Admission } from '../retreat/entities/admission.entity';
 import { Room } from '../retreat/entities/room.entity';
+import { OrganisationUser } from '../organisation-users/entities/organisation-user.entity';
 
 @Module({
   imports: [
@@ -25,7 +26,7 @@ import { Room } from '../retreat/entities/room.entity';
       Order, User, Organisation, Dispute,
       Patient, Appointment, PatientBill, Expense, UsageEvent,
       PurchaseOrder, PurchaseOrderItem, OrderItem, InventoryItem, StockMovement,
-      Admission, Room,
+      Admission, Room, OrganisationUser,
     ]),
   ],
   controllers: [AnalyticsController],

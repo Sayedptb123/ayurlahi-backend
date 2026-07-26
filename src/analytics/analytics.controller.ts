@@ -141,7 +141,7 @@ export class AnalyticsController {
     @Body('events') events: any[],
   ) {
     const organisationId = req.user.organisationId;
-    const userId = req.user.id;
+    const userId = req.user.userId;
     return this.analyticsService.recordEvents(events, organisationId, userId);
   }
 
@@ -155,6 +155,41 @@ export class AnalyticsController {
     }
 
     return this.analyticsService.getTelemetryStats();
+  }
+
+  // Phase 20M — which clinics use which features/modules most.
+  @Get('feature-usage/by-org')
+  async getFeatureUsageByOrg(
+    @Request() req,
+    @Query('startDate') startDate?: string,
+    @Query('endDate') endDate?: string,
+  ) {
+    const userRole = req.user.role?.toUpperCase();
+    const isAdmin = userRole === 'ADMIN' || userRole === 'SUPER_ADMIN' || userRole === 'SUPPORT';
+
+    if (!isAdmin) {
+      throw new ForbiddenException('You do not have permission to view feature usage analytics');
+    }
+
+    return this.analyticsService.getFeatureUsageByOrg(startDate, endDate);
+  }
+
+  // Phase 20M — which staff use which features/modules most, optionally scoped to one clinic.
+  @Get('feature-usage/by-user')
+  async getFeatureUsageByUser(
+    @Request() req,
+    @Query('organisationId') organisationId?: string,
+    @Query('startDate') startDate?: string,
+    @Query('endDate') endDate?: string,
+  ) {
+    const userRole = req.user.role?.toUpperCase();
+    const isAdmin = userRole === 'ADMIN' || userRole === 'SUPER_ADMIN' || userRole === 'SUPPORT';
+
+    if (!isAdmin) {
+      throw new ForbiddenException('You do not have permission to view feature usage analytics');
+    }
+
+    return this.analyticsService.getFeatureUsageByUser(organisationId, startDate, endDate);
   }
 
   @Get('marketplace')

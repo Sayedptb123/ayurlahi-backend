@@ -15,6 +15,7 @@ import { OrganisationsService } from './organisations.service';
 import { CreateOrganisationDto } from './dto/create-organisation.dto';
 import { UpdateOrganisationDto } from './dto/update-organisation.dto';
 import { GetOrganisationsDto } from './dto/get-organisations.dto';
+import { UpdateOrgDetailsDto } from './dto/update-org-details.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { ALL_MODULES, MODULE_PRESETS } from '../auth/guards/module.guard';
 
@@ -82,6 +83,30 @@ export class OrganisationsController {
   ) {
     requireTeam(req);
     return this.organisationsService.reject(id, rejectionReason, req.user?.userId);
+  }
+
+  @Get(':id/details')
+  getDetails(@Param('id') id: string, @Request() req) {
+    const isTeam = req.user?.organisationType === 'AYURLAHI_TEAM';
+    const isOwnOrg = req.user?.organisationId === id;
+    if (!isTeam && !isOwnOrg) {
+      throw new ForbiddenException('You can only view your own organisation details');
+    }
+    return this.organisationsService.getDetails(id);
+  }
+
+  @Patch(':id/details')
+  updateDetails(@Param('id') id: string, @Body() dto: UpdateOrgDetailsDto, @Request() req) {
+    // Ayurlahi Team, or the org's own OWNER/MANAGER. Works while the org is
+    // still pending — the PendingApproval screen uses this to collect the
+    // details we no longer ask for during registration.
+    const isTeam = req.user?.organisationType === 'AYURLAHI_TEAM';
+    const isOwnOwnerOrManager =
+      req.user?.organisationId === id && ['OWNER', 'MANAGER'].includes(req.user?.role);
+    if (!isTeam && !isOwnOwnerOrManager) {
+      throw new ForbiddenException('Only Ayurlahi Team, or the organisation OWNER/MANAGER, can update details');
+    }
+    return this.organisationsService.updateDetails(id, dto);
   }
 
   @Get(':id/capabilities')

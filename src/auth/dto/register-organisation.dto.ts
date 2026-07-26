@@ -16,6 +16,9 @@ export class RegisterOrganisationDto {
   @IsEnum(['CLINIC', 'MANUFACTURER']) orgType: 'CLINIC' | 'MANUFACTURER';
   @IsString() @IsNotEmpty() orgName: string;
 
+  // Optional details — the app no longer sends these at registration (they're
+  // collected on the PendingApproval screen via PATCH /organisations/:id/details),
+  // but they remain accepted for older clients and admin tooling.
   @IsOptional() @IsString() licenseNumber?: string;
   @IsOptional() @IsString() gstin?: string;
   @IsOptional() @IsString() address?: string;
@@ -23,5 +26,4 @@ export class RegisterOrganisationDto {
   @IsOptional() @IsString() state?: string;
   @IsOptional() @IsString() pincode?: string;
   @IsOptional() @IsString() orgPhone?: string;
-  @IsOptional() @IsString() whatsappNumber?: string;
 }
