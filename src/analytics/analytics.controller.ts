@@ -194,6 +194,25 @@ export class AnalyticsController {
     return this.analyticsService.getFeatureUsageByUser(organisationId, startDate, endDate, parsedLimit);
   }
 
+  // Which medicines a clinic is searching for / adding to cart — feeds the
+  // clinic detail screen's "Marketplace Activity" section.
+  @Get('marketplace-activity/by-org')
+  async getMarketplaceActivityByOrg(
+    @Request() req,
+    @Query('organisationId') organisationId?: string,
+    @Query('startDate') startDate?: string,
+    @Query('endDate') endDate?: string,
+  ) {
+    const userRole = req.user.role?.toUpperCase();
+    const isAdmin = userRole === 'ADMIN' || userRole === 'SUPER_ADMIN' || userRole === 'SUPPORT';
+
+    if (!isAdmin) {
+      throw new ForbiddenException('You do not have permission to view marketplace activity analytics');
+    }
+
+    return this.analyticsService.getMarketplaceActivityByOrg(organisationId, startDate, endDate);
+  }
+
   @Get('marketplace')
   async getMarketplaceAnalytics(@Request() req, @Query('days') days?: string) {
     const userRole = req.user.role?.toUpperCase();

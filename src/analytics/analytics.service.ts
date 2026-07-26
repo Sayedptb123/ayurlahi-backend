@@ -1096,6 +1096,53 @@ export class AnalyticsService {
     }));
   }
 
+  // Which medicines a clinic is actually searching for / adding to cart —
+  // ProductsScreen's 'search' and 'add_to_cart' events carry this in
+  // metadata (jsonb) already; this is the first place it gets aggregated
+  // and surfaced instead of sitting unused in usage_events.
+  async getMarketplaceActivityByOrg(
+    organisationId?: string,
+    startDate?: string,
+    endDate?: string,
+    limit: number = 20,
+  ) {
+    const searchQb = this.usageEventRepository
+      .createQueryBuilder('u')
+      .select("u.metadata->>'query'", 'query')
+      .addSelect('COUNT(*)', 'count')
+      .where("u.event_type = 'search'")
+      .andWhere("u.metadata->>'query' IS NOT NULL")
+      .andWhere("trim(u.metadata->>'query') != ''");
+    if (organisationId) searchQb.andWhere('u.organisation_id = :organisationId', { organisationId });
+    if (startDate) searchQb.andWhere('u.occurredAt >= :startDate', { startDate });
+    if (endDate) searchQb.andWhere('u.occurredAt <= :endDate', { endDate });
+    const searchRows = await searchQb
+      .groupBy("u.metadata->>'query'")
+      .orderBy('COUNT(*)', 'DESC')
+      .limit(limit)
+      .getRawMany();
+
+    const productsQb = this.usageEventRepository
+      .createQueryBuilder('u')
+      .select("u.metadata->>'productName'", 'productName')
+      .addSelect('COUNT(*)', 'count')
+      .where("u.event_type = 'add_to_cart'")
+      .andWhere("u.metadata->>'productName' IS NOT NULL");
+    if (organisationId) productsQb.andWhere('u.organisation_id = :organisationId', { organisationId });
+    if (startDate) productsQb.andWhere('u.occurredAt >= :startDate', { startDate });
+    if (endDate) productsQb.andWhere('u.occurredAt <= :endDate', { endDate });
+    const productRows = await productsQb
+      .groupBy("u.metadata->>'productName'")
+      .orderBy('COUNT(*)', 'DESC')
+      .limit(limit)
+      .getRawMany();
+
+    return {
+      topSearches: searchRows.map((r) => ({ query: r.query as string, count: parseInt(r.count, 10) || 0 })),
+      topProducts: productRows.map((r) => ({ productName: r.productName as string, count: parseInt(r.count, 10) || 0 })),
+    };
+  }
+
   async getMarketplaceAnalytics(days: number = 30) {
     // 1. Buyer Demographics
     const buyerTypesRaw = await this.organisationsRepository.createQueryBuilder('org')
