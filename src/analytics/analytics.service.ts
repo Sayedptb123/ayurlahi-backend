@@ -1143,6 +1143,52 @@ export class AnalyticsService {
     };
   }
 
+  // Recent booking lifecycle activity (create/confirm/cancel/check-in/promote/
+  // edit/remove) for the clinic detail screen's "Booking Activity" feed —
+  // each row includes the full metadata captured by BookingsScreen's
+  // trackEvent calls (patient/enquiry identity, room, dates, price).
+  private static readonly BOOKING_EVENT_TYPES = [
+    'booking_created',
+    'booking_confirmed',
+    'booking_cancelled',
+    'booking_checked_in',
+    'booking_promoted_to_patient',
+    'booking_removed',
+    'booking_edited',
+  ];
+
+  async getBookingActivityByOrg(organisationId?: string, limit: number = 30) {
+    const qb = this.usageEventRepository
+      .createQueryBuilder('u')
+      .leftJoin('u.user', 'usr')
+      .select(['u.id', 'u.eventType', 'u.metadata', 'u.occurredAt'])
+      .addSelect('usr.id', 'userId')
+      .where('u.event_type IN (:...types)', { types: AnalyticsService.BOOKING_EVENT_TYPES });
+    if (organisationId) qb.andWhere('u.organisation_id = :organisationId', { organisationId });
+    const { entities, raw } = await qb
+      .orderBy('u.occurredAt', 'DESC')
+      .limit(limit)
+      .getRawAndEntities();
+
+    const userIds = [...new Set(raw.map((r) => r.userId).filter((id): id is string => !!id))];
+    const users = userIds.length
+      ? await this.usersRepository
+          .createQueryBuilder('user')
+          .select(['user.id AS id', 'user.firstName AS "firstName"', 'user.lastName AS "lastName"'])
+          .where('user.id IN (:...userIds)', { userIds })
+          .getRawMany()
+      : [];
+    const nameByUserId = new Map(users.map((u) => [u.id, `${u.firstName} ${u.lastName}`]));
+
+    return entities.map((e, i) => ({
+      id: e.id,
+      eventType: e.eventType,
+      occurredAt: e.occurredAt,
+      userName: raw[i]?.userId ? nameByUserId.get(raw[i].userId) ?? null : null,
+      metadata: e.metadata ?? {},
+    }));
+  }
+
   async getMarketplaceAnalytics(days: number = 30) {
     // 1. Buyer Demographics
     const buyerTypesRaw = await this.organisationsRepository.createQueryBuilder('org')

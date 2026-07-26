@@ -213,6 +213,26 @@ export class AnalyticsController {
     return this.analyticsService.getMarketplaceActivityByOrg(organisationId, startDate, endDate);
   }
 
+  // Recent booking lifecycle activity (create/confirm/cancel/check-in/promote/
+  // edit/remove), full detail per event — feeds the clinic detail screen's
+  // "Booking Activity" feed.
+  @Get('booking-activity/by-org')
+  async getBookingActivityByOrg(
+    @Request() req,
+    @Query('organisationId') organisationId?: string,
+    @Query('limit') limit?: string,
+  ) {
+    const userRole = req.user.role?.toUpperCase();
+    const isAdmin = userRole === 'ADMIN' || userRole === 'SUPER_ADMIN' || userRole === 'SUPPORT';
+
+    if (!isAdmin) {
+      throw new ForbiddenException('You do not have permission to view booking activity analytics');
+    }
+
+    const parsedLimit = limit ? Math.min(parseInt(limit, 10) || 30, 100) : undefined;
+    return this.analyticsService.getBookingActivityByOrg(organisationId, parsedLimit);
+  }
+
   @Get('marketplace')
   async getMarketplaceAnalytics(@Request() req, @Query('days') days?: string) {
     const userRole = req.user.role?.toUpperCase();
