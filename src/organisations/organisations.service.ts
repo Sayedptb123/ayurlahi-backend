@@ -161,8 +161,14 @@ export class OrganisationsService {
 
     const queryBuilder = this.organisationsRepository
       .createQueryBuilder('org')
-      .leftJoinAndSelect('org.users', 'orgUser', 'orgUser.isPrimary = :isPrimary', { isPrimary: true })
-      .leftJoinAndSelect('orgUser.user', 'user')
+      .leftJoin('org.users', 'orgUser', 'orgUser.isPrimary = :isPrimary', { isPrimary: true })
+      .leftJoin('orgUser.user', 'user')
+      // Explicit column allowlist for the joined relations — leftJoinAndSelect
+      // would pull every column off the joined User entity, including
+      // passwordHash (bcrypt hash), straight into this admin-facing response.
+      // `org`'s own columns stay selected by default since we never call
+      // .select() to override that.
+      .addSelect(['orgUser.id', 'orgUser.role', 'user.id', 'user.firstName', 'user.lastName', 'user.email', 'user.phone'])
       .where('org.deletedAt IS NULL');
 
     if (search) {

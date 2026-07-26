@@ -85,8 +85,11 @@ export class OrganisationUsersService {
 
     const queryBuilder = this.organisationUsersRepository
       .createQueryBuilder('ou')
-      .leftJoinAndSelect('ou.user', 'user')
-      .leftJoinAndSelect('ou.organisation', 'organisation');
+      .leftJoin('ou.user', 'user')
+      .leftJoinAndSelect('ou.organisation', 'organisation')
+      // Explicit column allowlist for the joined user — leftJoinAndSelect
+      // would pull every column, including passwordHash (bcrypt hash).
+      .addSelect(['user.id', 'user.firstName', 'user.lastName', 'user.email', 'user.phone', 'user.isActive']);
 
     if (userId) {
       queryBuilder.andWhere('ou.userId = :userId', { userId });
@@ -115,6 +118,10 @@ export class OrganisationUsersService {
     const organisationUser = await this.organisationUsersRepository.findOne({
       where: { id },
       relations: ['user', 'organisation'],
+      // Excludes passwordHash — see findAll() above for why this matters.
+      select: {
+        user: { id: true, firstName: true, lastName: true, email: true, phone: true, isActive: true },
+      },
     });
 
     if (!organisationUser) {
@@ -131,6 +138,9 @@ export class OrganisationUsersService {
     return await this.organisationUsersRepository.find({
       where: { userId, organisationId },
       relations: ['user', 'organisation'],
+      select: {
+        user: { id: true, firstName: true, lastName: true, email: true, phone: true, isActive: true },
+      },
     });
   }
 
@@ -209,6 +219,11 @@ export class OrganisationUsersService {
     const organisationUsers = await this.organisationUsersRepository.find({
       where: { organisationId },
       relations: ['user'],
+      // Excludes passwordHash before it ever reaches the `{ ...ou.user }`
+      // spread below — see findAll() above for why this matters.
+      select: {
+        user: { id: true, firstName: true, lastName: true, email: true, phone: true, isActive: true },
+      },
     });
 
     return organisationUsers
