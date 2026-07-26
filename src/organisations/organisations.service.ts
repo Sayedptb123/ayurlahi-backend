@@ -172,8 +172,12 @@ export class OrganisationsService {
       .where('org.deletedAt IS NULL');
 
     if (search) {
+      // clinicName/companyName were dropped from Organisation in the Phase 10
+      // restructure (moved to clinic_profiles/manufacturer_profiles) — this
+      // query referenced the old columns and threw a SQL error (500) on any
+      // search term, silently caught by the frontend as "no results".
       queryBuilder.andWhere(
-        '(org.name ILIKE :search OR org.clinicName ILIKE :search OR org.companyName ILIKE :search OR user.email ILIKE :search)',
+        '(org.name ILIKE :search OR user.email ILIKE :search)',
         { search: `%${search}%` },
       );
     }
