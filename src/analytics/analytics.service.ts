@@ -1077,10 +1077,13 @@ export class AnalyticsService {
     const roleRows = await roleQb.getRawMany();
     const roleByUser = new Map(roleRows.map((r) => [r.userId, r.role]));
 
+    // Uncapped — the Telemetry "clinic detail" screen shows every module a
+    // staff member has used, not just a top-N teaser (unlike featuresByOrg
+    // above, which stays capped since it only feeds a dashboard summary).
     const featuresByUser = new Map<string, { screenName: string; count: number }[]>();
     for (const r of featureRows) {
       const list = featuresByUser.get(r.userId) ?? [];
-      if (list.length < 5) list.push({ screenName: r.screenName, count: parseInt(r.count, 10) || 0 });
+      list.push({ screenName: r.screenName, count: parseInt(r.count, 10) || 0 });
       featuresByUser.set(r.userId, list);
     }
 

@@ -181,6 +181,7 @@ export class AnalyticsController {
     @Query('organisationId') organisationId?: string,
     @Query('startDate') startDate?: string,
     @Query('endDate') endDate?: string,
+    @Query('limit') limit?: string,
   ) {
     const userRole = req.user.role?.toUpperCase();
     const isAdmin = userRole === 'ADMIN' || userRole === 'SUPER_ADMIN' || userRole === 'SUPPORT';
@@ -189,7 +190,8 @@ export class AnalyticsController {
       throw new ForbiddenException('You do not have permission to view feature usage analytics');
     }
 
-    return this.analyticsService.getFeatureUsageByUser(organisationId, startDate, endDate);
+    const parsedLimit = limit ? Math.min(parseInt(limit, 10) || 20, 200) : undefined;
+    return this.analyticsService.getFeatureUsageByUser(organisationId, startDate, endDate, parsedLimit);
   }
 
   @Get('marketplace')
