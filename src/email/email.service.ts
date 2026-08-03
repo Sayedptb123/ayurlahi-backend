@@ -65,6 +65,25 @@ export class EmailService {
     `);
   }
 
+  async sendStaffInvitation(data: {
+    email: string;
+    staffName: string;
+    organisationName: string;
+    invitationToken: string;
+    expiresAt: Date;
+  }): Promise<boolean> {
+    try {
+      await this.send(
+        data.email,
+        `You've been invited to join ${data.organisationName} on Ayurlahi`,
+        this.buildStaffInvitationHtml(data),
+      );
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   async sendAppointmentReminder(data: AppointmentReminderData): Promise<boolean> {
     try {
       await this.send(
@@ -102,6 +121,36 @@ export class EmailService {
     } catch {
       return false;
     }
+  }
+
+  private buildStaffInvitationHtml(data: {
+    staffName: string;
+    organisationName: string;
+    invitationToken: string;
+    expiresAt: Date;
+  }): string {
+    const expiresLabel = data.expiresAt.toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' });
+    return `
+      <div style="font-family:Arial,sans-serif;max-width:500px;margin:0 auto;padding:24px;">
+        <div style="background:#0ea5e9;padding:20px;border-radius:8px 8px 0 0;">
+          <h1 style="color:#fff;margin:0;font-size:20px;">You're invited</h1>
+        </div>
+        <div style="border:1px solid #e2e8f0;border-top:none;padding:24px;border-radius:0 0 8px 8px;">
+          <p>Hi <strong>${data.staffName}</strong>,</p>
+          <p><strong>${data.organisationName}</strong> has invited you to join their team on Ayurlahi Medilink. Here's your invitation code:</p>
+          <p style="font-size:22px;font-weight:bold;letter-spacing:1px;color:#0ea5e9;text-align:center;margin:24px 0;word-break:break-all;">${data.invitationToken}</p>
+          <p style="font-size:13px;color:#334155;">To finish setting up your account:</p>
+          <ol style="font-size:13px;color:#334155;padding-left:20px;margin:8px 0;">
+            <li>Open the Medilink app</li>
+            <li>On the login screen, tap <strong>"Have an invitation code?"</strong></li>
+            <li>Enter the code above and choose a password</li>
+          </ol>
+          <p style="color:#64748b;font-size:13px;">This invitation expires on ${expiresLabel}. If you weren't expecting this, you can ignore this email.</p>
+          <hr style="border:none;border-top:1px solid #e2e8f0;margin:16px 0">
+          <p style="color:#94a3b8;font-size:11px;text-align:center;">Ayurlahi Health Technologies — Medilink</p>
+        </div>
+      </div>
+    `;
   }
 
   private buildReminderHtml(data: AppointmentReminderData): string {

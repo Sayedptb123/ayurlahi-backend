@@ -13,9 +13,11 @@ import {
 } from './entities/staff.entity';
 import { User } from '../users/entities/user.entity';
 import { OrganisationUser } from '../organisation-users/entities/organisation-user.entity';
+import { Organisation } from '../organisations/entities/organisation.entity';
 import { CreateStaffDto } from './dto/create-staff.dto';
 import { UpdateStaffDto } from './dto/update-staff.dto';
 import { GetStaffDto } from './dto/get-staff.dto';
+import { EmailService } from '../email/email.service';
 import * as bcrypt from 'bcryptjs';
 import * as crypto from 'crypto';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -31,7 +33,10 @@ export class StaffService {
     private usersRepository: Repository<User>,
     @InjectRepository(OrganisationUser)
     private organisationUsersRepository: Repository<OrganisationUser>,
+    @InjectRepository(Organisation)
+    private organisationsRepository: Repository<Organisation>,
     private readonly notificationsService: NotificationsService,
+    private readonly emailService: EmailService,
   ) { }
 
   // Clinic positions that clinic users can create
@@ -298,12 +303,23 @@ export class StaffService {
 
       let savedUser: User;
       if (existingUser) {
-        const alreadyInOrg = await this.organisationUsersRepository.findOne({
-          where: { userId: existingUser.id, organisationId },
+        const orgMemberships = await this.organisationUsersRepository.find({
+          where: { userId: existingUser.id },
         });
+        const alreadyInOrg = orgMemberships.find((m) => m.organisationId === organisationId);
         if (alreadyInOrg) {
           throw new ConflictException(
             'A user with this email or phone already belongs to this organisation',
+          );
+        }
+        // STAFF-EMAIL-1 — an email/phone match on a user who already belongs to a
+        // DIFFERENT organisation must never be silently reused: the code below
+        // resets the account's password, which would let this org's admin take
+        // over a stranger's real account. Only a user with no org membership
+        // anywhere (a genuinely orphaned/not-yet-onboarded stub) is safe to claim.
+        if (orgMemberships.length > 0) {
+          throw new ConflictException(
+            'This email or phone number is already registered to a user in a different organisation. Use a different email or phone for this staff member.',
           );
         }
         // Reuse existing user but always apply the new password and activate the account.
@@ -499,12 +515,21 @@ export class StaffService {
 
       let savedUser: User;
       if (existingUser) {
-        const alreadyInOrg = await this.organisationUsersRepository.findOne({
-          where: { userId: existingUser.id, organisationId: updatedStaff.organisationId },
+        const orgMemberships = await this.organisationUsersRepository.find({
+          where: { userId: existingUser.id },
         });
+        const alreadyInOrg = orgMemberships.find((m) => m.organisationId === updatedStaff.organisationId);
         if (alreadyInOrg) {
           throw new ConflictException(
             'A user with this email or phone already belongs to this organisation',
+          );
+        }
+        // STAFF-EMAIL-1 — see matching check in create(): a match on a user who
+        // already belongs to a different organisation must not be silently
+        // granted membership here either.
+        if (orgMemberships.length > 0) {
+          throw new ConflictException(
+            'This email or phone number is already registered to a user in a different organisation. Use a different email or phone for this staff member.',
           );
         }
         savedUser = existingUser;
@@ -717,8 +742,23 @@ export class StaffService {
       await this.staffRepository.save(staff);
       console.log('[Staff Service] Staff record updated');
 
-      // TODO: Send invitation email/SMS
-      // For now, we'll just log the invitation details
+      // T-B8 — actually deliver the invitation now that Resend (V8) is configured.
+      // Fire-and-forget: a delivery failure shouldn't fail the invitation itself,
+      // same pattern as the notification calls elsewhere in this service. SMS
+      // delivery is still unwired (SmsService has no generic template method
+      // yet) — sendSMS is accepted but currently a no-op.
+      if (sendEmail && staff.email) {
+        this.organisationsRepository.findOne({ where: { id: staff.organisationId } })
+          .then((org) => this.emailService.sendStaffInvitation({
+            email: staff.email as string,
+            staffName: `${staff.firstName} ${staff.lastName}`,
+            organisationName: org?.name ?? 'your organisation',
+            invitationToken,
+            expiresAt,
+          }))
+          .catch(() => {});
+      }
+
       console.log('[Staff Service] Invitation created successfully:', {
         staffId: staff.id,
         userId: savedUser.id,
