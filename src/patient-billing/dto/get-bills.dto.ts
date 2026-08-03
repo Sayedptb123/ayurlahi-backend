@@ -2,6 +2,7 @@ import {
   IsOptional,
   IsString,
   IsInt,
+  IsUUID,
   Min,
   IsEnum,
   IsDateString,
@@ -34,6 +35,16 @@ export class GetBillsDto {
   appointmentId?: string;
 
   @IsOptional()
+  @IsString()
+  @MaxLength(36)
+  bookingId?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(36)
+  admissionId?: string;
+
+  @IsOptional()
   @IsEnum(BillStatus)
   status?: BillStatus;
 
@@ -44,4 +55,10 @@ export class GetBillsDto {
   @IsOptional()
   @IsDateString()
   endDate?: string; // Filter by date range
+
+  // Personal "which branch am I viewing" filter (branch switcher) — narrows
+  // within whatever resolveVisibleBranchIds() already allows, never broadens it.
+  @IsOptional()
+  @IsUUID()
+  branchId?: string;
 }

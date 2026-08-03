@@ -9,6 +9,8 @@ import {
   JoinColumn,
 } from 'typeorm';
 import { Organisation } from '../../organisations/entities/organisation.entity';
+import { User } from '../../users/entities/user.entity';
+import { Branch } from '../../branches/entities/branch.entity';
 
 export enum Gender {
   MALE = 'male',
@@ -26,6 +28,9 @@ export class Patient {
 
   @Column({ type: 'varchar', length: 50, name: 'patient_code' })
   patientCode: string;
+
+  @Column({ type: 'varchar', length: 50, nullable: true, name: 'file_number' })
+  fileNumber: string | null;
 
   @Column({ type: 'varchar', length: 100, name: 'first_name' })
   firstName: string;
@@ -63,6 +68,10 @@ export class Patient {
   @Column({ type: 'uuid', nullable: true, name: 'mother_patient_id' })
   motherPatientId: string | null;
 
+  // ADR-004 D9. NULL = organisation-wide, visible regardless of patientVisibility.
+  @Column({ type: 'uuid', nullable: true, name: 'branch_id' })
+  branchId: string | null;
+
   @Column({ type: 'uuid', nullable: true, name: 'created_by' })
   createdBy: string | null;
 
@@ -75,6 +84,18 @@ export class Patient {
   @ManyToOne(() => Organisation)
   @JoinColumn({ name: 'organisation_id' })
   organisation: Organisation;
+
+  @ManyToOne(() => User, { nullable: true })
+  @JoinColumn({ name: 'created_by' })
+  createdByUser: User | null;
+
+  @ManyToOne(() => User, { nullable: true })
+  @JoinColumn({ name: 'updated_by' })
+  updatedByUser: User | null;
+
+  @ManyToOne(() => Branch, { nullable: true })
+  @JoinColumn({ name: 'branch_id' })
+  branch: Branch | null;
 
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;

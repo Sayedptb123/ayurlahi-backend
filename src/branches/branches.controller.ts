@@ -32,6 +32,7 @@ export class BranchesController {
       organisationId,
       createDto,
       req.user?.userId,
+      req.user?.organisationType,
     );
   }
 

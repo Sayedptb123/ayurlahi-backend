@@ -1,4 +1,4 @@
-import { IsOptional, IsString, IsInt, Min, MaxLength } from 'class-validator';
+import { IsOptional, IsString, IsInt, IsUUID, Min, MaxLength } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class GetPatientsDto {
@@ -23,4 +23,10 @@ export class GetPatientsDto {
   @IsString()
   @MaxLength(10)
   bloodGroup?: string;
+
+  // Personal "which branch am I viewing" filter (branch switcher) — narrows
+  // within whatever resolveVisibleBranchIds() already allows, never broadens it.
+  @IsOptional()
+  @IsUUID()
+  branchId?: string;
 }

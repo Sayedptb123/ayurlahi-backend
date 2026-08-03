@@ -92,9 +92,9 @@ export class RetreatController {
     }
 
     @Get('rooms')
-    getRooms(@Request() req) {
+    getRooms(@Request() req, @Query('branchId') branchId?: string) {
         const clinicId = req.user.organisationId;
-        return this.retreatService.getRooms(clinicId);
+        return this.retreatService.getRooms(clinicId, branchId);
     }
 
     @Get('today')
@@ -144,22 +144,22 @@ export class RetreatController {
     }
 
     @Get('admissions')
-    getAdmissions(@Request() req, @Query('patientId') patientId?: string, @Query('status') status?: string) {
+    getAdmissions(@Request() req, @Query('patientId') patientId?: string, @Query('status') status?: string, @Query('branchId') branchId?: string) {
         const clinicId = req.user.organisationId;
-        return this.retreatService.getAdmissions(clinicId, { patientId, status });
+        return this.retreatService.getAdmissions(clinicId, req.user.userId, { patientId, status, branchId }, req.user.role);
     }
 
     // NOTE: must be declared before 'admissions/:id' so it isn't matched as an :id param
     @Get('admissions/stats')
-    getAdmissionStats(@Request() req) {
+    getAdmissionStats(@Request() req, @Query('branchId') branchId?: string) {
         const clinicId = req.user.organisationId;
-        return this.retreatService.getAdmissionStats(clinicId);
+        return this.retreatService.getAdmissionStats(clinicId, req.user.userId, req.user.role, branchId);
     }
 
     @Post('admissions')
     checkIn(@Request() req, @Body() body) {
         const clinicId = req.user.organisationId;
-        return this.retreatService.checkIn(clinicId, body);
+        return this.retreatService.checkIn(clinicId, body, req.user.userId, req.user.role);
     }
 
     // --- ENQUIRY ENDPOINTS ---
@@ -200,7 +200,7 @@ export class RetreatController {
     @Post('bookings/:id/promote')
     promoteEnquiry(@Request() req, @Param('id') id: string) {
         const clinicId = req.user.organisationId;
-        return this.retreatService.promoteEnquiry(clinicId, id);
+        return this.retreatService.promoteEnquiry(clinicId, id, req.user.userId);
     }
 
     @Post('admissions/:id/discharge')
@@ -219,7 +219,7 @@ export class RetreatController {
     @Get('admissions/:id')
     getAdmission(@Request() req, @Param('id') id: string) {
         const clinicId = req.user.organisationId;
-        return this.retreatService.getAdmission(clinicId, id);
+        return this.retreatService.getAdmission(clinicId, id, req.user.userId, req.user.role);
     }
 
     @Patch('packages/:id')
@@ -238,7 +238,7 @@ export class RetreatController {
     @Post('bookings')
     createBooking(@Request() req, @Body() dto: CreateBookingDto) {
         const clinicId = req.user.organisationId;
-        return this.retreatService.createBooking(clinicId, dto);
+        return this.retreatService.createBooking(clinicId, dto, req.user.userId, req.user.role);
     }
 
     @Get('bookings')
@@ -248,9 +248,10 @@ export class RetreatController {
         @Query('roomId') roomId?: string,
         @Query('startDate') startDate?: string,
         @Query('endDate') endDate?: string,
+        @Query('branchId') branchId?: string,
     ) {
         const clinicId = req.user.organisationId;
-        return this.retreatService.getBookings(clinicId, { status, roomId, startDate, endDate });
+        return this.retreatService.getBookings(clinicId, req.user.userId, { status, roomId, startDate, endDate, branchId }, req.user.role);
     }
 
     @Get('bookings/calendar')
@@ -260,13 +261,13 @@ export class RetreatController {
         @Query('endDate') endDate: string,
     ) {
         const clinicId = req.user.organisationId;
-        return this.retreatService.getCalendarData(clinicId, startDate, endDate);
+        return this.retreatService.getCalendarData(clinicId, startDate, endDate, req.user.userId, req.user.role);
     }
 
     @Get('bookings/:id')
     getBookingById(@Request() req, @Param('id') id: string) {
         const clinicId = req.user.organisationId;
-        return this.retreatService.getBookingById(clinicId, id);
+        return this.retreatService.getBookingById(clinicId, id, req.user.userId, req.user.role);
     }
 
     @Patch('bookings/:id')

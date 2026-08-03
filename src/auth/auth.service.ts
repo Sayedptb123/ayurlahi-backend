@@ -27,6 +27,7 @@ import { VerifyRegistrationOtpDto } from './dto/verify-registration-otp.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { NotificationsService } from '../notifications/notifications.service';
 import { SmsService } from '../sms/sms.service';
+import { OrganisationSettingsService } from '../organisation-settings/organisation-settings.service';
 import { EmailService } from '../email/email.service';
 import { IsNull } from 'typeorm';
 import { normalizePhone } from '../common/utils/phone.util';
@@ -77,6 +78,7 @@ export class AuthService {
     private notificationsService: NotificationsService,
     private smsService: SmsService,
     private emailService: EmailService,
+    private organisationSettingsService: OrganisationSettingsService,
   ) { }
 
   private async fetchCapabilities(orgType: string, orgId: string) {
@@ -347,6 +349,11 @@ export class AuthService {
       isActive: true,
     });
     const savedOrg = await this.organisationsRepository.save(org);
+
+    // Default settings row (ADR-004 D12) — every organisation gets one, not
+    // just CLINIC (mirrors OrganisationsService.create(), which this
+    // self-registration path duplicates rather than calls).
+    await this.organisationSettingsService.create(savedOrg.id);
 
     // Auto-create default capabilities row for new CLINIC orgs
     if (savedOrg.type === 'CLINIC') {

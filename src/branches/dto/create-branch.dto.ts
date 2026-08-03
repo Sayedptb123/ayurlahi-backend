@@ -5,8 +5,13 @@ import {
   IsBoolean,
   IsEmail,
   IsUUID,
+  IsEnum,
   MaxLength,
 } from 'class-validator';
+import {
+  PatientVisibility,
+  StaffPolicy,
+} from '../../organisation-settings/entities/organisation-settings.entity';
 
 export class CreateBranchDto {
   @IsNotEmpty()
@@ -80,6 +85,18 @@ export class CreateBranchDto {
   @IsOptional()
   @IsString()
   notes?: string;
+
+  // ADR-004 D2/D5 — only read when this call creates the organisation's first
+  // additional branch (existingCount === 0 in BranchesService.create()); every
+  // later branch-creation call ignores these fields, since that code path
+  // never runs again.
+  @IsOptional()
+  @IsEnum(PatientVisibility)
+  patientVisibility?: PatientVisibility;
+
+  @IsOptional()
+  @IsEnum(StaffPolicy)
+  staffPolicy?: StaffPolicy;
 }
 
 

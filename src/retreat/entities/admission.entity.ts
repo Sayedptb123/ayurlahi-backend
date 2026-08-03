@@ -10,6 +10,7 @@ import {
 } from 'typeorm';
 import { Organisation } from '../../organisations/entities/organisation.entity';
 import { Patient } from '../../patients/entities/patient.entity';
+import { Branch } from '../../branches/entities/branch.entity';
 import { Room } from './room.entity';
 import { TreatmentPackage } from './treatment-package.entity';
 import { RoomBooking } from './room-booking.entity';
@@ -59,6 +60,14 @@ export class Admission {
     @ManyToOne(() => RoomBooking, { nullable: true })
     @JoinColumn({ name: 'booking_id' })
     booking: RoomBooking | null;
+
+    // ADR-004 D9. NULL = organisation-wide.
+    @Column({ type: 'uuid', nullable: true, name: 'branch_id' })
+    branchId: string | null;
+
+    @ManyToOne(() => Branch, { nullable: true })
+    @JoinColumn({ name: 'branch_id' })
+    branch: Branch | null;
 
     @Column({ type: 'timestamp', name: 'check_in_date' })
     checkInDate: Date;

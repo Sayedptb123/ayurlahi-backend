@@ -16,6 +16,7 @@ import { UpdateUserDto } from './dto/update-user.dto';
 import { normalizePhone } from '../common/utils/phone.util';
 import { GetUsersDto } from './dto/get-users.dto';
 import { RoleUtils } from '../common/utils/role.utils';
+import { OrganisationSettingsService } from '../organisation-settings/organisation-settings.service';
 
 @Injectable()
 export class UsersService {
@@ -26,6 +27,7 @@ export class UsersService {
     private organisationsRepository: Repository<Organisation>,
     @InjectRepository(OrganisationUser)
     private organisationUsersRepository: Repository<OrganisationUser>,
+    private organisationSettingsService: OrganisationSettingsService,
   ) { }
 
   async findByEmail(email: string): Promise<User | null> {
@@ -174,6 +176,10 @@ export class UsersService {
       });
 
       const savedOrg = await this.organisationsRepository.save(org);
+
+      // Default settings row (ADR-004 D12) — this is a third, independent
+      // org-creation path (admin-created user+org), same gap as auth.service.ts.
+      await this.organisationSettingsService.create(savedOrg.id);
 
       // Link User to Organisation via OrganisationUser
       const orgUser = this.organisationUsersRepository.create({

@@ -44,6 +44,12 @@ export class CreateBookingDto {
     @IsOptional()
     @IsString()
     notes?: string;
+
+    // ADR-004 D9. Omit for organisation-wide (NULL); validated but not yet
+    // enforced at read time until Phase 4.
+    @IsOptional()
+    @IsUUID()
+    branchId?: string;
 }
 
 export class UpdateBookingDto {
@@ -88,6 +94,11 @@ export class UpdateBookingDto {
     @IsOptional()
     @IsString()
     notes?: string;
+
+    // ADR-004 D9. See CreateBookingDto.
+    @IsOptional()
+    @IsUUID()
+    branchId?: string;
 }
 
 export class CheckAvailabilityDto {

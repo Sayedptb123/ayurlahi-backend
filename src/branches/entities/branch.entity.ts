@@ -12,6 +12,8 @@ import {
 import { Organisation } from '../../organisations/entities/organisation.entity';
 import { User } from '../../users/entities/user.entity';
 
+export type BranchApprovalStatus = 'pending' | 'approved' | 'rejected';
+
 @Entity('branches')
 @Index(['organisationId', 'deletedAt'])
 @Index(['isActive', 'deletedAt'])
@@ -76,6 +78,21 @@ export class Branch {
 
   @Column({ type: 'boolean', default: false, name: 'is_primary' })
   isPrimary: boolean;
+
+  // ADR-004 D13 — requesting a branch under the "same hospital" D1 path goes
+  // through Ayurlahi approval, same pattern as organisation registration. A
+  // pending branch is not usable (Phase 4 enforcement).
+  @Column({ type: 'varchar', length: 20, default: 'pending', name: 'approval_status' })
+  approvalStatus: BranchApprovalStatus;
+
+  @Column({ type: 'text', nullable: true, name: 'rejection_reason' })
+  rejectionReason: string | null;
+
+  @Column({ type: 'timestamp', nullable: true, name: 'approved_at' })
+  approvedAt: Date | null;
+
+  @Column({ type: 'uuid', nullable: true, name: 'approved_by' })
+  approvedBy: string | null;
 
   @Column({ type: 'jsonb', nullable: true, name: 'operating_hours' })
   operatingHours: Record<string, any> | null;

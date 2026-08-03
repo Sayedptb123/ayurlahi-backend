@@ -21,6 +21,7 @@ import { UpdateOrgDetailsDto } from './dto/update-org-details.dto';
 import { UsersService } from '../users/users.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { normalizePhone } from '../common/utils/phone.util';
+import { OrganisationSettingsService } from '../organisation-settings/organisation-settings.service';
 
 @Injectable()
 export class OrganisationsService {
@@ -39,6 +40,7 @@ export class OrganisationsService {
     private readonly orgContactRepository: Repository<OrganisationContact>,
     private readonly usersService: UsersService,
     private readonly notificationsService: NotificationsService,
+    private readonly organisationSettingsService: OrganisationSettingsService,
   ) { }
 
   private async getTeamUserIds(): Promise<string[]> {
@@ -73,6 +75,11 @@ export class OrganisationsService {
     });
 
     const savedOrg = await this.organisationsRepository.save(organisation);
+
+    // Every organisation gets a default settings row (ADR-004 D12) — not just
+    // CLINIC, since branches/staff-assignment policy isn't clinic-specific the
+    // way clinic_capabilities is.
+    await this.organisationSettingsService.create(savedOrg.id);
 
     // CLINIC orgs get the full default module set on creation so a new clinic is
     // never in a module-less (booking-403) state — matches self-registration. The

@@ -2,6 +2,7 @@ import {
   Injectable,
   NotFoundException,
   ConflictException,
+  BadRequestException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, IsNull } from 'typeorm';
@@ -34,6 +35,10 @@ export class StaffBranchAssignmentsService {
     });
     if (!branch) {
       throw new NotFoundException('Branch not found');
+    }
+    // ADR-004 D13 — a pending/rejected branch is not usable yet.
+    if (branch.approvalStatus !== 'approved') {
+      throw new BadRequestException('Branch is not yet approved and cannot be assigned staff');
     }
 
     // Verify staff exists and belongs to organisation

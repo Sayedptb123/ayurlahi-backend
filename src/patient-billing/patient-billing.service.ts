@@ -7,17 +7,21 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In, EntityManager } from 'typeorm';
-import { PatientBill, BillStatus } from './entities/patient-bill.entity';
-import { BillItem } from './entities/bill-item.entity';
+import { PatientBill, BillStatus, PaymentMethod } from './entities/patient-bill.entity';
+import { BillItem, BillItemType } from './entities/bill-item.entity';
 import { PatientBillPayment } from './entities/patient-bill-payment.entity';
 import { Patient } from '../patients/entities/patient.entity';
 import { Appointment } from '../appointments/entities/appointment.entity';
 import { OrganisationUser } from '../organisation-users/entities/organisation-user.entity';
+import { RoomBooking } from '../retreat/entities/room-booking.entity';
+import { Admission } from '../retreat/entities/admission.entity';
+import { Branch } from '../branches/entities/branch.entity';
 import { CreateBillDto } from './dto/create-bill.dto';
 import { UpdateBillDto } from './dto/update-bill.dto';
 import { PaymentDto } from './dto/payment.dto';
 import { GetBillsDto } from './dto/get-bills.dto';
 import { NotificationsService } from '../notifications/notifications.service';
+import { BranchVisibilityService } from '../branch-visibility/branch-visibility.service';
 
 @Injectable()
 export class PatientBillingService {
@@ -34,7 +38,14 @@ export class PatientBillingService {
     private appointmentsRepository: Repository<Appointment>,
     @InjectRepository(OrganisationUser)
     private orgUserRepository: Repository<OrganisationUser>,
+    @InjectRepository(RoomBooking)
+    private roomBookingsRepository: Repository<RoomBooking>,
+    @InjectRepository(Admission)
+    private admissionsRepository: Repository<Admission>,
+    @InjectRepository(Branch)
+    private branchesRepository: Repository<Branch>,
     private notificationsService: NotificationsService,
+    private branchVisibilityService: BranchVisibilityService,
   ) {}
 
   private calculateBillTotals(items: BillItem[]): { subtotal: number } {
@@ -44,6 +55,88 @@ export class PatientBillingService {
       0,
     );
     return { subtotal };
+  }
+
+  // Builds a PatientBill + BillItem[] (+ first ledger payment, if an advance was
+  // already paid) from booking/admission-derived line items, inside the caller's
+  // own transaction (ADR-003 Phase 2). Used by RetreatService.checkIn() — kept
+  // here so bill/bill-item/ledger construction has one owner, not two parallel
+  // paths (this service's own `create()`, and a second inline copy in RetreatService).
+  // Takes the caller's EntityManager rather than opening its own transaction, so it
+  // participates in checkIn()'s existing locked transaction instead of a separate one.
+  async buildBillFromBooking(
+    manager: EntityManager,
+    params: {
+      organisationId: string;
+      patientId: string;
+      bookingId: string | null;
+      admissionId: string;
+      lineItems: Array<{ name: string; unitPrice: number }>;
+      advancePaid: number;
+      createdBy?: string | null;
+      branchId?: string | null;
+    },
+  ): Promise<PatientBill> {
+    const { organisationId, patientId, bookingId, admissionId, lineItems, advancePaid, createdBy, branchId } = params;
+
+    const subtotal = lineItems.reduce((s, i) => s + i.unitPrice, 0);
+    const status =
+      advancePaid <= 0 ? BillStatus.PENDING
+      : subtotal > 0 && advancePaid >= subtotal ? BillStatus.PAID
+      : subtotal > 0 ? BillStatus.PARTIAL
+      : BillStatus.PENDING;
+
+    const billCount = await manager.count(PatientBill, { where: { organisationId } });
+    const billNumber = `BILL-${String(billCount + 1).padStart(5, '0')}`;
+
+    const bill = manager.create(PatientBill, {
+      organisationId,
+      patientId,
+      bookingId,
+      admissionId,
+      billNumber,
+      billDate: new Date().toISOString().slice(0, 10) as unknown as Date,
+      subtotal,
+      discount: 0,
+      tax: 0,
+      paidAmount: advancePaid,
+      status,
+      createdBy: createdBy ?? null,
+      branchId: branchId ?? null,
+    });
+    const savedBill = await manager.save(PatientBill, bill);
+
+    if (lineItems.length > 0) {
+      await manager.save(
+        BillItem,
+        lineItems.map((i) =>
+          manager.create(BillItem, {
+            billId: savedBill.id,
+            itemType: BillItemType.ACCOMMODATION,
+            itemName: i.name,
+            quantity: 1,
+            unitPrice: i.unitPrice,
+            discount: 0,
+            total: i.unitPrice,
+          }),
+        ),
+      );
+    }
+
+    if (advancePaid > 0) {
+      const advance = manager.create(PatientBillPayment, {
+        organisationId,
+        billId: savedBill.id,
+        amount: advancePaid,
+        paidAt: new Date().toISOString().slice(0, 10),
+        paymentMethod: PaymentMethod.CASH,
+        notes: 'Advance paid at booking',
+        createdBy: createdBy ?? null,
+      });
+      await manager.save(PatientBillPayment, advance);
+    }
+
+    return savedBill;
   }
 
   async create(
@@ -114,6 +207,40 @@ export class PatientBillingService {
       }
     }
 
+    if (createDto.bookingId) {
+      const booking = await this.roomBookingsRepository.findOne({
+        where: { id: createDto.bookingId },
+      });
+      if (!booking) {
+        throw new NotFoundException('Booking not found');
+      }
+      if (booking.organisationId !== clinicId) {
+        throw new ForbiddenException('Booking does not belong to this clinic');
+      }
+    }
+
+    if (createDto.admissionId) {
+      const admission = await this.admissionsRepository.findOne({
+        where: { id: createDto.admissionId },
+      });
+      if (!admission) {
+        throw new NotFoundException('Admission not found');
+      }
+      if (admission.organisationId !== clinicId) {
+        throw new ForbiddenException('Admission does not belong to this clinic');
+      }
+    }
+
+    // ADR-004 D9 — validated now even though nothing reads it until Phase 4.
+    if (createDto.branchId) {
+      const branch = await this.branchesRepository.findOne({
+        where: { id: createDto.branchId, organisationId: clinicId },
+      });
+      if (!branch) {
+        throw new NotFoundException('Branch not found in this organisation');
+      }
+    }
+
     if (!createDto.items || createDto.items.length === 0) {
       throw new BadRequestException('Bill must have at least one item');
     }
@@ -149,6 +276,10 @@ export class PatientBillingService {
       organisationId: clinicId,
       patientId: createDto.patientId,
       appointmentId: createDto.appointmentId || null,
+      bookingId: createDto.bookingId || null,
+      admissionId: createDto.admissionId || null,
+      branchId: createDto.branchId || null,
+      createdBy: userId,
       billNumber: createDto.billNumber,
       billDate: new Date(createDto.billDate),
       dueDate: createDto.dueDate ? new Date(createDto.dueDate) : null,
@@ -178,9 +309,12 @@ export class PatientBillingService {
       limit = 20,
       patientId,
       appointmentId,
+      bookingId,
+      admissionId,
       status,
       startDate,
       endDate,
+      branchId,
     } = query;
     const skip = (page - 1) * limit;
 
@@ -205,6 +339,32 @@ export class PatientBillingService {
       queryBuilder.where('bill.organisationId = :organisationId', {
         organisationId,
       });
+
+      // ADR-004 D9/Phase 4 — branch-level visibility, additive on top of the
+      // organisation filter above, never a replacement for it.
+      const visibleBranchIds = await this.branchVisibilityService.resolveVisibleBranchIds(
+        userId,
+        organisationId,
+        userRole,
+      );
+      if (visibleBranchIds !== null) {
+        if (visibleBranchIds.length > 0) {
+          queryBuilder.andWhere(
+            '(bill.branchId IS NULL OR bill.branchId IN (:...visibleBranchIds))',
+            { visibleBranchIds },
+          );
+        } else {
+          queryBuilder.andWhere('bill.branchId IS NULL');
+        }
+      }
+
+      // Branch switcher (personal view filter) — ANDed on top of the visibility
+      // filter above, so it can only narrow further, never broaden it. Strict
+      // match: "All Locations" is the combined view, so a specific branch
+      // selection means only that branch's own records, not org-wide too.
+      if (branchId) {
+        queryBuilder.andWhere('bill.branchId = :selectedBranchId', { selectedBranchId: branchId });
+      }
     }
 
     if (patientId) {
@@ -214,6 +374,16 @@ export class PatientBillingService {
     if (appointmentId) {
       queryBuilder.andWhere('bill.appointmentId = :appointmentId', {
         appointmentId,
+      });
+    }
+
+    if (bookingId) {
+      queryBuilder.andWhere('bill.bookingId = :bookingId', { bookingId });
+    }
+
+    if (admissionId) {
+      queryBuilder.andWhere('bill.admissionId = :admissionId', {
+        admissionId,
       });
     }
 
@@ -262,6 +432,19 @@ export class PatientBillingService {
     if (organisationType === 'CLINIC') {
       if (!organisationId || organisationId !== bill.organisationId) {
         throw new ForbiddenException('You do not have access to this bill');
+      }
+
+      // ADR-004 D9/Phase 4 — branch-level visibility, additive on top of the
+      // organisation check above.
+      if (bill.branchId) {
+        const visibleBranchIds = await this.branchVisibilityService.resolveVisibleBranchIds(
+          userId,
+          organisationId,
+          userRole,
+        );
+        if (visibleBranchIds !== null && !visibleBranchIds.includes(bill.branchId)) {
+          throw new ForbiddenException('You do not have access to this bill');
+        }
       }
     }
 
@@ -328,6 +511,33 @@ export class PatientBillingService {
       }
     }
 
+    if (updateDto.bookingId && updateDto.bookingId !== bill.bookingId) {
+      const booking = await this.roomBookingsRepository.findOne({
+        where: { id: updateDto.bookingId },
+      });
+      if (!booking || booking.organisationId !== bill.organisationId) {
+        throw new ForbiddenException('Booking does not belong to this clinic');
+      }
+    }
+
+    if (updateDto.admissionId && updateDto.admissionId !== bill.admissionId) {
+      const admission = await this.admissionsRepository.findOne({
+        where: { id: updateDto.admissionId },
+      });
+      if (!admission || admission.organisationId !== bill.organisationId) {
+        throw new ForbiddenException('Admission does not belong to this clinic');
+      }
+    }
+
+    if (updateDto.branchId && updateDto.branchId !== bill.branchId) {
+      const branch = await this.branchesRepository.findOne({
+        where: { id: updateDto.branchId, organisationId: bill.organisationId },
+      });
+      if (!branch) {
+        throw new NotFoundException('Branch not found in this organisation');
+      }
+    }
+
     if (updateDto.items !== undefined) {
       await this.billItemsRepository.delete({ billId: bill.id });
       bill.items = updateDto.items.map((item) =>
@@ -361,6 +571,10 @@ export class PatientBillingService {
     if (updateDto.patientId !== undefined) bill.patientId = updateDto.patientId;
     if (updateDto.appointmentId !== undefined)
       bill.appointmentId = updateDto.appointmentId;
+    if (updateDto.bookingId !== undefined) bill.bookingId = updateDto.bookingId;
+    if (updateDto.admissionId !== undefined)
+      bill.admissionId = updateDto.admissionId;
+    if (updateDto.branchId !== undefined) bill.branchId = updateDto.branchId;
     if (updateDto.billDate !== undefined)
       bill.billDate = new Date(updateDto.billDate);
     if (updateDto.dueDate !== undefined)
@@ -383,6 +597,8 @@ export class PatientBillingService {
         bill.status = BillStatus.PENDING;
       }
     }
+
+    bill.updatedBy = userId;
 
     return this.billsRepository.save(bill);
   }

@@ -20,6 +20,17 @@ export class UpdatePatientDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(50)
+  fileNumber?: string;
+
+  // ADR-004 D9. See CreatePatientDto — same validation applies on change.
+  @IsOptional()
+  @IsString()
+  @MaxLength(36)
+  branchId?: string;
+
+  @IsOptional()
+  @IsString()
   @MaxLength(100)
   firstName?: string;
 

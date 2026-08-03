@@ -68,10 +68,27 @@ export class EmergencyContactDto {
 }
 
 export class CreatePatientDto {
-  @IsNotEmpty()
+  // Optional manual override — patientCode (the system MRN) is server-generated
+  // by default (see PatientsService.create()). Only supply this for a deliberate
+  // override (e.g. data import preserving an existing code).
+  @IsOptional()
   @IsString()
   @MaxLength(50)
-  patientId: string;
+  patientId?: string;
+
+  // The hospital's own legacy/manual file number — distinct from patientCode/MRN.
+  @IsOptional()
+  @IsString()
+  @MaxLength(50)
+  fileNumber?: string;
+
+  // ADR-004 D9. Omit for organisation-wide (NULL); no-op until Phase 4's
+  // query enforcement lands, but validated (must belong to the same org) from
+  // this phase onward so branch data is never wrong even before it's read.
+  @IsOptional()
+  @IsString()
+  @MaxLength(36)
+  branchId?: string;
 
   @IsNotEmpty()
   @IsString()

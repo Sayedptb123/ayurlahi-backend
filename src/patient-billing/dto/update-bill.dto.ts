@@ -30,6 +30,22 @@ export class UpdateBillDto {
   appointmentId?: string;
 
   @IsOptional()
+  @IsString()
+  @MaxLength(36)
+  bookingId?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(36)
+  admissionId?: string;
+
+  // ADR-004 D9. See CreateBillDto.
+  @IsOptional()
+  @IsString()
+  @MaxLength(36)
+  branchId?: string;
+
+  @IsOptional()
   @IsDateString()
   billDate?: string;
 

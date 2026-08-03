@@ -1,7 +1,7 @@
 import { Injectable, NotFoundException, BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
 import * as XLSX from 'xlsx';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, Between, In, Not, DataSource, EntityManager } from 'typeorm';
+import { Repository, Between, In, Not, Or, Equal, IsNull, DataSource, EntityManager } from 'typeorm';
 import { Room, RoomStatus } from './entities/room.entity';
 import { RoomCategory } from './entities/room-category.entity';
 import { RoomCategoryPricing } from './entities/room-category-pricing.entity';
@@ -12,15 +12,16 @@ import { RoomBooking, BookingStatus } from './entities/room-booking.entity';
 import { BookingEnquiry, EnquiryStatus } from './entities/booking-enquiry.entity';
 import { OrganisationUser } from '../organisation-users/entities/organisation-user.entity';
 import { Patient } from '../patients/entities/patient.entity';
+import { Branch } from '../branches/entities/branch.entity';
 import { ClinicCapabilities } from '../clinic-capabilities/entities/clinic-capabilities.entity';
-import { PatientBill, BillStatus, PaymentMethod } from '../patient-billing/entities/patient-bill.entity';
-import { BillItem, BillItemType } from '../patient-billing/entities/bill-item.entity';
-import { PatientBillPayment } from '../patient-billing/entities/patient-bill-payment.entity';
+import { PatientBillingService } from '../patient-billing/patient-billing.service';
+import { PatientsService } from '../patients/patients.service';
 import { CreateBookingDto, UpdateBookingDto, CheckAvailabilityDto } from './dto/booking.dto';
 import { CreateEnquiryDto, UpdateEnquiryDto, ConvertEnquiryDto } from './dto/enquiry.dto';
 import { BookingFieldDefinition } from './entities/booking-field-definition.entity';
 import { CreateFieldDefinitionDto, UpdateFieldDefinitionDto } from './dto/field-definition.dto';
 import { NotificationsService } from '../notifications/notifications.service';
+import { BranchVisibilityService } from '../branch-visibility/branch-visibility.service';
 
 // Phase 0: half-open interval overlap. Two ranges [aStart,aEnd) and [bStart,bEnd)
 // overlap iff aStart < bEnd AND aEnd > bStart. Back-to-back (a ends when b starts)
@@ -56,16 +57,13 @@ export class RetreatService {
         private categoryPricingRepo: Repository<RoomCategoryPricing>,
         @InjectRepository(RoomPricingOverride)
         private roomPricingOverrideRepo: Repository<RoomPricingOverride>,
-        @InjectRepository(PatientBill)
-        private billRepo: Repository<PatientBill>,
-        @InjectRepository(BillItem)
-        private billItemRepo: Repository<BillItem>,
-        @InjectRepository(PatientBillPayment)
-        private billPaymentRepo: Repository<PatientBillPayment>,
         @InjectRepository(BookingFieldDefinition)
         private fieldDefinitionRepo: Repository<BookingFieldDefinition>,
         private dataSource: DataSource,
         private notificationsService: NotificationsService,
+        private patientBillingService: PatientBillingService,
+        private patientsService: PatientsService,
+        private branchVisibilityService: BranchVisibilityService,
     ) { }
 
     // Map a clinic_capabilities row to the set of care programs the org is allowed
@@ -265,9 +263,14 @@ export class RetreatService {
         return none;
     }
 
-    async getRooms(clinicId: string) {
+    async getRooms(clinicId: string, branchId?: string) {
+        const where: any = { organisationId: clinicId };
+        // Branch switcher (personal view filter) — rooms are a physical asset
+        // (D14), not part of the patientVisibility policy, so a strict match
+        // is correct here (no BranchVisibilityService involved).
+        if (branchId) where.branchId = branchId;
         const rooms = await this.roomRepo.find({
-            where: { organisationId: clinicId },
+            where,
             relations: ['roomCategory'],
             order: { roomNumber: 'ASC' },
         });
@@ -357,10 +360,19 @@ export class RetreatService {
         return { arrivals, departures, holds, followUps };
     }
 
-    async createRoom(clinicId: string, data: { roomNumber: string; floor?: string; roomCategoryId?: string; capacity?: number; amenities?: string[]; description?: string }) {
+    async createRoom(clinicId: string, data: { roomNumber: string; floor?: string; roomCategoryId?: string; capacity?: number; amenities?: string[]; description?: string; branchId?: string }) {
         if (data.roomCategoryId) {
             const cat = await this.categoryRepo.findOne({ where: { id: data.roomCategoryId, organisationId: clinicId } });
             if (!cat) throw new NotFoundException('Room category not found');
+        }
+        // ADR-004 D14 — a room is a physical asset that exists in exactly one
+        // location; the column existed since D14 but was never actually
+        // validated/set anywhere until now.
+        if (data.branchId) {
+            const branch = await this.dataSource.manager.findOne(Branch, {
+                where: { id: data.branchId, organisationId: clinicId },
+            });
+            if (!branch) throw new NotFoundException('Branch not found in this organisation');
         }
         const room = this.roomRepo.create({
             roomNumber: data.roomNumber,
@@ -370,6 +382,7 @@ export class RetreatService {
             capacity: data.capacity ?? null,
             amenities: data.amenities ?? null,
             organisationId: clinicId,
+            branchId: data.branchId ?? null,
         });
         const saved = await this.roomRepo.save(room);
         const cat = saved.roomCategoryId ? await this.categoryRepo.findOne({ where: { id: saved.roomCategoryId } }) : null;
@@ -416,12 +429,26 @@ export class RetreatService {
         return this.packageRepo.save(pkg);
     }
 
-    async getAdmission(clinicId: string, id: string) {
+    async getAdmission(clinicId: string, id: string, userId?: string, userRole?: string) {
         const admission = await this.admissionRepo.findOne({
             where: { id, organisationId: clinicId },
             relations: ['patient', 'room', 'treatmentPackage'],
         });
         if (!admission) throw new NotFoundException('Admission not found');
+
+        // ADR-004 D9/Phase 4 — branch-level visibility, additive on top of the
+        // organisation check above.
+        if (admission.branchId) {
+            const visibleBranchIds = await this.branchVisibilityService.resolveVisibleBranchIds(
+                userId,
+                clinicId,
+                userRole,
+            );
+            if (visibleBranchIds !== null && !visibleBranchIds.includes(admission.branchId)) {
+                throw new ForbiddenException('You do not have access to this admission');
+            }
+        }
+
         return admission;
     }
 
@@ -440,11 +467,40 @@ export class RetreatService {
     }
 
     // --- ADMISSIONS ---
-    async getAdmissions(clinicId: string, params?: { patientId?: string; status?: string }) {
+    async getAdmissions(clinicId: string, userId?: string, params?: { patientId?: string; status?: string; branchId?: string }, userRole?: string) {
         const where: any = { organisationId: clinicId };
         if (params?.patientId) where.patientId = params.patientId;
         if (params?.status) where.status = params.status;
         else where.status = AdmissionStatus.ACTIVE;
+
+        // ADR-004 D9/Phase 4 — branch-level visibility, additive on top of the
+        // organisation filter above, never a replacement for it.
+        const visibleBranchIds = await this.branchVisibilityService.resolveVisibleBranchIds(
+            userId,
+            clinicId,
+            userRole,
+        );
+        const selected = params?.branchId;
+        if (visibleBranchIds === null) {
+            // Unrestricted (shared policy, or org-wide role) — narrow to the
+            // switcher's selection if one was made, else no branch filter at all.
+            // Strict match, not OR-NULL: "All Locations" is the combined view,
+            // so a specific selection means only that branch's own records.
+            if (selected) where.branchId = Equal(selected);
+        } else if (visibleBranchIds.length === 0) {
+            // No active assignment at all — fail closed regardless of selection.
+            // This is access control, not the switcher, so OR-NULL stays.
+            where.branchId = IsNull();
+        } else if (selected && visibleBranchIds.includes(selected)) {
+            // Narrow the caller's visible set down to just the selected branch.
+            where.branchId = Equal(selected);
+        } else {
+            // No selection, or selection outside the visible set — unchanged
+            // visibility behaviour (never broadened by an invalid selection).
+            // This is access control (Phase 4), not the switcher, so OR-NULL stays.
+            where.branchId = Or(IsNull(), In(visibleBranchIds));
+        }
+
         return this.admissionRepo.find({
             where,
             relations: ['patient', 'room', 'treatmentPackage'],
@@ -454,7 +510,7 @@ export class RetreatService {
 
     // Dashboard stats: current ward occupancy + today's admits/discharges.
     // "Today" is the IST calendar day (clinics operate in India) expressed as a UTC range.
-    async getAdmissionStats(clinicId: string) {
+    async getAdmissionStats(clinicId: string, userId?: string, userRole?: string, branchId?: string) {
         const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
         const istNow = new Date(Date.now() + IST_OFFSET_MS);
         const y = istNow.getUTCFullYear();
@@ -463,18 +519,37 @@ export class RetreatService {
         const startUtc = new Date(Date.UTC(y, m, d, 0, 0, 0, 0) - IST_OFFSET_MS);
         const endUtc = new Date(Date.UTC(y, m, d, 23, 59, 59, 999) - IST_OFFSET_MS);
 
+        // ADR-004 D9/Phase 4 visibility, composed with the branch switcher's
+        // strict narrowing — same pattern as getAdmissions().
+        const visibleBranchIds = await this.branchVisibilityService.resolveVisibleBranchIds(
+            userId,
+            clinicId,
+            userRole,
+        );
+        const branchWhere: any = {};
+        if (visibleBranchIds === null) {
+            if (branchId) branchWhere.branchId = Equal(branchId);
+        } else if (visibleBranchIds.length === 0) {
+            branchWhere.branchId = IsNull();
+        } else if (branchId && visibleBranchIds.includes(branchId)) {
+            branchWhere.branchId = Equal(branchId);
+        } else {
+            branchWhere.branchId = Or(IsNull(), In(visibleBranchIds));
+        }
+
         const [currentInpatients, admitsToday, dischargesToday] = await Promise.all([
             this.admissionRepo.count({
-                where: { organisationId: clinicId, status: AdmissionStatus.ACTIVE },
+                where: { organisationId: clinicId, status: AdmissionStatus.ACTIVE, ...branchWhere },
             }),
             this.admissionRepo.count({
-                where: { organisationId: clinicId, checkInDate: Between(startUtc, endUtc) },
+                where: { organisationId: clinicId, checkInDate: Between(startUtc, endUtc), ...branchWhere },
             }),
             this.admissionRepo.count({
                 where: {
                     organisationId: clinicId,
                     status: AdmissionStatus.DISCHARGED,
                     actualCheckOutDate: Between(startUtc, endUtc),
+                    ...branchWhere,
                 },
             }),
         ]);
@@ -484,7 +559,9 @@ export class RetreatService {
 
     async checkIn(
         clinicId: string,
-        data: { patientId: string; roomId: string; packageId?: string; checkInDate?: Date; bookingId?: string; careProgram?: string; actualDeliveryDate?: string }
+        data: { patientId: string; roomId: string; packageId?: string; checkInDate?: Date; bookingId?: string; careProgram?: string; actualDeliveryDate?: string },
+        performedBy?: string,
+        performedByRole?: string,
     ) {
         const { patientId: bodyPatientId, roomId, packageId, checkInDate, bookingId } = data;
 
@@ -521,7 +598,7 @@ export class RetreatService {
             }
 
             // 2. Patient must belong to this organisation (cross-tenant guard)
-            await this.assertPatientInOrg(clinicId, patientId, manager);
+            await this.assertPatientInOrg(clinicId, patientId, manager, performedBy, performedByRole);
 
             // 2. Lock the room row (SELECT ... FOR UPDATE) before reading occupancy
             const targetRoomId = linkedBooking?.roomId || roomId;
@@ -553,6 +630,10 @@ export class RetreatService {
             if (block.blocked) throw new ConflictException(this.blockMessage(block.reason));
 
             // 5. Create admission and occupy the room
+            // ADR-004 D9/D14 — inherit from the booking if there is one, else from
+            // the room's own branch (walk-in, no booking). Both may be NULL, which
+            // is a valid, organisation-wide state.
+            const branchId = linkedBooking?.branchId ?? room.branchId ?? null;
             const admission = manager.create(Admission, {
                 organisationId: clinicId,
                 patientId,
@@ -564,6 +645,7 @@ export class RetreatService {
                 status: AdmissionStatus.ACTIVE,
                 careProgram,
                 actualDeliveryDate: data.actualDeliveryDate || null,
+                branchId,
             });
             room.status = RoomStatus.OCCUPIED;
             await manager.save(room);
@@ -610,60 +692,19 @@ export class RetreatService {
                 });
             }
 
-            const subtotal = lineItems.reduce((s, i) => s + i.unitPrice, 0);
-            const billStatus =
-                advancePaid <= 0       ? BillStatus.PENDING
-                : subtotal > 0 && advancePaid >= subtotal ? BillStatus.PAID
-                : subtotal > 0         ? BillStatus.PARTIAL
-                :                        BillStatus.PENDING;
-
-            const billCount = await manager.count(PatientBill, { where: { organisationId: clinicId } });
-            const billNumber = `BILL-${String(billCount + 1).padStart(5, '0')}`;
-
-            const bill = manager.create(PatientBill, {
+            // Bill + BillItem[] + first ledger payment (ADR-003 Phase 2) — built by
+            // PatientBillingService so bill construction has one owner, inside this
+            // same locked transaction (see Payment_Wiring_Implementation_Plan.md Phase A).
+            await this.patientBillingService.buildBillFromBooking(manager, {
                 organisationId: clinicId,
                 patientId,
-                bookingId:   linkedBooking?.id   ?? null,
+                bookingId: linkedBooking?.id ?? null,
                 admissionId: savedAdmission.id,
-                billNumber,
-                billDate:    new Date().toISOString().slice(0, 10) as unknown as Date,
-                subtotal,
-                discount: 0,
-                tax: 0,
-                paidAmount: advancePaid,
-                status: billStatus,
+                lineItems,
+                advancePaid,
+                createdBy: performedBy ?? null,
+                branchId,
             });
-            const savedBill = await manager.save(PatientBill, bill);
-
-            if (lineItems.length > 0) {
-                await manager.save(
-                    BillItem,
-                    lineItems.map(i =>
-                        manager.create(BillItem, {
-                            billId:    savedBill.id,
-                            itemType:  BillItemType.ACCOMMODATION,
-                            itemName:  i.name,
-                            quantity:  1,
-                            unitPrice: i.unitPrice,
-                            discount:  0,
-                            total:     i.unitPrice,
-                        })
-                    )
-                );
-            }
-
-            // Migrate booking advance into the payment ledger
-            if (advancePaid > 0) {
-                const advance = manager.create(PatientBillPayment, {
-                    organisationId: clinicId,
-                    billId:         savedBill.id,
-                    amount:         advancePaid,
-                    paidAt:         new Date().toISOString().slice(0, 10),
-                    paymentMethod:  PaymentMethod.CASH,
-                    notes:          'Advance paid at booking',
-                });
-                await manager.save(PatientBillPayment, advance);
-            }
 
             return { savedAdmission, room };
         });
@@ -752,7 +793,7 @@ export class RetreatService {
     }
 
     // --- BOOKINGS ---
-    async createBooking(clinicId: string, dto: CreateBookingDto) {
+    async createBooking(clinicId: string, dto: CreateBookingDto, userId?: string, userRole?: string) {
         const { patientId, enquiryId, roomId, packageId, checkInDate, checkOutDate, advancePaid, notes, discountReason, acRequired = false } = dto;
 
         // Validate identity: at least one of patientId or enquiryId must be present
@@ -776,7 +817,7 @@ export class RetreatService {
         return this.dataSource.transaction(async (manager) => {
             // Patient ownership guard (when patientId provided)
             if (patientId) {
-                await this.assertPatientInOrg(clinicId, patientId, manager);
+                await this.assertPatientInOrg(clinicId, patientId, manager, userId, userRole);
             }
 
             // Verify enquiry belongs to org (when enquiryId provided)
@@ -793,6 +834,14 @@ export class RetreatService {
                 lock: { mode: 'pessimistic_write' },
             });
             if (!room) throw new NotFoundException('Room not found');
+
+            // ADR-004 D9 — validated now even though nothing reads it until Phase 4.
+            if (dto.branchId) {
+                const branch = await manager.findOne(Branch, {
+                    where: { id: dto.branchId, organisationId: clinicId },
+                });
+                if (!branch) throw new NotFoundException('Branch not found in this organisation');
+            }
 
             // Unified conflict check across admissions + room status + bookings
             const block = await this.isRoomBlocked(manager, room, checkIn, checkOut);
@@ -822,17 +871,19 @@ export class RetreatService {
                 status: BookingStatus.HELD,
                 notes: notes || null,
                 bookingDate: new Date(),
+                branchId: dto.branchId || null,
             });
             return manager.save(booking);
         });
     }
 
-    async getBookings(clinicId: string, filters?: {
+    async getBookings(clinicId: string, userId?: string, filters?: {
         status?: BookingStatus;
         roomId?: string;
         startDate?: string;
         endDate?: string;
-    }) {
+        branchId?: string;
+    }, userRole?: string) {
         try {
             const query = this.bookingRepo.createQueryBuilder('booking')
                 .leftJoinAndSelect('booking.patient', 'patient')
@@ -840,6 +891,32 @@ export class RetreatService {
                 .leftJoinAndSelect('booking.room', 'room')
                 .leftJoinAndSelect('booking.treatmentPackage', 'package')
                 .where('booking.organisationId = :organisationId', { organisationId: clinicId });
+
+            // ADR-004 D9/Phase 4 — branch-level visibility, additive on top of the
+            // organisation filter above, never a replacement for it.
+            const visibleBranchIds = await this.branchVisibilityService.resolveVisibleBranchIds(
+                userId,
+                clinicId,
+                userRole,
+            );
+            if (visibleBranchIds !== null) {
+                if (visibleBranchIds.length > 0) {
+                    query.andWhere(
+                        '(booking.branchId IS NULL OR booking.branchId IN (:...visibleBranchIds))',
+                        { visibleBranchIds },
+                    );
+                } else {
+                    query.andWhere('booking.branchId IS NULL');
+                }
+            }
+
+            // Branch switcher (personal view filter) — ANDed on top of the
+            // visibility filter above, so it can only narrow further. Strict
+            // match: "All Locations" is the combined view, so a specific branch
+            // selection means only that branch's own records, not org-wide too.
+            if (filters?.branchId) {
+                query.andWhere('booking.branchId = :selectedBranchId', { selectedBranchId: filters.branchId });
+            }
 
             if (filters?.status) {
                 query.andWhere('booking.status = :status', { status: filters.status });
@@ -868,13 +945,27 @@ export class RetreatService {
         }
     }
 
-    async getBookingById(clinicId: string, bookingId: string) {
+    async getBookingById(clinicId: string, bookingId: string, userId?: string, userRole?: string) {
         const booking = await this.bookingRepo.findOne({
             where: { id: bookingId, organisationId: clinicId },
             relations: ['patient', 'enquiry', 'room', 'treatmentPackage'],
         });
 
         if (!booking) throw new NotFoundException('Booking not found');
+
+        // ADR-004 D9/Phase 4 — branch-level visibility, additive on top of the
+        // organisation check above.
+        if (booking.branchId) {
+            const visibleBranchIds = await this.branchVisibilityService.resolveVisibleBranchIds(
+                userId,
+                clinicId,
+                userRole,
+            );
+            if (visibleBranchIds !== null && !visibleBranchIds.includes(booking.branchId)) {
+                throw new ForbiddenException('You do not have access to this booking');
+            }
+        }
+
         return Object.assign(booking, { contact: this.resolveContact(booking) });
     }
 
@@ -913,6 +1004,13 @@ export class RetreatService {
             if (dto.discountReason !== undefined) booking.discountReason = dto.discountReason;
             if (dto.acRequired !== undefined) booking.acRequired = dto.acRequired;
             if (dto.notes !== undefined) booking.notes = dto.notes;
+            if (dto.branchId !== undefined && dto.branchId !== booking.branchId) {
+                const branch = await manager.findOne(Branch, {
+                    where: { id: dto.branchId, organisationId: clinicId },
+                });
+                if (!branch) throw new NotFoundException('Branch not found in this organisation');
+                booking.branchId = dto.branchId;
+            }
 
             return manager.save(booking);
         });
@@ -970,12 +1068,12 @@ export class RetreatService {
         };
     }
 
-    async getCalendarData(clinicId: string, startDate: string, endDate: string) {
-        const bookings = await this.getBookings(clinicId, { startDate, endDate });
+    async getCalendarData(clinicId: string, startDate: string, endDate: string, userId?: string, userRole?: string) {
+        const bookings = await this.getBookings(clinicId, userId, { startDate, endDate }, userRole);
         const rooms = await this.getRooms(clinicId);
 
         // Get current admissions (occupied rooms)
-        const admissions = await this.getAdmissions(clinicId);
+        const admissions = await this.getAdmissions(clinicId, userId, undefined, userRole);
 
         // Build availability matrix: { [roomId]: { [date]: status } }
         const availability: Record<string, Record<string, 'available' | 'booked' | 'occupied'>> = {};
@@ -1053,11 +1151,27 @@ export class RetreatService {
         clinicId: string,
         patientId: string,
         manager?: EntityManager,
+        userId?: string,
+        userRole?: string,
     ): Promise<void> {
         const repo = manager ? manager.getRepository(Patient) : this.patientRepo;
         const patient = await repo.findOne({ where: { id: patientId, organisationId: clinicId } });
         if (!patient) {
             throw new ForbiddenException('Patient not found in this organisation');
+        }
+
+        // ADR-004 D9/Phase 4 — a booking/admission write must not let a branch-scoped
+        // staff member reach a patient outside their visible branches, mirroring the
+        // read-path checks in PatientsService/PatientBillingService.
+        if (patient.branchId) {
+            const visibleBranchIds = await this.branchVisibilityService.resolveVisibleBranchIds(
+                userId,
+                clinicId,
+                userRole,
+            );
+            if (visibleBranchIds !== null && !visibleBranchIds.includes(patient.branchId)) {
+                throw new ForbiddenException('Patient not found in this organisation');
+            }
         }
     }
 
@@ -1270,7 +1384,7 @@ export class RetreatService {
     }
 
     // Phone-dedup patient search / creation. Sets booking.patient_id only.
-    async promoteEnquiry(clinicId: string, bookingId: string) {
+    async promoteEnquiry(clinicId: string, bookingId: string, performedBy?: string) {
         return this.dataSource.transaction(async (manager) => {
             const booking = await manager.findOne(RoomBooking, {
                 where: { id: bookingId, organisationId: clinicId },
@@ -1292,14 +1406,16 @@ export class RetreatService {
             if (existingPatient) {
                 booking.patientId = existingPatient.id;
             } else {
+                const patientCode = await this.patientsService.generateNextPatientCode(clinicId, manager);
                 const newPatient = manager.create(Patient, {
                     organisationId: clinicId,
-                    patientCode: `TMP-${Date.now()}`,
+                    patientCode,
                     firstName: booking.enquiry.contactName.split(' ')[0] || booking.enquiry.contactName,
                     lastName: booking.enquiry.contactName.split(' ').slice(1).join(' ') || '',
                     phone: booking.enquiry.phone,
                     gender: 'other' as any,
                     dateOfBirth: null,
+                    createdBy: performedBy ?? null,
                 });
                 const saved = await manager.save(newPatient);
                 booking.patientId = saved.id;

@@ -12,6 +12,7 @@ import {
 import { Organisation } from '../../organisations/entities/organisation.entity';
 import { Patient } from '../../patients/entities/patient.entity';
 import { Appointment } from '../../appointments/entities/appointment.entity';
+import { Branch } from '../../branches/entities/branch.entity';
 import { BillItem } from './bill-item.entity';
 
 export enum BillStatus {
@@ -49,6 +50,10 @@ export class PatientBill {
 
   @Column({ type: 'uuid', nullable: true, name: 'admission_id' })
   admissionId: string | null;
+
+  // ADR-004 D9. NULL = organisation-wide.
+  @Column({ type: 'uuid', nullable: true, name: 'branch_id' })
+  branchId: string | null;
 
   @Column({ type: 'varchar', length: 100, name: 'bill_number' })
   billNumber: string;
@@ -109,6 +114,10 @@ export class PatientBill {
   @ManyToOne(() => Appointment, { nullable: true })
   @JoinColumn({ name: 'appointment_id' })
   appointment: Appointment | null;
+
+  @ManyToOne(() => Branch, { nullable: true })
+  @JoinColumn({ name: 'branch_id' })
+  branch: Branch | null;
 
   @OneToMany(() => BillItem, (item) => item.bill, { cascade: true, eager: true })
   items: BillItem[];

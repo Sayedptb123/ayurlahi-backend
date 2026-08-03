@@ -109,6 +109,7 @@ import { FeedingLog } from './feeding-logs/entities/feeding-log.entity';
 import { NewbornAssessmentsModule } from './newborn-assessments/newborn-assessments.module';
 import { NewbornAssessment } from './newborn-assessments/entities/newborn-assessment.entity';
 import { ClinicCapabilities } from './clinic-capabilities/entities/clinic-capabilities.entity';
+import { OrganisationSettings } from './organisation-settings/entities/organisation-settings.entity';
 import { ClinicProfile } from './organisations/entities/clinic-profile.entity';
 import { ManufacturerProfile } from './organisations/entities/manufacturer-profile.entity';
 import { OrganisationContact } from './organisations/entities/organisation-contact.entity';
@@ -225,6 +226,7 @@ import { BillPayment } from './bills/entities/bill-payment.entity';
           UserNotification,
           CustomNotificationLog,
           ClinicCapabilities,
+          OrganisationSettings,
           ClinicProfile,
           ManufacturerProfile,
           OrganisationContact,

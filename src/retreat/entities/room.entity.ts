@@ -9,6 +9,7 @@ import {
     JoinColumn,
 } from 'typeorm';
 import { Organisation } from '../../organisations/entities/organisation.entity';
+import { Branch } from '../../branches/entities/branch.entity';
 import { RoomCategory } from './room-category.entity';
 
 export enum RoomStatus {
@@ -63,8 +64,14 @@ export class Room {
     @Column({ type: 'boolean', default: true, name: 'is_active' })
     isActive: boolean;
 
+    // ADR-004 D14 — physical-location ownership, separate grounds from D9's
+    // patient/money derivation rule. Column pre-existed this entity update.
     @Column({ type: 'uuid', nullable: true, name: 'branch_id' })
     branchId: string | null;
+
+    @ManyToOne(() => Branch, { nullable: true })
+    @JoinColumn({ name: 'branch_id' })
+    branch: Branch | null;
 
     @DeleteDateColumn({ type: 'timestamp', nullable: true, name: 'deleted_at' })
     deletedAt: Date | null;

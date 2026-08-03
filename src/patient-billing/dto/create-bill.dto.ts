@@ -30,6 +30,22 @@ export class CreateBillDto {
   @MaxLength(36)
   appointmentId?: string;
 
+  @IsOptional()
+  @IsString()
+  @MaxLength(36)
+  bookingId?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(36)
+  admissionId?: string;
+
+  // ADR-004 D9. Omit for organisation-wide (NULL).
+  @IsOptional()
+  @IsString()
+  @MaxLength(36)
+  branchId?: string;
+
   @IsNotEmpty()
   @IsDateString()
   billDate: string; // Format: "YYYY-MM-DD"

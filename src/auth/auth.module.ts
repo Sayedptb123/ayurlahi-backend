@@ -17,12 +17,14 @@ import { OrganisationContact } from '../organisations/entities/organisation-cont
 import { OtpVerification } from '../otp/entities/otp-verification.entity';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { SmsModule } from '../sms/sms.module';
+import { OrganisationSettingsModule } from '../organisation-settings/organisation-settings.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([User, OrganisationUser, Organisation, Staff, ClinicCapabilities, ClinicProfile, ManufacturerProfile, OrganisationContact, OtpVerification]),
     NotificationsModule,
     SmsModule,
+    OrganisationSettingsModule,
     PassportModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],

@@ -10,6 +10,7 @@ import { ManufacturerProfile } from './entities/manufacturer-profile.entity';
 import { OrganisationContact } from './entities/organisation-contact.entity';
 import { UsersModule } from '../users/users.module';
 import { NotificationsModule } from '../notifications/notifications.module';
+import { OrganisationSettingsModule } from '../organisation-settings/organisation-settings.module';
 
 @Module({
   imports: [
@@ -23,6 +24,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
     ]),
     UsersModule,
     NotificationsModule,
+    OrganisationSettingsModule,
   ],
   controllers: [OrganisationsController],
   providers: [OrganisationsService],

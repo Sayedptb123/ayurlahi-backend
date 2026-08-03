@@ -76,8 +76,15 @@ describe('RetreatService Phase 0 — isRoomBlocked', () => {
             {} as any, // orgUserRepo
             {} as any, // patientRepo
             {} as any, // capabilitiesRepo
+            {} as any, // categoryRepo
+            {} as any, // categoryPricingRepo
+            {} as any, // roomPricingOverrideRepo
+            {} as any, // fieldDefinitionRepo
             {} as any, // dataSource
             {} as any, // notificationsService
+            {} as any, // patientBillingService
+            {} as any, // patientsService
+            {} as any, // branchVisibilityService
         );
     });
 
@@ -137,7 +144,9 @@ describe('RetreatService Phase 0 — assertPatientInOrg', () => {
     let service: RetreatService;
     beforeEach(() => {
         service = new RetreatService(
-            {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any,
+            {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any,
+            {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any,
+            {} as any, // branchVisibilityService
         );
     });
 
@@ -164,7 +173,8 @@ describe('RetreatService W1-A.1 — resolveCareProgram', () => {
     const makeService = (capsRow: any) => new RetreatService(
         {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any,
         { findOne: jest.fn(() => Promise.resolve(capsRow)) } as any, // capabilitiesRepo
-        {} as any, {} as any,
+        {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any,
+        {} as any, // branchVisibilityService
     );
 
     const resolve = (svc: RetreatService, requested?: string) =>
