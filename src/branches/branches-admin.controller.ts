@@ -1,13 +1,16 @@
 import {
   Controller,
+  Get,
   Post,
   Body,
   Param,
+  Query,
   UseGuards,
   Request,
   ForbiddenException,
 } from '@nestjs/common';
 import { BranchesService } from './branches.service';
+import { GetPendingBranchesDto } from './dto/get-pending-branches.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 
 function requireTeam(req: any) {
@@ -25,6 +28,12 @@ function requireTeam(req: any) {
 @UseGuards(JwtAuthGuard)
 export class BranchesAdminController {
   constructor(private readonly branchesService: BranchesService) {}
+
+  @Get('pending')
+  findAllPending(@Query() query: GetPendingBranchesDto, @Request() req) {
+    requireTeam(req);
+    return this.branchesService.findAllPending(query);
+  }
 
   @Post(':id/approve')
   approve(@Param('id') id: string, @Request() req) {

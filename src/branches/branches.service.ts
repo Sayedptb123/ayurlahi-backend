@@ -18,6 +18,7 @@ import { Room } from '../retreat/entities/room.entity';
 import { CreateBranchDto } from './dto/create-branch.dto';
 import { UpdateBranchDto } from './dto/update-branch.dto';
 import { GetBranchesDto } from './dto/get-branches.dto';
+import { GetPendingBranchesDto } from './dto/get-pending-branches.dto';
 import { NotificationsService } from '../notifications/notifications.service';
 import { OrganisationSettingsService } from '../organisation-settings/organisation-settings.service';
 import {
@@ -241,6 +242,38 @@ export class BranchesService {
     }).catch(() => {});
 
     return saved;
+  }
+
+  // Ayurlahi Team's cross-organisation queue — unlike findAll() below, this
+  // is deliberately NOT scoped to a single organisationId (a reviewer needs
+  // to see every org's pending branches, not just one).
+  async findAllPending(
+    query: GetPendingBranchesDto,
+  ): Promise<{ data: Branch[]; total: number }> {
+    const { page = 1, limit = 100, search, approvalStatus = 'pending' } = query;
+    const skip = (page - 1) * limit;
+
+    const queryBuilder = this.branchesRepository
+      .createQueryBuilder('branch')
+      .leftJoin('branch.organisation', 'organisation')
+      .addSelect(['organisation.id', 'organisation.name', 'organisation.type'])
+      .where('branch.deletedAt IS NULL')
+      .andWhere('branch.approvalStatus = :approvalStatus', { approvalStatus });
+
+    if (search) {
+      queryBuilder.andWhere(
+        '(branch.name ILIKE :search OR organisation.name ILIKE :search OR branch.city ILIKE :search)',
+        { search: `%${search}%` },
+      );
+    }
+
+    const [data, total] = await queryBuilder
+      .skip(skip)
+      .take(limit)
+      .orderBy('branch.createdAt', 'DESC')
+      .getManyAndCount();
+
+    return { data, total };
   }
 
   async findAll(
