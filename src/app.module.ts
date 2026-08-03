@@ -27,6 +27,7 @@ import { OrganisationsModule } from './organisations/organisations.module';
 import { OrganisationUsersModule } from './organisation-users/organisation-users.module';
 import { BranchesModule } from './branches/branches.module';
 import { StaffBranchAssignmentsModule } from './staff-branch-assignments/staff-branch-assignments.module';
+import { BranchCatalogModule } from './branch-catalog/branch-catalog.module';
 import { DutyTypesModule } from './duty-types/duty-types.module';
 import { DutyAssignmentsModule } from './duty-assignments/duty-assignments.module';
 import { DutyTemplatesModule } from './duty-templates/duty-templates.module';
@@ -290,6 +291,7 @@ import { BillPayment } from './bills/entities/bill-payment.entity';
     OrganisationUsersModule,
     BranchesModule,
     StaffBranchAssignmentsModule,
+    BranchCatalogModule,
     DutyTypesModule,
     DutyAssignmentsModule,
     DutyTemplatesModule,

@@ -6,6 +6,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, IsNull } from 'typeorm';
 import { DutyType } from './entities/duty-type.entity';
+import { Branch } from '../branches/entities/branch.entity';
 import { CreateDutyTypeDto } from './dto/create-duty-type.dto';
 import { UpdateDutyTypeDto } from './dto/update-duty-type.dto';
 import { GetDutyTypesDto } from './dto/get-duty-types.dto';
@@ -15,6 +16,8 @@ export class DutyTypesService {
   constructor(
     @InjectRepository(DutyType)
     private readonly dutyTypesRepository: Repository<DutyType>,
+    @InjectRepository(Branch)
+    private readonly branchesRepository: Repository<Branch>,
   ) {}
 
   async create(
@@ -22,6 +25,14 @@ export class DutyTypesService {
     createDto: CreateDutyTypeDto,
     createdBy?: string,
   ): Promise<DutyType> {
+    // ADR-004 D15 — branch-owned setup catalog, required on create.
+    const branch = await this.branchesRepository.findOne({
+      where: { id: createDto.branchId, organisationId, deletedAt: IsNull() },
+    });
+    if (!branch) {
+      throw new NotFoundException('Branch not found in this organisation');
+    }
+
     // Check for duplicate name
     const existing = await this.dutyTypesRepository.findOne({
       where: {
@@ -54,13 +65,19 @@ export class DutyTypesService {
     organisationId: string,
     query: GetDutyTypesDto,
   ): Promise<{ data: DutyType[]; total: number }> {
-    const { page = 1, limit = 10, search, isActive } = query;
+    const { page = 1, limit = 10, search, isActive, branchId } = query;
     const skip = (page - 1) * limit;
 
     const queryBuilder = this.dutyTypesRepository
       .createQueryBuilder('dutyType')
       .where('dutyType.organisationId = :organisationId', { organisationId })
       .andWhere('dutyType.deletedAt IS NULL');
+
+    // Personal view filter (strict match) — distinct from D15's ownership
+    // semantics, which is enforced at write time, not here.
+    if (branchId) {
+      queryBuilder.andWhere('dutyType.branchId = :branchId', { branchId });
+    }
 
     if (search) {
       queryBuilder.andWhere(
@@ -100,6 +117,16 @@ export class DutyTypesService {
     updateDto: UpdateDutyTypeDto,
   ): Promise<DutyType> {
     const dutyType = await this.findOne(id, organisationId);
+
+    // ADR-004 D15 — this is also how a legacy NULL-branch row gets resolved.
+    if (updateDto.branchId && updateDto.branchId !== dutyType.branchId) {
+      const branch = await this.branchesRepository.findOne({
+        where: { id: updateDto.branchId, organisationId, deletedAt: IsNull() },
+      });
+      if (!branch) {
+        throw new NotFoundException('Branch not found in this organisation');
+      }
+    }
 
     // Check for duplicate name if being updated
     if (updateDto.name && updateDto.name !== dutyType.name) {

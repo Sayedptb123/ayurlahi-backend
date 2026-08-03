@@ -3,12 +3,17 @@ import {
   IsInt,
   IsString,
   IsBoolean,
+  IsUUID,
   Min,
   Max,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class GetDutyTypesDto {
+  @IsOptional()
+  @IsUUID()
+  branchId?: string;
+
   @IsOptional()
   @IsInt()
   @Type(() => Number)

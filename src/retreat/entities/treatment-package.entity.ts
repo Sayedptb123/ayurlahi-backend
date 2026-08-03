@@ -9,6 +9,7 @@ import {
     JoinColumn,
 } from 'typeorm';
 import { Organisation } from '../../organisations/entities/organisation.entity';
+import { Branch } from '../../branches/entities/branch.entity';
 
 @Entity('treatment_packages')
 export class TreatmentPackage {
@@ -21,6 +22,15 @@ export class TreatmentPackage {
     @ManyToOne(() => Organisation)
     @JoinColumn({ name: 'organisation_id' })
     organisation: Organisation;
+
+    // ADR-004 D15 — branch-owned setup catalog. NULL means "needs branch
+    // assignment" (legacy row), never "shared/org-wide". Never OR-NULL this.
+    @Column({ type: 'uuid', nullable: true, name: 'branch_id' })
+    branchId: string | null;
+
+    @ManyToOne(() => Branch, { nullable: true })
+    @JoinColumn({ name: 'branch_id' })
+    branch: Branch | null;
 
     @Column({ type: 'varchar', length: 255, name: 'name' })
     name: string;

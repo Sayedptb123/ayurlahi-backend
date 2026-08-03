@@ -9,6 +9,7 @@ import {
     JoinColumn,
 } from 'typeorm';
 import { Organisation } from '../../organisations/entities/organisation.entity';
+import { Branch } from '../../branches/entities/branch.entity';
 import { RoomCategory } from './room-category.entity';
 import { TreatmentPackage } from './treatment-package.entity';
 
@@ -23,6 +24,16 @@ export class RoomCategoryPricing {
     @ManyToOne(() => Organisation)
     @JoinColumn({ name: 'organisation_id' })
     organisation: Organisation;
+
+    // ADR-004 D15 — denormalized from roomCategory/package at write time (both
+    // must already agree, enforced in RetreatService.assertSameBranch before
+    // save). NULL means "needs branch assignment", never "shared". No OR-NULL.
+    @Column({ type: 'uuid', nullable: true, name: 'branch_id' })
+    branchId: string | null;
+
+    @ManyToOne(() => Branch, { nullable: true })
+    @JoinColumn({ name: 'branch_id' })
+    branch: Branch | null;
 
     @Column({ type: 'uuid', name: 'room_category_id' })
     roomCategoryId: string;

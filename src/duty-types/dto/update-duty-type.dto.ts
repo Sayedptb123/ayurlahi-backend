@@ -2,11 +2,18 @@ import {
   IsString,
   IsOptional,
   IsBoolean,
+  IsUUID,
   MaxLength,
   Matches,
 } from 'class-validator';
 
 export class UpdateDutyTypeDto {
+  // Optional here — this is also how a legacy NULL-branch row gets resolved,
+  // via the normal edit form. See ADR-004 D15.
+  @IsOptional()
+  @IsUUID()
+  branchId?: string;
+
   @IsOptional()
   @IsString()
   @MaxLength(255)

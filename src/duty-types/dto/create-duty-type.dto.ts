@@ -3,11 +3,18 @@ import {
   IsNotEmpty,
   IsOptional,
   IsBoolean,
+  IsUUID,
   MaxLength,
   Matches,
 } from 'class-validator';
 
 export class CreateDutyTypeDto {
+  // ADR-004 D15 — required. NULL is only tolerated on legacy rows that
+  // predate this decision, never a new create.
+  @IsNotEmpty()
+  @IsUUID()
+  branchId: string;
+
   @IsNotEmpty()
   @IsString()
   @MaxLength(255)

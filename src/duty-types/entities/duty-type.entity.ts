@@ -10,6 +10,7 @@ import {
   Index,
 } from 'typeorm';
 import { Organisation } from '../../organisations/entities/organisation.entity';
+import { Branch } from '../../branches/entities/branch.entity';
 import { User } from '../../users/entities/user.entity';
 
 @Entity('duty_types')
@@ -25,6 +26,16 @@ export class DutyType {
   @ManyToOne(() => Organisation)
   @JoinColumn({ name: 'organisation_id' })
   organisation: Organisation;
+
+  // ADR-004 D15 — branch-owned setup catalog. NULL means "needs branch
+  // assignment" (legacy row), never "shared/org-wide". Never OR-NULL this.
+  // Deliberately NOT cross-checked against DutyAssignment.branchId — see D15.
+  @Column({ type: 'uuid', nullable: true, name: 'branch_id' })
+  branchId: string | null;
+
+  @ManyToOne(() => Branch, { nullable: true })
+  @JoinColumn({ name: 'branch_id' })
+  branch: Branch | null;
 
   @Column({ type: 'varchar', length: 255 })
   name: string;

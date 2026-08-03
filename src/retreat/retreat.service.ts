@@ -102,15 +102,54 @@ export class RetreatService {
         return enabled.length === 1 ? enabled[0] : null;
     }
 
+    // ADR-004 D15 — validates a branchId belongs to the caller's org. Same
+    // pattern createRoom already used for D14 (org-membership only, no
+    // approval-status check — matches every other branch-assignment site in
+    // this codebase, e.g. patients.service.ts).
+    private async assertBranchOwnership(clinicId: string, branchId: string): Promise<Branch> {
+        const branch = await this.dataSource.manager.findOne(Branch, {
+            where: { id: branchId, organisationId: clinicId },
+        });
+        if (!branch) throw new NotFoundException('Branch not found in this organisation');
+        return branch;
+    }
+
+    // ADR-004 D15 — no precedent elsewhere in this codebase for "two sibling
+    // FKs must agree on branch". Deliberately explicit reject-then-compare,
+    // NEVER the OR-NULL form (`a === b || a == null || b == null`) used
+    // throughout D9's access-control checks — that form means the opposite
+    // of what's needed here. A NULL branchId on either side means "this item
+    // still needs branch assignment", which must block, not pass through.
+    private assertSameBranch(
+        a: { branchId: string | null },
+        b: { branchId: string | null },
+        labelA: string,
+        labelB: string,
+    ): void {
+        if (!a.branchId || !b.branchId) {
+            throw new BadRequestException(
+                `${!a.branchId ? labelA : labelB} has no branch assigned — assign it a branch before use`,
+            );
+        }
+        if (a.branchId !== b.branchId) {
+            throw new BadRequestException(`${labelA} and ${labelB} belong to different branches`);
+        }
+    }
+
     // --- ROOMS ---
-    async getRoomCategories(clinicId: string) {
+    async getRoomCategories(clinicId: string, branchId?: string) {
+        const where: any = { organisationId: clinicId };
+        // ADR-004 D15 — personal view filter (strict match), distinct from
+        // the ownership enforcement done at write time.
+        if (branchId) where.branchId = branchId;
         return this.categoryRepo.find({
-            where: { organisationId: clinicId },
+            where,
             order: { name: 'ASC' },
         });
     }
 
-    async createRoomCategory(clinicId: string, data: { name: string }) {
+    async createRoomCategory(clinicId: string, data: { name: string; branchId: string }) {
+        await this.assertBranchOwnership(clinicId, data.branchId);
         const existing = await this.categoryRepo.findOne({
             where: { organisationId: clinicId, name: data.name },
             withDeleted: true,
@@ -118,15 +157,20 @@ export class RetreatService {
         if (existing && !existing.deletedAt) {
             throw new ConflictException(`Room category "${data.name}" already exists`);
         }
-        const category = this.categoryRepo.create({ name: data.name, organisationId: clinicId });
+        const category = this.categoryRepo.create({ name: data.name, organisationId: clinicId, branchId: data.branchId });
         return this.categoryRepo.save(category);
     }
 
-    async updateRoomCategory(clinicId: string, id: string, data: { name?: string; isActive?: boolean }) {
+    async updateRoomCategory(clinicId: string, id: string, data: { name?: string; isActive?: boolean; branchId?: string }) {
         const category = await this.categoryRepo.findOne({ where: { id, organisationId: clinicId } });
         if (!category) throw new NotFoundException('Room category not found');
         if (data.name !== undefined) category.name = data.name;
         if (data.isActive !== undefined) category.isActive = data.isActive;
+        // ADR-004 D15 — this is also how a legacy NULL-branch row gets resolved.
+        if (data.branchId !== undefined && data.branchId !== category.branchId) {
+            await this.assertBranchOwnership(clinicId, data.branchId);
+            category.branchId = data.branchId;
+        }
         return this.categoryRepo.save(category);
     }
 
@@ -138,9 +182,11 @@ export class RetreatService {
 
     // --- Pricing Matrix (category × package → price) ---
 
-    async getPricingMatrix(clinicId: string) {
+    async getPricingMatrix(clinicId: string, branchId?: string) {
+        const where: any = { organisationId: clinicId };
+        if (branchId) where.branchId = branchId;
         return this.categoryPricingRepo.find({
-            where: { organisationId: clinicId },
+            where,
             relations: ['roomCategory', 'package'],
             order: { roomCategory: { name: 'ASC' } },
         });
@@ -151,6 +197,14 @@ export class RetreatService {
         if (!category) throw new NotFoundException('Room category not found');
         if (!category.isActive) throw new BadRequestException('Cannot set pricing for an inactive room category');
 
+        // Closes a pre-existing gap — packageId was never validated at all
+        // before (not even org membership). Now required for the D15 same-
+        // branch check below anyway.
+        const pkg = await this.packageRepo.findOne({ where: { id: data.packageId, organisationId: clinicId } });
+        if (!pkg) throw new NotFoundException('Package not found');
+
+        this.assertSameBranch(category, pkg, 'Room category', 'Package');
+
         const existing = await this.categoryPricingRepo.findOne({
             where: { roomCategoryId: data.roomCategoryId, packageId: data.packageId },
             withDeleted: true,
@@ -159,6 +213,7 @@ export class RetreatService {
         if (existing) {
             existing.basePrice = data.basePrice;
             existing.acSupplementPerDay = data.acSupplementPerDay ?? null;
+            existing.branchId = category.branchId;
             existing.deletedAt = null;
             return this.categoryPricingRepo.save(existing);
         }
@@ -169,6 +224,10 @@ export class RetreatService {
             basePrice: data.basePrice,
             acSupplementPerDay: data.acSupplementPerDay ?? null,
             organisationId: clinicId,
+            // Denormalized from the category/package, which the assertSameBranch
+            // check above guarantees already agree — mirrors how RoomBooking/
+            // Admission denormalize branchId from Room (D9).
+            branchId: category.branchId,
         });
         return this.categoryPricingRepo.save(entry);
     }
@@ -181,9 +240,11 @@ export class RetreatService {
 
     // --- Room-Level Price Overrides ---
 
-    async getRoomPricingOverrides(clinicId: string) {
+    async getRoomPricingOverrides(clinicId: string, branchId?: string) {
+        const where: any = { organisationId: clinicId };
+        if (branchId) where.branchId = branchId;
         return this.roomPricingOverrideRepo.find({
-            where: { organisationId: clinicId },
+            where,
             relations: ['room', 'package'],
             order: { room: { roomNumber: 'ASC' } },
         });
@@ -193,6 +254,13 @@ export class RetreatService {
         const room = await this.roomRepo.findOne({ where: { id: data.roomId, organisationId: clinicId } });
         if (!room) throw new NotFoundException('Room not found');
 
+        // Closes a pre-existing gap — packageId was never loaded or validated
+        // at all before. Now required for the D15 same-branch check below.
+        const pkg = await this.packageRepo.findOne({ where: { id: data.packageId, organisationId: clinicId } });
+        if (!pkg) throw new NotFoundException('Package not found');
+
+        this.assertSameBranch(room, pkg, 'Room', 'Package');
+
         const existing = await this.roomPricingOverrideRepo.findOne({
             where: { roomId: data.roomId, packageId: data.packageId },
             withDeleted: true,
@@ -200,11 +268,18 @@ export class RetreatService {
 
         if (existing) {
             existing.price = data.price;
+            existing.branchId = room.branchId;
             existing.deletedAt = null;
             return this.roomPricingOverrideRepo.save(existing);
         }
 
-        const override = this.roomPricingOverrideRepo.create({ ...data, organisationId: clinicId });
+        const override = this.roomPricingOverrideRepo.create({
+            ...data,
+            organisationId: clinicId,
+            // Denormalized from the room/package, which assertSameBranch above
+            // guarantees already agree — mirrors RoomBooking/Admission (D9).
+            branchId: room.branchId,
+        });
         return this.roomPricingOverrideRepo.save(override);
     }
 
@@ -243,9 +318,20 @@ export class RetreatService {
         const room = await this.roomRepo.findOne({ where: { id: roomId, organisationId: clinicId } });
         if (room?.roomCategoryId) {
             const matrix = await this.categoryPricingRepo.findOne({
-                where: { roomCategoryId: room.roomCategoryId, packageId },
+                // organisationId added — this lookup had no org filter at all
+                // before (relied entirely on room.roomCategoryId already being
+                // org-scoped upstream).
+                where: { roomCategoryId: room.roomCategoryId, packageId, organisationId: clinicId },
                 relations: ['package'],
             });
+            // ADR-004 D15 — defensive check, not expected to trigger for any
+            // row created after this decision (assertSameBranch guarantees it
+            // at write time). Guards only against pre-D15 legacy inconsistency
+            // between room.branchId and matrix.branchId; skip rather than
+            // return a cross-branch price.
+            if (matrix && room.branchId && matrix.branchId && room.branchId !== matrix.branchId) {
+                return none;
+            }
             if (matrix) {
                 const basePrice = parseFloat(matrix.basePrice as any);
                 const supplementPerDay = matrix.acSupplementPerDay
@@ -284,7 +370,7 @@ export class RetreatService {
     // Rooms that are free for the given date range — reuses the unified conflict
     // check (admissions + bookings + maintenance). Powers the date-aware room
     // selector in the booking form, so reception only sees what they can book.
-    async getAvailableRooms(clinicId: string, checkInDate: string, checkOutDate: string) {
+    async getAvailableRooms(clinicId: string, checkInDate: string, checkOutDate: string, branchId?: string) {
         const checkIn = new Date(checkInDate);
         const checkOut = new Date(checkOutDate);
         if (isNaN(checkIn.getTime()) || isNaN(checkOut.getTime())) {
@@ -294,8 +380,13 @@ export class RetreatService {
             throw new BadRequestException('Check-out date must be after check-in date');
         }
 
+        const where: any = { organisationId: clinicId };
+        // Branch switcher (personal view filter) — same strict-match pattern as
+        // getRooms() above; rooms are D14, not D15, so this narrows the search
+        // rather than enforcing ownership.
+        if (branchId) where.branchId = branchId;
         const rooms = await this.roomRepo.find({
-            where: { organisationId: clinicId },
+            where,
             relations: ['roomCategory'],
             order: { roomNumber: 'ASC' },
         });
@@ -361,8 +452,9 @@ export class RetreatService {
     }
 
     async createRoom(clinicId: string, data: { roomNumber: string; floor?: string; roomCategoryId?: string; capacity?: number; amenities?: string[]; description?: string; branchId?: string }) {
+        let cat: RoomCategory | null = null;
         if (data.roomCategoryId) {
-            const cat = await this.categoryRepo.findOne({ where: { id: data.roomCategoryId, organisationId: clinicId } });
+            cat = await this.categoryRepo.findOne({ where: { id: data.roomCategoryId, organisationId: clinicId } });
             if (!cat) throw new NotFoundException('Room category not found');
         }
         // ADR-004 D14 — a room is a physical asset that exists in exactly one
@@ -373,6 +465,13 @@ export class RetreatService {
                 where: { id: data.branchId, organisationId: clinicId },
             });
             if (!branch) throw new NotFoundException('Branch not found in this organisation');
+        }
+        // ADR-004 D15 — a categorized room must agree with its own category's
+        // branch. Only checked when both sides actually carry a branch; a
+        // room's own branchId stays optional (D14), so a branch-less room
+        // isn't forced into this check.
+        if (cat && data.branchId) {
+            this.assertSameBranch({ branchId: data.branchId }, cat, 'Room', 'Room category');
         }
         const room = this.roomRepo.create({
             roomNumber: data.roomNumber,
@@ -385,17 +484,27 @@ export class RetreatService {
             branchId: data.branchId ?? null,
         });
         const saved = await this.roomRepo.save(room);
-        const cat = saved.roomCategoryId ? await this.categoryRepo.findOne({ where: { id: saved.roomCategoryId } }) : null;
         return { ...saved, roomCategory: cat?.name ?? null };
     }
 
-    async updateRoom(clinicId: string, id: string, data: { roomNumber?: string; floor?: string; roomCategoryId?: string; capacity?: number; amenities?: string[]; description?: string; status?: string }) {
+    async updateRoom(clinicId: string, id: string, data: { roomNumber?: string; floor?: string; roomCategoryId?: string; capacity?: number; amenities?: string[]; description?: string; status?: string; branchId?: string | null }) {
         const room = await this.roomRepo.findOne({ where: { id, organisationId: clinicId } });
         if (!room) throw new NotFoundException('Room not found');
+        // D14 — apply a branchId change first, so the category cross-check
+        // below (if both are changing in the same request) validates against
+        // the room's new branch, not its stale one.
+        if (data.branchId !== undefined && data.branchId !== room.branchId) {
+            if (data.branchId) await this.assertBranchOwnership(clinicId, data.branchId);
+            room.branchId = data.branchId || null;
+        }
         if (data.roomCategoryId !== undefined) {
             if (data.roomCategoryId) {
                 const cat = await this.categoryRepo.findOne({ where: { id: data.roomCategoryId, organisationId: clinicId } });
                 if (!cat) throw new NotFoundException('Room category not found');
+                // ADR-004 D15 — see createRoom's identical comment.
+                if (room.branchId) {
+                    this.assertSameBranch(room, cat, 'Room', 'Room category');
+                }
             }
             room.roomCategoryId = data.roomCategoryId || null;
         }
@@ -417,14 +526,17 @@ export class RetreatService {
     }
 
     // --- PACKAGES ---
-    async getPackages(clinicId: string) {
+    async getPackages(clinicId: string, branchId?: string) {
+        const where: any = { organisationId: clinicId };
+        if (branchId) where.branchId = branchId;
         return this.packageRepo.find({
-            where: { organisationId: clinicId },
+            where,
             order: { durationDays: 'ASC' },
         });
     }
 
-    async createPackage(clinicId: string, data: Partial<TreatmentPackage>) {
+    async createPackage(clinicId: string, data: Partial<TreatmentPackage> & { branchId: string }) {
+        await this.assertBranchOwnership(clinicId, data.branchId);
         const pkg = this.packageRepo.create({ ...data, organisationId: clinicId });
         return this.packageRepo.save(pkg);
     }
@@ -455,6 +567,10 @@ export class RetreatService {
     async updatePackage(clinicId: string, id: string, data: Partial<TreatmentPackage>) {
         const pkg = await this.packageRepo.findOne({ where: { id, organisationId: clinicId } });
         if (!pkg) throw new NotFoundException('Package not found');
+        // ADR-004 D15 — this is also how a legacy NULL-branch row gets resolved.
+        if (data.branchId !== undefined && data.branchId !== pkg.branchId) {
+            if (data.branchId) await this.assertBranchOwnership(clinicId, data.branchId);
+        }
         Object.assign(pkg, data);
         return this.packageRepo.save(pkg);
     }
@@ -1517,13 +1633,20 @@ export class RetreatService {
 
     // ── Import ────────────────────────────────────────────────────────────────
 
-    async importXlsx(orgId: string, buffer: Buffer, dryRun = false): Promise<{
+    // ADR-004 D15 — one branch per import. The person running an import already
+    // knows which branch it's for; there's no safe way to guess per-row, and
+    // this matches the "no automatic cross-branch guessing" rule the rest of
+    // D15 follows. Existing rows that already belong to a DIFFERENT branch are
+    // never silently reassigned — skipped and reported, same pattern this
+    // importer already uses for other unresolvable rows.
+    async importXlsx(orgId: string, buffer: Buffer, branchId: string, dryRun = false): Promise<{
         dryRun: boolean;
-        categories: { created: number; updated: number; unchanged: number };
+        categories: { created: number; updated: number; unchanged: number; skipped: string[] };
         rooms: { created: number; updated: number; unchanged: number; skipped: string[] };
-        packages: { created: number; updated: number; unchanged: number };
+        packages: { created: number; updated: number; unchanged: number; skipped: string[] };
         pricing: { created: number; updated: number; unchanged: number; skipped: string[] };
     }> {
+        await this.assertBranchOwnership(orgId, branchId);
         const wb = XLSX.read(buffer, { type: 'buffer' });
 
         // Sentinel error used to roll back the transaction in dry-run (preview) mode.
@@ -1537,9 +1660,9 @@ export class RetreatService {
 
             const result = {
                 dryRun,
-                categories: { created: 0, updated: 0, unchanged: 0 },
+                categories: { created: 0, updated: 0, unchanged: 0, skipped: [] as string[] },
                 rooms: { created: 0, updated: 0, unchanged: 0, skipped: [] as string[] },
-                packages: { created: 0, updated: 0, unchanged: 0 },
+                packages: { created: 0, updated: 0, unchanged: 0, skipped: [] as string[] },
                 pricing: { created: 0, updated: 0, unchanged: 0, skipped: [] as string[] },
             };
 
@@ -1584,12 +1707,20 @@ export class RetreatService {
                         : null;
                     if (!existing) existing = await categoryRepo.findOne({ where: { organisationId: orgId, name } });
 
+                    // ADR-004 D15 — never silently move a category to a
+                    // different branch via import.
+                    if (existing && existing.branchId && existing.branchId !== branchId) {
+                        result.categories.skipped.push(`"${name}" belongs to a different branch`);
+                        continue;
+                    }
+
                     if (existing) {
                         reg(catNameToId, existing.name, existing.id); // old name still resolves
-                        const changed = existing.name !== name || existing.isActive !== isActive;
+                        const changed = existing.name !== name || existing.isActive !== isActive || existing.branchId !== branchId;
                         if (changed) {
                             existing.name = name;
                             existing.isActive = isActive;
+                            existing.branchId = branchId; // backfills legacy NULL rows too
                             await categoryRepo.save(existing);
                             result.categories.updated++;
                         } else {
@@ -1597,14 +1728,16 @@ export class RetreatService {
                         }
                         reg(catNameToId, name, existing.id);          // new name resolves too
                     } else {
-                        const created = await categoryRepo.save(categoryRepo.create({ organisationId: orgId, name, isActive }));
+                        const created = await categoryRepo.save(categoryRepo.create({ organisationId: orgId, name, isActive, branchId }));
                         reg(catNameToId, name, created.id);
                         result.categories.created++;
                     }
                 }
             }
-            // Seed maps with any categories not present in the sheet, so linked sheets still resolve.
-            for (const c of await categoryRepo.find({ where: { organisationId: orgId } })) reg(catNameToId, c.name, c.id);
+            // Seed maps with any categories not present in the sheet, so linked sheets still
+            // resolve — scoped to this import's branch only, per D15 (a category from a
+            // different branch must never satisfy a name lookup for this import).
+            for (const c of await categoryRepo.find({ where: { organisationId: orgId, branchId } })) reg(catNameToId, c.name, c.id);
 
             // ── 2. Packages (moved before rooms is unnecessary; rooms don't ref packages) ──
             const pkgSheet = wb.Sheets['Packages'];
@@ -1623,18 +1756,27 @@ export class RetreatService {
                         : null;
                     if (!existing) existing = await packageRepo.findOne({ where: { organisationId: orgId, name } });
 
+                    // ADR-004 D15 — never silently move a package to a
+                    // different branch via import.
+                    if (existing && existing.branchId && existing.branchId !== branchId) {
+                        result.packages.skipped.push(`"${name}" belongs to a different branch`);
+                        continue;
+                    }
+
                     if (existing) {
                         reg(pkgNameToId, existing.name, existing.id);
                         const newInclusions = inclusions.length ? inclusions : null;
                         const changed = existing.name !== name
                             || existing.durationDays !== durationDays
                             || !strEq(existing.description, description)
-                            || !arrEq(existing.inclusions, newInclusions);
+                            || !arrEq(existing.inclusions, newInclusions)
+                            || existing.branchId !== branchId;
                         if (changed) {
                             existing.name = name;
                             existing.durationDays = durationDays;
                             existing.description = description;
                             existing.inclusions = newInclusions;
+                            existing.branchId = branchId; // backfills legacy NULL rows too
                             await packageRepo.save(existing);
                             result.packages.updated++;
                         } else {
@@ -1645,13 +1787,14 @@ export class RetreatService {
                         const created = await packageRepo.save(packageRepo.create({
                             organisationId: orgId, name, durationDays, description,
                             inclusions: inclusions.length ? inclusions : null,
+                            branchId,
                         }));
                         reg(pkgNameToId, name, created.id);
                         result.packages.created++;
                     }
                 }
             }
-            for (const p of await packageRepo.find({ where: { organisationId: orgId } })) reg(pkgNameToId, p.name, p.id);
+            for (const p of await packageRepo.find({ where: { organisationId: orgId, branchId } })) reg(pkgNameToId, p.name, p.id);
 
             // ── 3. Rooms ────────────────────────────────────────────────────
             const roomSheet = wb.Sheets['Rooms'];
@@ -1678,6 +1821,13 @@ export class RetreatService {
                         : null;
                     if (!existing) existing = await roomRepo.findOne({ where: { organisationId: orgId, roomNumber } });
 
+                    // D14 — a room's own branchId stays optional, but never
+                    // silently move an already-branch-assigned room via import.
+                    if (existing && existing.branchId && existing.branchId !== branchId) {
+                        result.rooms.skipped.push(`${roomNumber}: room belongs to a different branch`);
+                        continue;
+                    }
+
                     const data = {
                         organisationId: orgId,
                         roomNumber,
@@ -1686,6 +1836,7 @@ export class RetreatService {
                         capacity: row['Capacity'] ? parseInt(String(row['Capacity']), 10) : null,
                         amenities,
                         description: String(row['Description'] ?? '').trim() || null,
+                        branchId,
                     };
                     if (existing) {
                         const changed = existing.roomNumber !== data.roomNumber
@@ -1693,7 +1844,8 @@ export class RetreatService {
                             || !strEq(existing.floor, data.floor)
                             || (existing.capacity ?? null) !== data.capacity
                             || !strEq(existing.description, data.description)
-                            || !arrEq(existing.amenities, data.amenities);
+                            || !arrEq(existing.amenities, data.amenities)
+                            || existing.branchId !== branchId;
                         if (changed) {
                             await roomRepo.save({ ...existing, ...data });
                             result.rooms.updated++;
@@ -1726,13 +1878,24 @@ export class RetreatService {
                         ? await pricingRepo.findOne({ where: { id, organisationId: orgId } })
                         : null;
 
+                    // ADR-004 D15 — never silently move a pricing entry to a
+                    // different branch via import.
+                    if (existing && existing.branchId && existing.branchId !== branchId) {
+                        result.pricing.skipped.push(`${catName || 'row'} × ${pkgName || ''}: belongs to a different branch`);
+                        continue;
+                    }
+
+                    // catNameToId/pkgNameToId are already scoped to this import's
+                    // branch (seeded above with `branchId` in the where clause),
+                    // so anything resolved here is guaranteed same-branch — no
+                    // separate assertSameBranch call needed.
                     const roomCategoryId = catName ? catNameToId.get(catName.toLowerCase()) : undefined;
                     const packageId = pkgName ? pkgNameToId.get(pkgName.toLowerCase()) : undefined;
 
                     if (!existing) {
                         if (!catName || !pkgName) continue;
-                        if (!roomCategoryId) { result.pricing.skipped.push(`Category "${catName}" not found`); continue; }
-                        if (!packageId) { result.pricing.skipped.push(`Package "${pkgName}" not found`); continue; }
+                        if (!roomCategoryId) { result.pricing.skipped.push(`Category "${catName}" not found on this branch`); continue; }
+                        if (!packageId) { result.pricing.skipped.push(`Package "${pkgName}" not found on this branch`); continue; }
                         existing = await pricingRepo.findOne({ where: { roomCategoryId, packageId } });
                     }
 
@@ -1745,12 +1908,14 @@ export class RetreatService {
                         const changed = !numEq(existing.basePrice, basePrice)
                             || !numEq(existing.acSupplementPerDay, acSupplementPerDay)
                             || (roomCategoryId && existing.roomCategoryId !== roomCategoryId)
-                            || (packageId && existing.packageId !== packageId);
+                            || (packageId && existing.packageId !== packageId)
+                            || existing.branchId !== branchId;
                         if (changed) {
                             existing.basePrice = basePrice;
                             existing.acSupplementPerDay = acSupplementPerDay;
                             if (roomCategoryId) existing.roomCategoryId = roomCategoryId;
                             if (packageId) existing.packageId = packageId;
+                            existing.branchId = branchId; // backfills legacy NULL rows too
                             await pricingRepo.save(existing);
                             result.pricing.updated++;
                         } else {
@@ -1762,7 +1927,7 @@ export class RetreatService {
                             continue;
                         }
                         await pricingRepo.save(pricingRepo.create({
-                            organisationId: orgId, roomCategoryId, packageId, basePrice, acSupplementPerDay,
+                            organisationId: orgId, roomCategoryId, packageId, basePrice, acSupplementPerDay, branchId,
                         }));
                         result.pricing.created++;
                     }

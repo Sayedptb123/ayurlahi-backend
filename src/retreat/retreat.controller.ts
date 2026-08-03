@@ -21,6 +21,10 @@ import { ModuleGuard, RequireModule } from '../auth/guards/module.guard';
 import { CreateBookingDto, UpdateBookingDto, CheckAvailabilityDto } from './dto/booking.dto';
 import { CreateEnquiryDto, UpdateEnquiryDto, ConvertEnquiryDto } from './dto/enquiry.dto';
 import { CreateFieldDefinitionDto, UpdateFieldDefinitionDto } from './dto/field-definition.dto';
+import { CreateRoomCategoryDto, UpdateRoomCategoryDto, GetRoomCategoriesDto } from './dto/room-category.dto';
+import { CreatePackageDto, UpdatePackageDto, GetPackagesDto } from './dto/package.dto';
+import { SetPricingMatrixDto, GetPricingMatrixDto } from './dto/pricing-matrix.dto';
+import { SetRoomPricingOverrideDto, GetRoomPricingOverridesDto } from './dto/room-pricing-override.dto';
 import { BookingStatus } from './entities/room-booking.entity';
 import { EnquiryStatus } from './entities/booking-enquiry.entity';
 
@@ -31,17 +35,17 @@ export class RetreatController {
     constructor(private readonly retreatService: RetreatService) { }
 
     @Get('room-categories')
-    getRoomCategories(@Request() req) {
-        return this.retreatService.getRoomCategories(req.user.organisationId);
+    getRoomCategories(@Request() req, @Query() query: GetRoomCategoriesDto) {
+        return this.retreatService.getRoomCategories(req.user.organisationId, query.branchId);
     }
 
     @Post('room-categories')
-    createRoomCategory(@Request() req, @Body() body: { name: string }) {
+    createRoomCategory(@Request() req, @Body() body: CreateRoomCategoryDto) {
         return this.retreatService.createRoomCategory(req.user.organisationId, body);
     }
 
     @Patch('room-categories/:id')
-    updateRoomCategory(@Request() req, @Param('id') id: string, @Body() body: { name?: string; isActive?: boolean }) {
+    updateRoomCategory(@Request() req, @Param('id') id: string, @Body() body: UpdateRoomCategoryDto) {
         return this.retreatService.updateRoomCategory(req.user.organisationId, id, body);
     }
 
@@ -62,12 +66,12 @@ export class RetreatController {
     }
 
     @Get('pricing-matrix')
-    getPricingMatrix(@Request() req) {
-        return this.retreatService.getPricingMatrix(req.user.organisationId);
+    getPricingMatrix(@Request() req, @Query() query: GetPricingMatrixDto) {
+        return this.retreatService.getPricingMatrix(req.user.organisationId, query.branchId);
     }
 
     @Post('pricing-matrix')
-    setPricingMatrix(@Request() req, @Body() body: { roomCategoryId: string; packageId: string; basePrice: number; acSupplementPerDay?: number | null }) {
+    setPricingMatrix(@Request() req, @Body() body: SetPricingMatrixDto) {
         return this.retreatService.setPricingMatrix(req.user.organisationId, body);
     }
 
@@ -77,12 +81,12 @@ export class RetreatController {
     }
 
     @Get('room-pricing-overrides')
-    getRoomPricingOverrides(@Request() req) {
-        return this.retreatService.getRoomPricingOverrides(req.user.organisationId);
+    getRoomPricingOverrides(@Request() req, @Query() query: GetRoomPricingOverridesDto) {
+        return this.retreatService.getRoomPricingOverrides(req.user.organisationId, query.branchId);
     }
 
     @Post('room-pricing-overrides')
-    setRoomPricingOverride(@Request() req, @Body() body: { roomId: string; packageId: string; price: number }) {
+    setRoomPricingOverride(@Request() req, @Body() body: SetRoomPricingOverrideDto) {
         return this.retreatService.setRoomPricingOverride(req.user.organisationId, body);
     }
 
@@ -108,9 +112,10 @@ export class RetreatController {
         @Request() req,
         @Query('checkInDate') checkInDate: string,
         @Query('checkOutDate') checkOutDate: string,
+        @Query('branchId') branchId?: string,
     ) {
         const clinicId = req.user.organisationId;
-        return this.retreatService.getAvailableRooms(clinicId, checkInDate, checkOutDate);
+        return this.retreatService.getAvailableRooms(clinicId, checkInDate, checkOutDate, branchId);
     }
 
     @Post('rooms')
@@ -120,7 +125,7 @@ export class RetreatController {
     }
 
     @Patch('rooms/:id')
-    updateRoom(@Request() req, @Param('id') id: string, @Body() body: { roomNumber?: string; floor?: string; roomCategoryId?: string; capacity?: number; amenities?: string[]; description?: string; status?: string }) {
+    updateRoom(@Request() req, @Param('id') id: string, @Body() body: { roomNumber?: string; floor?: string; roomCategoryId?: string; capacity?: number; amenities?: string[]; description?: string; status?: string; branchId?: string | null }) {
         const clinicId = req.user.organisationId;
         return this.retreatService.updateRoom(clinicId, id, body);
     }
@@ -132,13 +137,13 @@ export class RetreatController {
     }
 
     @Get('packages')
-    getPackages(@Request() req) {
+    getPackages(@Request() req, @Query() query: GetPackagesDto) {
         const clinicId = req.user.organisationId;
-        return this.retreatService.getPackages(clinicId);
+        return this.retreatService.getPackages(clinicId, query.branchId);
     }
 
     @Post('packages')
-    createPackage(@Request() req, @Body() body) {
+    createPackage(@Request() req, @Body() body: CreatePackageDto) {
         const clinicId = req.user.organisationId;
         return this.retreatService.createPackage(clinicId, body);
     }
@@ -223,7 +228,7 @@ export class RetreatController {
     }
 
     @Patch('packages/:id')
-    updatePackage(@Request() req, @Param('id') id: string, @Body() body) {
+    updatePackage(@Request() req, @Param('id') id: string, @Body() body: UpdatePackageDto) {
         const clinicId = req.user.organisationId;
         return this.retreatService.updatePackage(clinicId, id, body);
     }
@@ -309,10 +314,13 @@ export class RetreatController {
     importXlsx(
         @Request() req,
         @UploadedFile() file: Express.Multer.File,
+        @Query('branchId') branchId: string,
         @Query('dryRun') dryRun?: string,
     ) {
         if (!file) throw new Error('No file uploaded');
-        return this.retreatService.importXlsx(req.user.organisationId, file.buffer, dryRun === 'true');
+        // ADR-004 D15 — one branch per import, required.
+        if (!branchId) throw new Error('branchId is required');
+        return this.retreatService.importXlsx(req.user.organisationId, file.buffer, branchId, dryRun === 'true');
     }
 
     // ─── Custom Field Definitions ────────────────────────────────────────────

@@ -18,9 +18,11 @@ export class CreateDutyTemplateDto {
   @IsString()
   description?: string;
 
-  @IsOptional()
+  // ADR-004 D15 — required, not optional. NULL is only tolerated on legacy
+  // rows that predate this decision; every new template must pick a branch.
+  @IsNotEmpty()
   @IsUUID()
-  branchId?: string;
+  branchId: string;
 
   @IsNotEmpty()
   @IsObject()
