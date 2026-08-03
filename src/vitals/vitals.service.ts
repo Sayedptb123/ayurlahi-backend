@@ -11,15 +11,21 @@ export class VitalsService {
     private vitalsRepository: Repository<Vital>,
   ) {}
 
-  async getVitals(organisationId: string, patientId?: string): Promise<Vital[]> {
-    const where: Record<string, string> = { organisationId };
+  async getVitals(organisationId: string, patientId?: string, branchId?: string): Promise<Vital[]> {
+    const queryBuilder = this.vitalsRepository
+      .createQueryBuilder('vital')
+      .leftJoin('vital.patient', 'patient')
+      .where('vital.organisationId = :organisationId', { organisationId });
+
     if (patientId) {
-      where.patientId = patientId;
+      queryBuilder.andWhere('vital.patientId = :patientId', { patientId });
     }
-    return this.vitalsRepository.find({
-      where,
-      order: { recordedAt: 'DESC' },
-    });
+
+    if (branchId) {
+      queryBuilder.andWhere('patient.branchId = :branchId', { branchId });
+    }
+
+    return queryBuilder.orderBy('vital.recordedAt', 'DESC').getMany();
   }
 
   async createVital(

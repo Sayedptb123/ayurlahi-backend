@@ -33,11 +33,13 @@ export class NewbornAssessmentsController {
   @Get()
   @ApiOperation({ summary: 'List newborn assessments for an organisation, optionally filtered by baby patient' })
   @ApiQuery({ name: 'patientId', required: false, description: 'Filter by baby patient UUID' })
+  @ApiQuery({ name: 'branchId', required: false, description: 'Filter by branch UUID' })
   getAssessments(
     @Param('organisationId', ParseUUIDPipe) organisationId: string,
     @Query('patientId') patientId?: string,
+    @Query('branchId') branchId?: string,
   ) {
-    return this.newbornAssessmentsService.getAssessments(organisationId, patientId);
+    return this.newbornAssessmentsService.getAssessments(organisationId, patientId, branchId);
   }
 
   @Post()

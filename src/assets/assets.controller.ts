@@ -70,13 +70,15 @@ export class AssetsController {
     @Query('categoryId') categoryId?: string,
     @Query('status') status?: AssetStatus,
     @Query('search') search?: string,
-    @Query('needsMaintenance') needsMaintenance?: string
+    @Query('needsMaintenance') needsMaintenance?: string,
+    @Query('branchId') branchId?: string,
   ) {
     return this.assetsService.findAllAssets(req.user.organisationId, {
       categoryId,
       status,
       search,
       needsMaintenance,
+      branchId,
     });
   }
 

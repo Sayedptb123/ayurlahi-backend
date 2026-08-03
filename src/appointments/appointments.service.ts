@@ -16,6 +16,7 @@ import { UpdateAppointmentDto } from './dto/update-appointment.dto';
 import { GetAppointmentsDto } from './dto/get-appointments.dto';
 import { EmailService } from '../email/email.service';
 import { NotificationsService } from '../notifications/notifications.service';
+import { BranchVisibilityService } from '../branch-visibility/branch-visibility.service';
 
 @Injectable()
 export class AppointmentsService {
@@ -30,6 +31,7 @@ export class AppointmentsService {
     private staffRepository: Repository<Staff>,
     private emailService: EmailService,
     private notificationsService: NotificationsService,
+    private branchVisibilityService: BranchVisibilityService,
   ) { }
 
   async create(
@@ -131,6 +133,9 @@ export class AppointmentsService {
     const appointment = this.appointmentsRepository.create({
       ...createDto,
       organisationId: clinicId,
+      // ADR-004 D9 — defaults to the patient's own branch when not explicitly
+      // overridden, since an appointment naturally belongs where its patient does.
+      branchId: createDto.branchId ?? patient.branchId ?? null,
       appointmentDate: new Date(createDto.appointmentDate),
       duration: createDto.duration ?? 30,
       status: createDto.status ?? AppointmentStatus.SCHEDULED,
@@ -204,6 +209,32 @@ export class AppointmentsService {
       queryBuilder.where('appointment.organisationId = :orgId', {
         orgId: organisationId,
       });
+
+      // ADR-004 D9/Phase 4 — branch-level visibility, additive on top of the
+      // organisation filter above, never a replacement for it. Was previously
+      // missed here (appointments predates the four-table Phase 4 rollout).
+      const visibleBranchIds = await this.branchVisibilityService.resolveVisibleBranchIds(
+        userId,
+        organisationId,
+        userRole,
+      );
+      if (visibleBranchIds !== null) {
+        if (visibleBranchIds.length > 0) {
+          queryBuilder.andWhere(
+            '(appointment.branchId IS NULL OR appointment.branchId IN (:...visibleBranchIds))',
+            { visibleBranchIds },
+          );
+        } else {
+          queryBuilder.andWhere('appointment.branchId IS NULL');
+        }
+      }
+
+      // Branch switcher (personal view filter) — ANDed on top of the visibility
+      // filter above, so it can only narrow further, never broaden it. Strict
+      // match: "All Locations" is the combined view.
+      if (query.branchId) {
+        queryBuilder.andWhere('appointment.branchId = :selectedBranchId', { selectedBranchId: query.branchId });
+      }
     }
 
     // Filters

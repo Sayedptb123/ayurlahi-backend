@@ -57,13 +57,19 @@ export class BillsService {
     return await this.billRepo.save(bill);
   }
 
-  async findAll(reqUser: RequestUser, query: { isActive?: string } = {}) {
+  async findAll(reqUser: RequestUser, query: { isActive?: string; branchId?: string } = {}) {
     const where: any = {
       organisationId: reqUser.organisationId,
       deletedAt: IsNull(),
     };
     if (query.isActive !== undefined) {
       where.isActive = query.isActive === 'true';
+    }
+    // Branch switcher (personal view filter) — strict match, not org-wide/branch
+    // access control (recurring bills, e.g. rent/utilities, aren't part of the
+    // patientVisibility policy D9 governs).
+    if (query.branchId) {
+      where.branchId = query.branchId;
     }
 
     return await this.billRepo.find({

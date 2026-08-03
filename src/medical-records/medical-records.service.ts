@@ -112,6 +112,7 @@ export class MedicalRecordsService {
       appointmentId,
       startDate,
       endDate,
+      branchId,
     } = query;
     const skip = (page - 1) * limit;
 
@@ -156,6 +157,10 @@ export class MedicalRecordsService {
       queryBuilder.andWhere('medicalRecord.appointmentId = :appointmentId', {
         appointmentId,
       });
+    }
+
+    if (branchId) {
+      queryBuilder.andWhere('patient.branchId = :branchId', { branchId });
     }
 
     if (startDate && endDate) {

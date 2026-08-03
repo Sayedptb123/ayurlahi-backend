@@ -154,6 +154,7 @@ export class LabReportsService {
       status,
       startDate,
       endDate,
+      branchId,
     } = query;
     const skip = (page - 1) * limit;
 
@@ -201,6 +202,10 @@ export class LabReportsService {
 
     if (status) {
       queryBuilder.andWhere('labReport.status = :status', { status });
+    }
+
+    if (branchId) {
+      queryBuilder.andWhere('patient.branchId = :branchId', { branchId });
     }
 
     if (startDate && endDate) {

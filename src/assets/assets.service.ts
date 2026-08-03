@@ -90,7 +90,7 @@ export class AssetsService {
 
   async findAllAssets(
     organisationId: string,
-    query: { categoryId?: string; status?: AssetStatus; search?: string; needsMaintenance?: string } = {}
+    query: { categoryId?: string; status?: AssetStatus; search?: string; needsMaintenance?: string; branchId?: string } = {}
   ) {
     const where: any = { organisationId, deletedAt: IsNull() };
 
@@ -102,6 +102,11 @@ export class AssetsService {
     }
     if (query.needsMaintenance === 'true') {
       where.nextMaintenanceDate = LessThanOrEqual(new Date());
+    }
+    // Branch switcher (personal view filter) — assets aren't part of the
+    // patientVisibility policy, so a simple strict match is correct here.
+    if (query.branchId) {
+      where.branchId = query.branchId;
     }
 
     // Load assets with category relation (required for depreciation calculations)

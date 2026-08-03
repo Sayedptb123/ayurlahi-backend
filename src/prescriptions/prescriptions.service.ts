@@ -144,6 +144,7 @@ export class PrescriptionsService {
       status,
       startDate,
       endDate,
+      branchId,
     } = query;
     const skip = (page - 1) * limit;
 
@@ -191,6 +192,10 @@ export class PrescriptionsService {
 
     if (status) {
       queryBuilder.andWhere('prescription.status = :status', { status });
+    }
+
+    if (branchId) {
+      queryBuilder.andWhere('patient.branchId = :branchId', { branchId });
     }
 
     if (startDate && endDate) {

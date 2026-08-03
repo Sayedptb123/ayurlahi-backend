@@ -5,6 +5,7 @@ import {
   IsEnum,
   IsDateString,
   IsInt,
+  IsUUID,
   Min,
   Max,
   MaxLength,
@@ -55,4 +56,9 @@ export class CreateAppointmentDto {
   @IsOptional()
   @IsString()
   notes?: string;
+
+  // ADR-004 D9 — if omitted, defaults to the patient's own branch (see service).
+  @IsOptional()
+  @IsUUID()
+  branchId?: string;
 }

@@ -31,11 +31,13 @@ export class VitalsController {
   @Get()
   @ApiOperation({ summary: 'List vitals for an organisation, optionally filtered by patient' })
   @ApiQuery({ name: 'patientId', required: false, description: 'Filter by patient UUID' })
+  @ApiQuery({ name: 'branchId', required: false, description: 'Filter by branch UUID' })
   getVitals(
     @Param('organisationId', ParseUUIDPipe) organisationId: string,
     @Query('patientId') patientId?: string,
+    @Query('branchId') branchId?: string,
   ) {
-    return this.vitalsService.getVitals(organisationId, patientId);
+    return this.vitalsService.getVitals(organisationId, patientId, branchId);
   }
 
   @Post()

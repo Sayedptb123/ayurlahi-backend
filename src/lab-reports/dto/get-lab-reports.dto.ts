@@ -49,4 +49,9 @@ export class GetLabReportsDto {
   @IsOptional()
   @IsDateString()
   endDate?: string; // Filter by date range
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(36)
+  branchId?: string;
 }

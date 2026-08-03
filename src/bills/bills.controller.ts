@@ -40,8 +40,8 @@ export class BillsController {
 
   @Get()
   @Roles(...CLINIC_MEMBERS)
-  findAll(@Request() req, @Query('isActive') isActive?: string) {
-    return this.billsService.findAll(req.user, { isActive });
+  findAll(@Request() req, @Query('isActive') isActive?: string, @Query('branchId') branchId?: string) {
+    return this.billsService.findAll(req.user, { isActive, branchId });
   }
 
   @Post('process-due')

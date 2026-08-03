@@ -11,15 +11,31 @@ export class NewbornAssessmentsService {
     private newbornAssessmentsRepository: Repository<NewbornAssessment>,
   ) {}
 
-  async getAssessments(organisationId: string, patientId?: string): Promise<NewbornAssessment[]> {
-    const where: any = { organisationId, deletedAt: IsNull() };
-    if (patientId) {
-      where.patientId = patientId;
+  async getAssessments(organisationId: string, patientId?: string, branchId?: string): Promise<NewbornAssessment[]> {
+    if (!branchId) {
+      const where: any = { organisationId, deletedAt: IsNull() };
+      if (patientId) {
+        where.patientId = patientId;
+      }
+      return this.newbornAssessmentsRepository.find({
+        where,
+        order: { assessmentTime: 'DESC' },
+      });
     }
-    return this.newbornAssessmentsRepository.find({
-      where,
-      order: { assessmentTime: 'DESC' },
-    });
+
+    // No ManyToOne relation defined on this entity, so join to patients by raw table/condition.
+    const queryBuilder = this.newbornAssessmentsRepository
+      .createQueryBuilder('assessment')
+      .leftJoin('patients', 'patient', 'patient.id = assessment.patientId')
+      .where('assessment.organisationId = :organisationId', { organisationId })
+      .andWhere('assessment.deletedAt IS NULL')
+      .andWhere('patient.branch_id = :branchId', { branchId });
+
+    if (patientId) {
+      queryBuilder.andWhere('assessment.patientId = :patientId', { patientId });
+    }
+
+    return queryBuilder.orderBy('assessment.assessmentTime', 'DESC').getMany();
   }
 
   async createAssessment(

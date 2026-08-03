@@ -2,6 +2,7 @@ import {
   IsOptional,
   IsString,
   IsInt,
+  IsUUID,
   Min,
   IsEnum,
   IsDateString,
@@ -60,4 +61,8 @@ export class GetAppointmentsDto {
   @IsString()
   @MaxLength(100)
   search?: string; // Free-text search across patient name, doctor name, reason, notes
+
+  @IsOptional()
+  @IsUUID()
+  branchId?: string;
 }
