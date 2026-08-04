@@ -69,8 +69,13 @@ export class DutyTemplatesService {
       });
     }
 
+    // ADR-004 D15 — see duty-types.service.ts's findAll() comment: legacy
+    // branchId=NULL rows must stay reachable in every branch's filtered view.
     if (branchId) {
-      queryBuilder.andWhere('template.branchId = :branchId', { branchId });
+      queryBuilder.andWhere(
+        '(template.branchId = :branchId OR template.branchId IS NULL)',
+        { branchId },
+      );
     }
 
     if (isActive !== undefined) {

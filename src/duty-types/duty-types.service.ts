@@ -73,10 +73,16 @@ export class DutyTypesService {
       .where('dutyType.organisationId = :organisationId', { organisationId })
       .andWhere('dutyType.deletedAt IS NULL');
 
-    // Personal view filter (strict match) — distinct from D15's ownership
-    // semantics, which is enforced at write time, not here.
+    // ADR-004 D15 — legacy branchId=NULL rows ("needs assignment") must stay
+    // reachable in every branch's filtered view, otherwise they (and their
+    // "needs assignment" badge) are permanently unreachable for a multi-
+    // branch org whose data wasn't auto-backfilled. NULL still never means
+    // "shared" — it's a to-be-fixed state surfaced for cleanup.
     if (branchId) {
-      queryBuilder.andWhere('dutyType.branchId = :branchId', { branchId });
+      queryBuilder.andWhere(
+        '(dutyType.branchId = :branchId OR dutyType.branchId IS NULL)',
+        { branchId },
+      );
     }
 
     if (search) {

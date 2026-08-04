@@ -138,10 +138,16 @@ export class RetreatService {
 
     // --- ROOMS ---
     async getRoomCategories(clinicId: string, branchId?: string) {
-        const where: any = { organisationId: clinicId };
-        // ADR-004 D15 — personal view filter (strict match), distinct from
-        // the ownership enforcement done at write time.
-        if (branchId) where.branchId = branchId;
+        // ADR-004 D15 — filtered view, distinct from the ownership enforcement
+        // done at write time. Legacy branchId=NULL rows ("needs assignment")
+        // are included alongside the selected branch's own rows — otherwise
+        // they're permanently unreachable (never shown, badge never seen,
+        // can never be resolved) for any multi-branch org whose data wasn't
+        // auto-backfilled. NULL here still never means "shared" — it's a
+        // to-be-fixed state surfaced for cleanup, not a standing catalog.
+        const where = branchId
+            ? [{ organisationId: clinicId, branchId }, { organisationId: clinicId, branchId: IsNull() }]
+            : { organisationId: clinicId };
         return this.categoryRepo.find({
             where,
             order: { name: 'ASC' },
@@ -183,8 +189,11 @@ export class RetreatService {
     // --- Pricing Matrix (category × package → price) ---
 
     async getPricingMatrix(clinicId: string, branchId?: string) {
-        const where: any = { organisationId: clinicId };
-        if (branchId) where.branchId = branchId;
+        // ADR-004 D15 — see getRoomCategories() comment: legacy NULL-branch
+        // rows must stay reachable in every branch's filtered view.
+        const where = branchId
+            ? [{ organisationId: clinicId, branchId }, { organisationId: clinicId, branchId: IsNull() }]
+            : { organisationId: clinicId };
         return this.categoryPricingRepo.find({
             where,
             relations: ['roomCategory', 'package'],
@@ -241,8 +250,10 @@ export class RetreatService {
     // --- Room-Level Price Overrides ---
 
     async getRoomPricingOverrides(clinicId: string, branchId?: string) {
-        const where: any = { organisationId: clinicId };
-        if (branchId) where.branchId = branchId;
+        // ADR-004 D15 — see getRoomCategories() comment.
+        const where = branchId
+            ? [{ organisationId: clinicId, branchId }, { organisationId: clinicId, branchId: IsNull() }]
+            : { organisationId: clinicId };
         return this.roomPricingOverrideRepo.find({
             where,
             relations: ['room', 'package'],
@@ -527,8 +538,10 @@ export class RetreatService {
 
     // --- PACKAGES ---
     async getPackages(clinicId: string, branchId?: string) {
-        const where: any = { organisationId: clinicId };
-        if (branchId) where.branchId = branchId;
+        // ADR-004 D15 — see getRoomCategories() comment.
+        const where = branchId
+            ? [{ organisationId: clinicId, branchId }, { organisationId: clinicId, branchId: IsNull() }]
+            : { organisationId: clinicId };
         return this.packageRepo.find({
             where,
             order: { durationDays: 'ASC' },
