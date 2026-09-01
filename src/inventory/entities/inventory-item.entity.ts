@@ -46,6 +46,20 @@ export class InventoryItem {
   @Column({ name: 'expiry_date', type: 'date', nullable: true })
   expiryDate: string | null;
 
+  // HSN/SAC code and GST rate from the supplier invoice, if any. Optional —
+  // most manually-entered items won't have either.
+  @Column({ name: 'hsn_code', type: 'varchar', length: 20, nullable: true })
+  hsnCode: string | null;
+
+  @Column({
+    name: 'gst_rate',
+    type: 'decimal',
+    precision: 5,
+    scale: 2,
+    nullable: true,
+  })
+  gstRate: number | null;
+
   @Column()
   unit: string;
 

@@ -41,6 +41,15 @@ export class CreateInventoryItemDto {
   expiryDate?: string;
 
   @IsString()
+  @IsOptional()
+  hsnCode?: string;
+
+  @IsNumber()
+  @IsOptional()
+  @Min(0)
+  gstRate?: number;
+
+  @IsString()
   @IsNotEmpty()
   unit: string;
 
@@ -95,6 +104,15 @@ export class UpdateInventoryItemDto {
   @IsOptional()
   @IsDateString()
   expiryDate?: string;
+
+  @IsString()
+  @IsOptional()
+  hsnCode?: string;
+
+  @IsNumber()
+  @IsOptional()
+  @Min(0)
+  gstRate?: number;
 
   @IsString()
   @IsOptional()
