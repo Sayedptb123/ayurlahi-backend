@@ -6,6 +6,7 @@ import {
   Patch,
   Param,
   Delete,
+  Query,
   UseGuards,
   Request,
 } from '@nestjs/common';
@@ -40,8 +41,19 @@ export class InventoryController {
   }
 
   @Get()
-  findAll(@Param('organisationId') organisationId: string) {
-    return this.inventoryService.findAll(organisationId);
+  findAll(
+    @Param('organisationId') organisationId: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+    @Query('category') category?: string,
+    @Query('isActive') isActive?: string,
+  ) {
+    return this.inventoryService.findAll(organisationId, {
+      page: page ? parseInt(page, 10) : undefined,
+      limit: limit ? parseInt(limit, 10) : undefined,
+      category,
+      isActive: isActive !== undefined ? isActive === 'true' : undefined,
+    });
   }
 
   @Get('low-stock')

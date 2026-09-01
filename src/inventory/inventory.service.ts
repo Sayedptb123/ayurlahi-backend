@@ -122,11 +122,33 @@ export class InventoryService {
     return saved;
   }
 
-  async findAll(organisationId: string): Promise<InventoryItem[]> {
-    return await this.inventoryRepository.find({
-      where: { organisationId },
-      order: { name: 'ASC' },
-    });
+  async findAll(
+    organisationId: string,
+    query?: { page?: number; limit?: number; category?: string; isActive?: boolean },
+  ): Promise<{
+    data: InventoryItem[];
+    pagination: { page: number; limit: number; total: number; totalPages: number };
+  }> {
+    const page = query?.page ?? 1;
+    const limit = query?.limit ?? 20;
+    const skip = (page - 1) * limit;
+
+    const queryBuilder = this.inventoryRepository
+      .createQueryBuilder('item')
+      .where('item.organisation_id = :organisationId', { organisationId });
+
+    if (query?.category) {
+      queryBuilder.andWhere('item.category = :category', { category: query.category });
+    }
+    if (query?.isActive !== undefined) {
+      queryBuilder.andWhere('item.is_active = :isActive', { isActive: query.isActive });
+    }
+
+    const total = await queryBuilder.getCount();
+    queryBuilder.skip(skip).take(limit).orderBy('item.name', 'ASC');
+    const data = await queryBuilder.getMany();
+
+    return { data, pagination: { page, limit, total, totalPages: Math.ceil(total / limit) } };
   }
 
   async findOne(organisationId: string, id: string): Promise<InventoryItem> {
