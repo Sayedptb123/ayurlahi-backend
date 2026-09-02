@@ -65,6 +65,21 @@ export class Invoice {
   @Column({ type: 'varchar', length: 20, nullable: true, name: 'hsnCode' })
   hsnCode: string | null;
 
+  @Column({ type: 'boolean', default: false, name: 'isPaid' })
+  isPaid: boolean;
+
+  @Column({ type: 'timestamp', nullable: true, name: 'paidAt' })
+  paidAt: Date | null;
+
+  @Column({ type: 'decimal', precision: 12, scale: 2, nullable: true, name: 'paidAmount' })
+  paidAmount: number | null;
+
+  @Column({ type: 'text', nullable: true, name: 'paymentNotes' })
+  paymentNotes: string | null;
+
+  @Column({ type: 'uuid', nullable: true, name: 'paymentRecordedBy' })
+  paymentRecordedBy: string | null;
+
   @ManyToOne(() => Order)
   @JoinColumn({ name: 'orderId' })
   order: Order;
