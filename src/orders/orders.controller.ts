@@ -14,6 +14,7 @@ import { OrdersService } from './orders.service';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { GetOrdersDto } from './dto/get-orders.dto';
 import { UpdateOrderStatusDto } from './dto/update-order-status.dto';
+import { AssignOrderItemDto } from './dto/assign-order-item.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 
 @Controller('orders')
@@ -53,6 +54,40 @@ export class OrdersController {
       req.user.role,
       req.user.organisationType,
       updateDto,
+      req.user.organisationId,
+    );
+  }
+
+  @Patch(':orderId/items/:itemId/assign')
+  async assignItem(
+    @Param('orderId', ParseUUIDPipe) orderId: string,
+    @Param('itemId', ParseUUIDPipe) itemId: string,
+    @Request() req,
+    @Body() assignDto: AssignOrderItemDto,
+  ) {
+    return this.ordersService.assignOrderItem(
+      orderId,
+      itemId,
+      req.user.userId,
+      req.user.role,
+      req.user.organisationType,
+      req.user.organisationId,
+      assignDto,
+    );
+  }
+
+  @Patch(':orderId/items/:itemId/pickup')
+  async pickupItem(
+    @Param('orderId', ParseUUIDPipe) orderId: string,
+    @Param('itemId', ParseUUIDPipe) itemId: string,
+    @Request() req,
+  ) {
+    return this.ordersService.markItemPickedUp(
+      orderId,
+      itemId,
+      req.user.userId,
+      req.user.role,
+      req.user.organisationType,
       req.user.organisationId,
     );
   }

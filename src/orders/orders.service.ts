@@ -7,13 +7,14 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, IsNull, In } from 'typeorm';
 import { Order, OrderStatus, OrderSource } from './entities/order.entity';
-import { OrderItem } from './entities/order-item.entity';
+import { OrderItem, OrderItemStatus } from './entities/order-item.entity';
 import { Product } from '../products/entities/product.entity';
 import { User } from '../users/entities/user.entity';
 import { OrganisationUser } from '../organisation-users/entities/organisation-user.entity';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { GetOrdersDto } from './dto/get-orders.dto';
 import { UpdateOrderStatusDto } from './dto/update-order-status.dto';
+import { AssignOrderItemDto } from './dto/assign-order-item.dto';
 import { InventoryService } from '../inventory/inventory.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { RoleUtils } from '../common/utils/role.utils';
@@ -249,13 +250,13 @@ export class OrdersService {
 
     // Notify manufacturer owners/managers about new order
     const manufacturerIds = [...new Set(orderItems.map((i) => i.manufacturerId).filter(Boolean))];
+    const itemSummary = orderWithRelations?.items?.map((i) => `${i.productName} x${i.quantity}`).join(', ') ?? '';
     if (manufacturerIds.length > 0) {
       this.orgUserRepository
         .find({ where: { organisationId: In(manufacturerIds), role: In(['OWNER', 'MANAGER', 'ADMIN']), isActive: true } })
         .then((orgUsers) => {
           const userIds = orgUsers.map((ou) => ou.userId).filter(Boolean);
           if (userIds.length > 0) {
-            const itemSummary = orderWithRelations?.items?.map((i) => `${i.productName} x${i.quantity}`).join(', ') ?? '';
             this.notificationsService.sendToUsers({
               userIds,
               title: 'New Order Received',
@@ -266,6 +267,31 @@ export class OrdersService {
         })
         .catch(() => {});
     }
+
+    // Every order also needs Ayurlahi's own fulfillment team notified —
+    // this is a universal workflow (Ayurlahi always forwards to the
+    // manufacturer and handles pickup), not conditional on anything.
+    // See scope/Order_Fulfillment_Routing_Plan.md.
+    this.orgUserRepository
+      .find({
+        where: {
+          organisationId: OrdersService.AYURLAHI_TEAM_ORG_ID,
+          role: In(['FIELD_STAFF', 'TEAM_LEAD', 'SUPPORT']),
+          isActive: true,
+        },
+      })
+      .then((orgUsers) => {
+        const userIds = orgUsers.map((ou) => ou.userId).filter(Boolean);
+        if (userIds.length > 0) {
+          this.notificationsService.sendToUsers({
+            userIds,
+            title: 'New Order to Fulfill',
+            body: `Order ${orderWithRelations?.orderNumber}: ${itemSummary} — forward to manufacturer and assign pickup`,
+            data: { orderId: savedOrder.id, type: 'order_needs_fulfillment' },
+          }).catch(() => {});
+        }
+      })
+      .catch(() => {});
 
     return orderWithRelations;
   }
@@ -438,6 +464,106 @@ export class OrdersService {
     }
 
     return savedOrder;
+  }
+
+  private static readonly AYURLAHI_TEAM_ORG_ID = '00000000-0000-0000-0000-000000000001';
+
+  /**
+   * Ayurlahi-managed fulfillment: assign a Team Ayurlahi member to collect
+   * this item from the manufacturer. Assignment is distinct from pickup —
+   * see markItemPickedUp. Gated the same way updateStatus is (admin/support
+   * only); no new permission model.
+   */
+  async assignOrderItem(
+    orderId: string,
+    itemId: string,
+    userId: string,
+    userRole: string,
+    organisationType: string | undefined,
+    organisationId: string | undefined,
+    dto: AssignOrderItemDto,
+  ) {
+    if (!RoleUtils.isAdminOrSupport(userRole)) {
+      throw new ForbiddenException('Only Ayurlahi Team admin/support can assign order pickups');
+    }
+
+    const order = await this.findOne(orderId, userId, userRole, organisationType, organisationId);
+    const item = order.items?.find((i) => i.id === itemId);
+    if (!item) {
+      throw new NotFoundException(`Order item ${itemId} not found on order ${orderId}`);
+    }
+
+    // The assignee must actually be a Team Ayurlahi member — not just any user id.
+    const assigneeMembership = await this.orgUserRepository.findOne({
+      where: { userId: dto.userId, organisationId: OrdersService.AYURLAHI_TEAM_ORG_ID, isActive: true },
+    });
+    if (!assigneeMembership) {
+      throw new BadRequestException('Assigned user is not an active Team Ayurlahi member');
+    }
+
+    item.assignedUserId = dto.userId;
+    const saved = await this.orderItemsRepository.save(item);
+
+    this.notificationsService.sendToUsers({
+      userIds: [dto.userId],
+      title: 'Pickup Assigned',
+      body: `You've been assigned to collect ${item.productName} (order ${order.orderNumber}) from the manufacturer`,
+      data: { orderId, itemId, type: 'pickup_assigned' },
+    }).catch(() => {});
+
+    return saved;
+  }
+
+  /**
+   * Ayurlahi-managed fulfillment: record that the assigned Team Ayurlahi
+   * member has physically collected this item from the manufacturer.
+   * The order-level status transition to SHIPPED is delegated to the
+   * existing updateStatus() so the clinic gets the same "Order Shipped"
+   * notification and state-machine validation it already gets today —
+   * this does not set `status` directly, and does not fire that
+   * notification a second time if the order is already SHIPPED/DELIVERED
+   * (relevant once a single order can have multiple items/pickups).
+   */
+  async markItemPickedUp(
+    orderId: string,
+    itemId: string,
+    userId: string,
+    userRole: string,
+    organisationType: string | undefined,
+    organisationId: string | undefined,
+  ) {
+    if (!RoleUtils.isAdminOrSupport(userRole)) {
+      throw new ForbiddenException('Only Ayurlahi Team admin/support can mark an item picked up');
+    }
+
+    const order = await this.findOne(orderId, userId, userRole, organisationType, organisationId);
+    const item = order.items?.find((i) => i.id === itemId);
+    if (!item) {
+      throw new NotFoundException(`Order item ${itemId} not found on order ${orderId}`);
+    }
+    if (!item.assignedUserId) {
+      throw new BadRequestException('Assign a Team Ayurlahi member before marking this item picked up');
+    }
+    if (item.pickedUpAt) {
+      throw new BadRequestException('This item has already been marked picked up');
+    }
+
+    item.pickedUpAt = new Date();
+    item.status = OrderItemStatus.SHIPPED;
+    await this.orderItemsRepository.save(item);
+
+    if (order.status !== OrderStatus.SHIPPED && order.status !== OrderStatus.DELIVERED) {
+      await this.updateStatus(
+        orderId,
+        userId,
+        userRole,
+        organisationType,
+        { status: OrderStatus.SHIPPED },
+        organisationId,
+      );
+    }
+
+    return this.orderItemsRepository.findOne({ where: { id: itemId } });
   }
 
   /**

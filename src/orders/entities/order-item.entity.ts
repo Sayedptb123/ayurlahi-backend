@@ -75,6 +75,14 @@ export class OrderItem {
   @Column({ type: 'text', nullable: true })
   notes: string | null;
 
+  // Ayurlahi-managed fulfillment: who's collecting this item from the
+  // manufacturer, and when they actually did. Assignment != pickup.
+  @Column({ type: 'uuid', name: 'assigned_user_id', nullable: true })
+  assignedUserId: string | null;
+
+  @Column({ type: 'timestamptz', name: 'picked_up_at', nullable: true })
+  pickedUpAt: Date | null;
+
   @ManyToOne(() => Order, (order) => order.items, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'order_id' })
   order: Order;
