@@ -95,7 +95,29 @@ export class ClinicsService {
       throw new NotFoundException('Clinic not found');
     }
 
-    return clinic;
+    // organisations has no address/city/state/pincode/phone columns — that
+    // data lives on branches. Used by CreateOrderScreen's "use clinic
+    // address as shipping" autofill, so pull the primary branch's address
+    // (falling back to the first active one) onto the response.
+    const branch = await this.organisationsRepository.manager
+      .getRepository('branches')
+      .createQueryBuilder('branch')
+      .where('branch.organisation_id = :orgId', { orgId: clinic.id })
+      .andWhere('branch.deleted_at IS NULL')
+      .andWhere('branch.is_active = true')
+      .orderBy('branch.is_primary', 'DESC')
+      .addOrderBy('branch.created_at', 'ASC')
+      .getOne();
+
+    return {
+      ...clinic,
+      address: branch?.address ?? null,
+      city: branch?.city ?? null,
+      district: null, // branches has no separate district column
+      state: branch?.state ?? null,
+      pincode: branch?.pincode ?? null,
+      phone: branch?.phone ?? null,
+    };
   }
 
   async update(
