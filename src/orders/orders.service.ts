@@ -202,6 +202,8 @@ export class OrdersService {
         productName: product.name,
         quantity: itemDto.quantity,
         unitPrice: Number(product.price),
+        mrp: product.mrp != null ? Number(product.mrp) : null,
+        hsnCode: product.hsnCode || null,
         gstRate: Number(product.gstRate),
         subtotal: itemSubtotal,
         gstAmount: itemGstAmount,
@@ -583,13 +585,23 @@ export class OrdersService {
       productName: i.productName,
       quantity: i.quantity,
       unitPrice: Number(i.unitPrice),
+      mrp: i.mrp != null ? Number(i.mrp) : null,
+      hsnCode: i.hsnCode || null,
       totalPrice: Number(i.unitPrice) * i.quantity,
     }));
     const subtotal = items.reduce((sum, i) => sum + i.totalPrice, 0);
-    const gstAmount = Number(((subtotal * 5) / 100).toFixed(2)); // assume 5% pending real GST per-item
+    // Sum each item's real snapshotted GST amount rather than assuming a flat
+    // rate — some PMS products (P Kof, Iro Forte, Immuno Forte) are 18%, not 5%.
+    const gstAmount = (order.items || []).reduce((sum, i) => sum + Number(i.gstAmount), 0);
     const totalAmount = subtotal + gstAmount;
 
     const invoiceNumber = `INV-${new Date().getFullYear()}-${order.orderNumber}`;
+    const manufacturerId = order.items?.[0]?.manufacturerId;
+
+    const [clinicDetails, manufacturerDetails] = await Promise.all([
+      this.getClinicInvoiceDetails(order.organisationId),
+      manufacturerId ? this.getManufacturerInvoiceDetails(manufacturerId) : Promise.resolve(null),
+    ]);
 
     const invoice = this.invoicesRepository.create({
       orderId: order.id,
@@ -601,7 +613,9 @@ export class OrdersService {
       clinicDetails: {
         organisationId: order.organisationId,
         shippingAddress: order.shippingAddress,
+        ...clinicDetails,
       },
+      manufacturerDetails,
       items,
       subtotal,
       gstAmount,
@@ -618,5 +632,52 @@ export class OrdersService {
       // log and continue. Accountants can regenerate via separate flow.
       console.error('[OrdersService] Failed to create invoice for order', order.id, err?.message);
     }
+  }
+
+  // organisations has no address/gstin columns — clinic address lives on
+  // branches (see ClinicsService.findMyClinic) and GSTIN on clinic_profiles.
+  // Looked up by string table name since ClinicProfile/manufacturer_profiles
+  // entities aren't registered in OrdersModule (same pattern ClinicsService uses for 'branches').
+  private async getClinicInvoiceDetails(organisationId: string): Promise<Record<string, any>> {
+    const manager = this.ordersRepository.manager;
+    const [org, profile, branch] = await Promise.all([
+      manager.getRepository('organisations').findOne({ where: { id: organisationId } }) as Promise<any>,
+      manager.getRepository('clinic_profiles').findOne({ where: { organisationId } }) as Promise<any>,
+      manager
+        .getRepository('branches')
+        .createQueryBuilder('branch')
+        .where('branch.organisation_id = :orgId', { orgId: organisationId })
+        .andWhere('branch.deleted_at IS NULL')
+        .andWhere('branch.is_active = true')
+        .orderBy('branch.is_primary', 'DESC')
+        .addOrderBy('branch.created_at', 'ASC')
+        .getOne() as Promise<any>,
+    ]);
+    return {
+      name: org?.name ?? null,
+      gstin: profile?.gstin ?? null,
+      address: branch?.address ?? null,
+      city: branch?.city ?? null,
+      state: branch?.state ?? null,
+      pincode: branch?.pincode ?? null,
+      phone: branch?.phone ?? null,
+    };
+  }
+
+  private async getManufacturerInvoiceDetails(manufacturerId: string): Promise<Record<string, any>> {
+    const manager = this.ordersRepository.manager;
+    const [org, profile] = await Promise.all([
+      manager.getRepository('organisations').findOne({ where: { id: manufacturerId } }) as Promise<any>,
+      manager.getRepository('manufacturer_profiles').findOne({ where: { organisationId: manufacturerId } }) as Promise<any>,
+    ]);
+    return {
+      name: profile?.companyName ?? org?.name ?? null,
+      gstin: profile?.gstin ?? null,
+      address: profile?.address ?? null,
+      city: profile?.city ?? null,
+      state: profile?.state ?? null,
+      pincode: profile?.pincode ?? null,
+      phone: profile?.phone ?? null,
+    };
   }
 }

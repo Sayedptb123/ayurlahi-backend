@@ -38,6 +38,9 @@ export class Invoice {
   @Column({ type: 'jsonb', name: 'clinicDetails' })
   clinicDetails: Record<string, any>;
 
+  @Column({ type: 'jsonb', name: 'manufacturerDetails', nullable: true })
+  manufacturerDetails: Record<string, any> | null;
+
   @Column({ type: 'jsonb', name: 'items' })
   items: Record<string, any>[];
 

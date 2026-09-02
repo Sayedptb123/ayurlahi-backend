@@ -56,6 +56,9 @@ export class Product {
   @Column({ type: 'decimal', precision: 10, scale: 2, default: 0, name: 'gst_rate' })
   gstRate: number;
 
+  @Column({ type: 'varchar', length: 20, nullable: true, name: 'hsn_code' })
+  hsnCode: string | null;
+
   @Column({ type: 'int', default: 0, name: 'stock_quantity' })
   stockQuantity: number;
 

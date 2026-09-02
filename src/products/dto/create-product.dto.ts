@@ -67,6 +67,10 @@ export class CreateProductDto {
     @Max(100)
     gstRate: number;
 
+    @IsString()
+    @IsOptional()
+    hsnCode?: string;
+
     @IsNumber()
     @Min(0)
     stockQuantity: number;

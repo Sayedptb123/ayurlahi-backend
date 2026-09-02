@@ -44,6 +44,12 @@ export class OrderItem {
   @Column({ type: 'decimal', precision: 10, scale: 2 })
   unitPrice: number;
 
+  @Column({ type: 'decimal', precision: 10, scale: 2, nullable: true })
+  mrp: number | null;
+
+  @Column({ type: 'varchar', length: 20, nullable: true })
+  hsnCode: string | null;
+
   @Column({ type: 'decimal', precision: 5, scale: 2 })
   gstRate: number;
 

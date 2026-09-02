@@ -27,4 +27,19 @@ export class ManufacturerProfile {
 
   @Column({ name: 'mfg_category', type: 'varchar', length: 255, nullable: true })
   mfgCategory: string | null;
+
+  @Column({ name: 'address', type: 'text', nullable: true })
+  address: string | null;
+
+  @Column({ name: 'city', type: 'varchar', length: 100, nullable: true })
+  city: string | null;
+
+  @Column({ name: 'state', type: 'varchar', length: 100, nullable: true })
+  state: string | null;
+
+  @Column({ name: 'pincode', type: 'varchar', length: 20, nullable: true })
+  pincode: string | null;
+
+  @Column({ name: 'phone', type: 'varchar', length: 20, nullable: true })
+  phone: string | null;
 }
