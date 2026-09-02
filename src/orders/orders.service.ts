@@ -578,13 +578,14 @@ export class OrdersService {
     if (existing) return;
 
     const items = (order.items || []).map((i) => ({
+      productId: i.productId,
       productSku: i.productSku,
       productName: i.productName,
       quantity: i.quantity,
       unitPrice: Number(i.unitPrice),
-      lineTotal: Number(i.unitPrice) * i.quantity,
+      totalPrice: Number(i.unitPrice) * i.quantity,
     }));
-    const subtotal = items.reduce((sum, i) => sum + i.lineTotal, 0);
+    const subtotal = items.reduce((sum, i) => sum + i.totalPrice, 0);
     const gstAmount = Number(((subtotal * 5) / 100).toFixed(2)); // assume 5% pending real GST per-item
     const totalAmount = subtotal + gstAmount;
 
