@@ -14,6 +14,7 @@ import { OrdersModule } from './orders/orders.module';
 import { ClinicsModule } from './clinics/clinics.module';
 import { InvoicesModule } from './invoices/invoices.module';
 import { DisputesModule } from './disputes/disputes.module';
+import { ProductRequestsModule } from './product-requests/product-requests.module';
 import { PayoutsModule } from './payouts/payouts.module';
 import { AnalyticsModule } from './analytics/analytics.module';
 import { StaffModule } from './staff/staff.module';
@@ -278,6 +279,7 @@ import { BillPayment } from './bills/entities/bill-payment.entity';
     ClinicsModule,
     InvoicesModule,
     DisputesModule,
+    ProductRequestsModule,
     PayoutsModule,
     AnalyticsModule,
     StaffModule,
