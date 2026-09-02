@@ -49,9 +49,28 @@ export class ProductsService {
 
     const total = await queryBuilder.getCount();
     queryBuilder.skip(skip).take(limit).orderBy('product.createdAt', 'DESC');
-    const data = await queryBuilder.getMany();
+    const products = await queryBuilder.getMany();
+    const data = await this.withManufacturerNames(products);
 
     return { data, pagination: { page, limit, total, totalPages: Math.ceil(total / limit) } };
+  }
+
+  /**
+   * Attach a readable manufacturerName to each product — the marketplace
+   * browse view only had manufacturerId (a raw uuid) to show, so a clinic
+   * had no way to tell which manufacturer a product actually came from.
+   */
+  private async withManufacturerNames(products: Product[]): Promise<(Product & { manufacturerName?: string })[]> {
+    const ids = [...new Set(products.map((p) => p.manufacturerId).filter(Boolean))];
+    if (ids.length === 0) return products;
+    const orgs = await this.productsRepository.manager
+      .getRepository('organisations')
+      .createQueryBuilder('org')
+      .select(['org.id', 'org.name'])
+      .whereInIds(ids)
+      .getMany();
+    const nameById = new Map(orgs.map((o: any) => [o.id, o.name]));
+    return products.map((p) => ({ ...p, manufacturerName: nameById.get(p.manufacturerId) }));
   }
 
   async findByManufacturer(manufacturerId: string, query: GetProductsDto) {
