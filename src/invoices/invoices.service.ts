@@ -8,7 +8,7 @@ import { Repository, IsNull, SelectQueryBuilder } from 'typeorm';
 import { Invoice } from './entities/invoice.entity';
 import { GetInvoicesDto, InvoiceStatus } from './dto/get-invoices.dto';
 import { MarkInvoicePaidDto } from './dto/mark-invoice-paid.dto';
-import { Order } from '../orders/entities/order.entity';
+import { Order, OrderSource } from '../orders/entities/order.entity';
 import { OrderItem } from '../orders/entities/order-item.entity';
 import { User } from '../users/entities/user.entity';
 import { RoleUtils } from '../common/utils/role.utils';
@@ -122,14 +122,35 @@ export class InvoicesService {
     };
   }
 
-  async markAsPaid(id: string, userId: string, userRole: string, dto: MarkInvoicePaidDto) {
-    if (!RoleUtils.isAdminOrSupport(userRole)) {
-      throw new ForbiddenException('Only Ayurlahi admin/support can record invoice payments');
-    }
-
-    const invoice = await this.invoicesRepository.findOne({ where: { id, deletedAt: IsNull() } });
+  async markAsPaid(
+    id: string,
+    userId: string,
+    userRole: string,
+    dto: MarkInvoicePaidDto,
+    organisationId?: string,
+    organisationType?: string,
+  ) {
+    const invoice = await this.invoicesRepository.findOne({
+      where: { id, deletedAt: IsNull() },
+      relations: ['order', 'order.items'],
+    });
     if (!invoice) {
       throw new NotFoundException(`Invoice with ID ${id} not found`);
+    }
+
+    // Ayurlahi admin/support can always confirm payment (marketplace or
+    // external orders). A manufacturer can additionally self-confirm payment
+    // only on their OWN external orders — the clinic paid PMS directly for a
+    // WhatsApp order, so Ayurlahi Team doesn't need to be the one to record
+    // it. Marketplace-order payment confirmation is unchanged: Team-only.
+    const isManufacturerSelfConfirmingOwnExternalOrder =
+      organisationType === 'MANUFACTURER' &&
+      ['OWNER', 'MANAGER', 'ADMIN'].includes((userRole || '').toUpperCase()) &&
+      invoice.order?.source === OrderSource.EXTERNAL &&
+      invoice.order?.items?.some((item) => item.manufacturerId === organisationId);
+
+    if (!RoleUtils.isAdminOrSupport(userRole) && !isManufacturerSelfConfirmingOwnExternalOrder) {
+      throw new ForbiddenException('Only Ayurlahi admin/support can record invoice payments');
     }
 
     invoice.isPaid = true;

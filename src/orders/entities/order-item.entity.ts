@@ -44,6 +44,13 @@ export class OrderItem {
   @Column({ type: 'decimal', precision: 10, scale: 2 })
   unitPrice: number;
 
+  // External orders only: the real catalog price at the time, preserved for
+  // audit when unitPrice is a manufacturer-entered agreed price that differs
+  // from it. NULL for normal marketplace orders (unitPrice already equals
+  // catalog price there, so this would just duplicate it).
+  @Column({ type: 'decimal', precision: 10, scale: 2, nullable: true, name: 'catalog_price_at_order' })
+  catalogPriceAtOrder: number | null;
+
   @Column({ type: 'decimal', precision: 10, scale: 2, nullable: true })
   mrp: number | null;
 

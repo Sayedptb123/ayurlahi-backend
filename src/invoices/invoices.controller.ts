@@ -49,7 +49,14 @@ export class InvoicesController {
     @Request() req,
     @Body() dto: MarkInvoicePaidDto,
   ) {
-    return this.invoicesService.markAsPaid(id, req.user.userId, req.user.role, dto);
+    return this.invoicesService.markAsPaid(
+      id,
+      req.user.userId,
+      req.user.role,
+      dto,
+      req.user.organisationId,
+      req.user.organisationType,
+    );
   }
 
   @Get(':id/download')

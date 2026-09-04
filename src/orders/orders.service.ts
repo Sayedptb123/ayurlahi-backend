@@ -8,6 +8,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, IsNull, In } from 'typeorm';
 import { Order, OrderStatus, OrderSource } from './entities/order.entity';
 import { OrderItem, OrderItemStatus } from './entities/order-item.entity';
+import { ManufacturerExternalOrderAccess } from './entities/manufacturer-external-order-access.entity';
 import { Product } from '../products/entities/product.entity';
 import { User } from '../users/entities/user.entity';
 import { OrganisationUser } from '../organisation-users/entities/organisation-user.entity';
@@ -15,6 +16,8 @@ import { CreateOrderDto } from './dto/create-order.dto';
 import { GetOrdersDto } from './dto/get-orders.dto';
 import { UpdateOrderStatusDto } from './dto/update-order-status.dto';
 import { AssignOrderItemDto } from './dto/assign-order-item.dto';
+import { CreateExternalOrderDto } from './dto/create-external-order.dto';
+import { GrantExternalOrderAccessDto } from './dto/grant-external-order-access.dto';
 import { InventoryService } from '../inventory/inventory.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { RoleUtils } from '../common/utils/role.utils';
@@ -46,6 +49,8 @@ export class OrdersService {
     private orgUserRepository: Repository<OrganisationUser>,
     @InjectRepository(Invoice)
     private invoicesRepository: Repository<Invoice>,
+    @InjectRepository(ManufacturerExternalOrderAccess)
+    private externalOrderAccessRepository: Repository<ManufacturerExternalOrderAccess>,
     private inventoryService: InventoryService,
     private notificationsService: NotificationsService,
   ) { }
@@ -144,74 +149,7 @@ export class OrdersService {
       throw new BadRequestException('Clinic not found');
     }
 
-    // Validate, lock, and decrement stock inside a transaction to prevent race conditions
-    type ProductWithItem = { product: Product; itemDto: (typeof createOrderDto.items)[0] };
-    const products: ProductWithItem[] = [];
-    let subtotal = 0;
-    let totalGstAmount = 0;
-    const orderItems: Partial<OrderItem>[] = [];
-
-    await this.productsRepository.manager.transaction(async (manager) => {
-      const productRepo = manager.getRepository(Product);
-
-      for (const item of createOrderDto.items) {
-        // Pessimistic write lock — blocks concurrent reads until this transaction commits
-        const product = await productRepo.findOne({
-          where: { id: item.productId, deletedAt: IsNull() },
-          lock: { mode: 'pessimistic_write' },
-        });
-
-        if (!product) {
-          throw new NotFoundException(`Product with ID ${item.productId} not found`);
-        }
-        if (product.status !== 'active') {
-          throw new BadRequestException(`Product ${product.name} is not active`);
-        }
-        if (product.stockQuantity < item.quantity) {
-          throw new BadRequestException(
-            `Insufficient stock for ${product.name}. Available: ${product.stockQuantity}, Requested: ${item.quantity}`,
-          );
-        }
-        if (item.quantity < product.minOrderQuantity) {
-          throw new BadRequestException(
-            `Minimum order quantity for ${product.name} is ${product.minOrderQuantity}`,
-          );
-        }
-
-        // Decrement inside the transaction while the row is locked
-        await productRepo.decrement({ id: product.id }, 'stockQuantity', item.quantity);
-        product.stockQuantity -= item.quantity;
-        products.push({ product, itemDto: item });
-      }
-    });
-
-    // Calculate totals from locked-and-decremented products
-    for (const { product, itemDto } of products) {
-      const itemSubtotal = Number(product.price) * itemDto.quantity;
-      const itemGstAmount = (itemSubtotal * Number(product.gstRate)) / 100;
-      const itemTotal = itemSubtotal + itemGstAmount;
-      const commissionAmount = (itemTotal * 0.05) / 100;
-
-      subtotal += itemSubtotal;
-      totalGstAmount += itemGstAmount;
-
-      orderItems.push({
-        productId: product.id,
-        manufacturerId: product.manufacturerId,
-        productSku: product.sku,
-        productName: product.name,
-        quantity: itemDto.quantity,
-        unitPrice: Number(product.price),
-        mrp: product.mrp != null ? Number(product.mrp) : null,
-        hsnCode: product.hsnCode || null,
-        gstRate: Number(product.gstRate),
-        subtotal: itemSubtotal,
-        gstAmount: itemGstAmount,
-        totalAmount: itemTotal,
-        commissionAmount,
-        notes: itemDto.notes || null,
-      });
-    }
+    const { orderItems, subtotal, totalGstAmount } = await this.lockAndSnapshotOrderItems(createOrderDto.items);
 
     const shippingCharges = 0;
     const platformFee = 0;
@@ -298,6 +236,98 @@ export class OrdersService {
     return orderWithRelations;
   }
 
+  /**
+   * Shared by create() and createExternalOrder(): validates, pessimistic-locks,
+   * and decrements stock for a set of items inside a transaction, then builds
+   * the OrderItem snapshots (price/MRP/HSN/GST/commission) from the
+   * locked-and-decremented products.
+   *
+   * priceOverrides (external orders only) maps productId -> manufacturer-
+   * agreed unit price. When present for a product, that price drives
+   * subtotal/GST/total instead of the catalog price, and the real catalog
+   * price is preserved separately on catalogPriceAtOrder for audit — the
+   * master product price itself is never written to here either way.
+   */
+  private async lockAndSnapshotOrderItems(
+    items: { productId: string; quantity: number; notes?: string }[],
+    priceOverrides?: Map<string, number>,
+  ): Promise<{ orderItems: Partial<OrderItem>[]; subtotal: number; totalGstAmount: number }> {
+    type ProductWithItem = { product: Product; itemDto: (typeof items)[0] };
+    const products: ProductWithItem[] = [];
+
+    await this.productsRepository.manager.transaction(async (manager) => {
+      const productRepo = manager.getRepository(Product);
+
+      for (const item of items) {
+        // Pessimistic write lock — blocks concurrent reads until this transaction commits
+        const product = await productRepo.findOne({
+          where: { id: item.productId, deletedAt: IsNull() },
+          lock: { mode: 'pessimistic_write' },
+        });
+
+        if (!product) {
+          throw new NotFoundException(`Product with ID ${item.productId} not found`);
+        }
+        if (product.status !== 'active') {
+          throw new BadRequestException(`Product ${product.name} is not active`);
+        }
+        if (product.stockQuantity < item.quantity) {
+          throw new BadRequestException(
+            `Insufficient stock for ${product.name}. Available: ${product.stockQuantity}, Requested: ${item.quantity}`,
+          );
+        }
+        if (item.quantity < product.minOrderQuantity) {
+          throw new BadRequestException(
+            `Minimum order quantity for ${product.name} is ${product.minOrderQuantity}`,
+          );
+        }
+
+        // Decrement inside the transaction while the row is locked
+        await productRepo.decrement({ id: product.id }, 'stockQuantity', item.quantity);
+        product.stockQuantity -= item.quantity;
+        products.push({ product, itemDto: item });
+      }
+    });
+
+    let subtotal = 0;
+    let totalGstAmount = 0;
+    const orderItems: Partial<OrderItem>[] = [];
+
+    for (const { product, itemDto } of products) {
+      const catalogPrice = Number(product.price);
+      const override = priceOverrides?.get(product.id);
+      const unitPrice = override != null ? override : catalogPrice;
+
+      const itemSubtotal = unitPrice * itemDto.quantity;
+      const itemGstAmount = (itemSubtotal * Number(product.gstRate)) / 100;
+      const itemTotal = itemSubtotal + itemGstAmount;
+      const commissionAmount = (itemTotal * 0.05) / 100;
+
+      subtotal += itemSubtotal;
+      totalGstAmount += itemGstAmount;
+
+      orderItems.push({
+        productId: product.id,
+        manufacturerId: product.manufacturerId,
+        productSku: product.sku,
+        productName: product.name,
+        quantity: itemDto.quantity,
+        unitPrice,
+        catalogPriceAtOrder: override != null ? catalogPrice : null,
+        mrp: product.mrp != null ? Number(product.mrp) : null,
+        hsnCode: product.hsnCode || null,
+        gstRate: Number(product.gstRate),
+        subtotal: itemSubtotal,
+        gstAmount: itemGstAmount,
+        totalAmount: itemTotal,
+        commissionAmount,
+        notes: itemDto.notes || null,
+      });
+    }
+
+    return { orderItems, subtotal, totalGstAmount };
+  }
+
   async reorder(orderId: string, userId: string, organisationId?: string) {
     const originalOrder = await this.findOne(orderId, userId, 'OWNER', 'CLINIC', organisationId);
 
@@ -320,6 +350,256 @@ export class OrdersService {
     };
 
     return this.create(userId, createOrderDto, 'CLINIC', organisationId);
+  }
+
+  // ==========================================================================
+  // External orders — a manufacturer (e.g. PMS) entering an order they took
+  // directly from a clinic outside the platform (WhatsApp/phone) so it becomes
+  // a real Ayurlahi order + invoice instead of being billed outside Ayurlahi.
+  // See scope/PMS_External_Order_Feature_Scope_2026-09-04.md for the full
+  // design and the business decisions behind it.
+  // ==========================================================================
+
+  /** Team-only: grant a manufacturer permission to create external orders for a specific clinic. */
+  async grantExternalOrderAccess(grantedByUserId: string, dto: GrantExternalOrderAccessDto) {
+    const manager = this.externalOrderAccessRepository.manager;
+    const [manufacturer, clinic] = await Promise.all([
+      manager.getRepository('organisations').findOne({ where: { id: dto.manufacturerId, type: 'MANUFACTURER' } }),
+      manager.getRepository('organisations').findOne({ where: { id: dto.clinicId, type: 'CLINIC' } }),
+    ]);
+    if (!manufacturer) throw new BadRequestException('Manufacturer organisation not found');
+    if (!clinic) throw new BadRequestException('Clinic organisation not found');
+
+    const existing = await this.externalOrderAccessRepository.findOne({
+      where: { manufacturerId: dto.manufacturerId, clinicId: dto.clinicId },
+      withDeleted: true,
+    });
+
+    if (existing) {
+      existing.isActive = true;
+      existing.deletedAt = null;
+      existing.notes = dto.notes ?? existing.notes;
+      existing.grantedBy = grantedByUserId;
+      return this.externalOrderAccessRepository.save(existing);
+    }
+
+    return this.externalOrderAccessRepository.save(
+      this.externalOrderAccessRepository.create({
+        manufacturerId: dto.manufacturerId,
+        clinicId: dto.clinicId,
+        grantedBy: grantedByUserId,
+        notes: dto.notes || null,
+        isActive: true,
+      }),
+    );
+  }
+
+  /** Team-only: list access grants, optionally filtered by manufacturer. */
+  async listExternalOrderAccessGrants(manufacturerId?: string) {
+    const where: any = { isActive: true };
+    if (manufacturerId) where.manufacturerId = manufacturerId;
+    const grants = await this.externalOrderAccessRepository.find({ where, order: { createdAt: 'DESC' } });
+
+    const orgIds = [...new Set([...grants.map((g) => g.manufacturerId), ...grants.map((g) => g.clinicId)])];
+    let orgNames = new Map<string, string>();
+    if (orgIds.length > 0) {
+      const rows = await this.externalOrderAccessRepository.manager
+        .getRepository('organisations')
+        .createQueryBuilder('o')
+        .select(['o.id', 'o.name'])
+        .where('o.id IN (:...ids)', { ids: orgIds })
+        .getMany();
+      orgNames = new Map(rows.map((r: any) => [r.id, r.name]));
+    }
+
+    return grants.map((g) => ({
+      ...g,
+      manufacturerName: orgNames.get(g.manufacturerId) ?? null,
+      clinicName: orgNames.get(g.clinicId) ?? null,
+    }));
+  }
+
+  /** Team-only: revoke a manufacturer's access to create external orders for a clinic. */
+  async revokeExternalOrderAccess(id: string) {
+    const grant = await this.externalOrderAccessRepository.findOne({ where: { id } });
+    if (!grant) throw new NotFoundException('Access grant not found');
+    grant.isActive = false;
+    await this.externalOrderAccessRepository.save(grant);
+    await this.externalOrderAccessRepository.softDelete(id);
+    return { success: true };
+  }
+
+  /** Manufacturer-facing: clinics this manufacturer is authorized to create external orders for. Returns only id/name, not full org details. */
+  async getAccessibleClinicsForManufacturer(manufacturerId: string) {
+    const grants = await this.externalOrderAccessRepository.find({
+      where: { manufacturerId, isActive: true },
+    });
+    if (grants.length === 0) return [];
+
+    const clinicIds = grants.map((g) => g.clinicId);
+    const clinics = await this.externalOrderAccessRepository.manager
+      .getRepository('organisations')
+      .createQueryBuilder('o')
+      .select(['o.id', 'o.name'])
+      .where('o.id IN (:...ids)', { ids: clinicIds })
+      .andWhere('o.deletedAt IS NULL')
+      .getMany();
+
+    return clinics.map((c: any) => ({ id: c.id, name: c.name }));
+  }
+
+  /** Manufacturer-facing: active branches of a clinic the manufacturer is authorized for. Re-checks the grant server-side — never trust a client-submitted clinicId alone. */
+  async getAccessibleClinicBranches(manufacturerId: string, clinicId: string) {
+    await this.assertExternalOrderAccess(manufacturerId, clinicId);
+
+    const branches = await this.externalOrderAccessRepository.manager
+      .getRepository('branches')
+      .createQueryBuilder('branch')
+      .where('branch.organisation_id = :clinicId', { clinicId })
+      .andWhere('branch.deleted_at IS NULL')
+      .andWhere('branch.is_active = true')
+      .orderBy('branch.is_primary', 'DESC')
+      .addOrderBy('branch.created_at', 'ASC')
+      .getMany();
+
+    return (branches as any[]).map((b) => ({
+      id: b.id,
+      name: b.name,
+      address: b.address,
+      city: b.city,
+      state: b.state,
+      pincode: b.pincode,
+      phone: b.phone,
+      isPrimary: b.isPrimary,
+    }));
+  }
+
+  private async assertExternalOrderAccess(manufacturerId: string, clinicId: string): Promise<void> {
+    const grant = await this.externalOrderAccessRepository.findOne({
+      where: { manufacturerId, clinicId, isActive: true },
+    });
+    if (!grant) {
+      throw new ForbiddenException('You are not authorized to create orders for this clinic');
+    }
+  }
+
+  /**
+   * A manufacturer entering an order on behalf of a clinic they're
+   * authorized for (see manufacturer_external_order_access). Always starts
+   * PENDING like a normal order and walks the same status lifecycle — even
+   * if the medicine was already physically handed over on WhatsApp/phone,
+   * there is no fast-tracked "create as DELIVERED" path, by design (one
+   * consistent state machine; invoice generation still happens on the
+   * DELIVERED transition, unchanged).
+   */
+  async createExternalOrder(userId: string, manufacturerId: string, dto: CreateExternalOrderDto) {
+    await this.assertExternalOrderAccess(manufacturerId, dto.clinicId);
+
+    const branch = await this.ordersRepository.manager
+      .getRepository('branches')
+      .createQueryBuilder('branch')
+      .where('branch.id = :branchId', { branchId: dto.branchId })
+      .andWhere('branch.organisation_id = :clinicId', { clinicId: dto.clinicId })
+      .andWhere('branch.deleted_at IS NULL')
+      .andWhere('branch.is_active = true')
+      .getOne();
+    if (!branch) {
+      throw new BadRequestException('Branch not found for this clinic');
+    }
+
+    const priceOverrides = new Map(dto.items.map((i) => [i.productId, i.agreedUnitPrice]));
+    const items = dto.items.map((i) => ({ productId: i.productId, quantity: i.quantity, notes: i.notes }));
+    const { orderItems, subtotal, totalGstAmount } = await this.lockAndSnapshotOrderItems(items, priceOverrides);
+
+    // A manufacturer may only enter an external order for their own
+    // products — re-checked server-side rather than trusted from the
+    // product ids submitted, same defense-in-depth as the clinic/branch grant.
+    const foreignItems = orderItems.filter((oi) => oi.manufacturerId !== manufacturerId);
+    if (foreignItems.length > 0) {
+      throw new ForbiddenException('You can only create an external order for your own products');
+    }
+
+    const shippingCharges = 0;
+    const platformFee = 0;
+    const totalAmount = subtotal + totalGstAmount + shippingCharges + platformFee;
+    const orderNumber = `ORD-${Date.now()}-${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
+    const branchAny = branch as any;
+
+    const order = this.ordersRepository.create({
+      organisationId: dto.clinicId,
+      orderNumber,
+      status: OrderStatus.PENDING,
+      source: OrderSource.EXTERNAL,
+      subtotal,
+      gstAmount: totalGstAmount,
+      shippingCharges,
+      platformFee,
+      totalAmount,
+      shippingAddress: {
+        line1: branchAny.address ?? undefined,
+        city: branchAny.city ?? undefined,
+        state: branchAny.state ?? undefined,
+        pincode: branchAny.pincode ?? undefined,
+        phone: branchAny.phone ?? undefined,
+        name: branchAny.name ?? undefined,
+      },
+      notes: dto.notes || null,
+      createdBy: userId,
+      metadata: { originalChannel: dto.channel },
+      items: orderItems as OrderItem[],
+    } as any) as unknown as Order;
+
+    const savedOrder = (await this.ordersRepository.save(order)) as unknown as Order;
+
+    const orderWithRelations = await this.ordersRepository.findOne({
+      where: { id: savedOrder.id },
+      relations: ['items'],
+    });
+
+    // Notify the clinic — they didn't act, PMS created this on their behalf.
+    // (Mirrors create()'s manufacturer-notification block, but flipped: the
+    // manufacturer here already knows, since they just created it.)
+    const itemSummary = orderWithRelations?.items?.map((i) => `${i.productName} x${i.quantity}`).join(', ') ?? '';
+    this.orgUserRepository
+      .find({ where: { organisationId: dto.clinicId, role: In(['OWNER', 'MANAGER', 'ADMIN']), isActive: true } })
+      .then((orgUsers) => {
+        const userIds = orgUsers.map((ou) => ou.userId).filter(Boolean);
+        if (userIds.length > 0) {
+          this.notificationsService.sendToUsers({
+            userIds,
+            title: 'Order Recorded on Your Behalf',
+            body: `Your manufacturer recorded an order: ${itemSummary}`,
+            data: { orderId: savedOrder.id, type: 'external_order_created', organisationId: dto.clinicId },
+          }).catch(() => {});
+        }
+      })
+      .catch(() => {});
+
+    // Same universal Ayurlahi fulfillment-team notification every order
+    // gets — see the identical block in create() and
+    // scope/Order_Fulfillment_Routing_Plan.md.
+    this.orgUserRepository
+      .find({
+        where: {
+          organisationId: OrdersService.AYURLAHI_TEAM_ORG_ID,
+          role: In(['FIELD_STAFF', 'TEAM_LEAD', 'SUPPORT']),
+          isActive: true,
+        },
+      })
+      .then((orgUsers) => {
+        const userIds = orgUsers.map((ou) => ou.userId).filter(Boolean);
+        if (userIds.length > 0) {
+          this.notificationsService.sendToUsers({
+            userIds,
+            title: 'New Order to Fulfill',
+            body: `Order ${orderWithRelations?.orderNumber}: ${itemSummary} — forward to manufacturer and assign pickup`,
+            data: { orderId: savedOrder.id, type: 'order_needs_fulfillment', organisationId: OrdersService.AYURLAHI_TEAM_ORG_ID },
+          }).catch(() => {});
+        }
+      })
+      .catch(() => {});
+
+    return orderWithRelations;
   }
 
   async updateStatus(

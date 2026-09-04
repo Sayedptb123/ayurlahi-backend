@@ -23,6 +23,10 @@ export enum OrderSource {
   APP = 'app',
   WEB = 'web',
   API = 'api',
+  // Entered by a manufacturer on behalf of a clinic they're authorized for
+  // (WhatsApp/phone order) -- see manufacturer_external_order_access and
+  // scope/PMS_External_Order_Feature_Scope_2026-09-04.md.
+  EXTERNAL = 'external',
 }
 
 @Entity('orders')

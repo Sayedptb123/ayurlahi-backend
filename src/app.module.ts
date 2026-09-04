@@ -65,6 +65,7 @@ import { PurchaseOrderItem } from './purchase-orders/entities/purchase-order-ite
 import { Product } from './products/entities/product.entity';
 import { Order } from './orders/entities/order.entity';
 import { OrderItem } from './orders/entities/order-item.entity';
+import { ManufacturerExternalOrderAccess } from './orders/entities/manufacturer-external-order-access.entity';
 import { Clinic } from './clinics/entities/clinic.entity';
 import { Manufacturer } from './manufacturers/entities/manufacturer.entity';
 import { Invoice } from './invoices/entities/invoice.entity';
@@ -187,6 +188,7 @@ import { BillPayment } from './bills/entities/bill-payment.entity';
           Product,
           Order,
           OrderItem,
+          ManufacturerExternalOrderAccess,
           Clinic,
           Manufacturer,
           Invoice,
