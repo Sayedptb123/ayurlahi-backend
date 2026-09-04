@@ -609,10 +609,32 @@ export class OrdersService {
     const invoiceNumber = `INV-${new Date().getFullYear()}-${order.orderNumber}`;
     const manufacturerId = order.items?.[0]?.manufacturerId;
 
-    const [clinicDetails, manufacturerDetails] = await Promise.all([
-      this.getClinicInvoiceDetails(order.organisationId),
+    const [clinicOrgDetails, manufacturerDetails] = await Promise.all([
+      this.getClinicOrgDetails(order.organisationId),
       manufacturerId ? this.getManufacturerInvoiceDetails(manufacturerId) : Promise.resolve(null),
     ]);
+
+    // The "Billed To" address must reflect the branch this specific order
+    // actually shipped to/from — different branches can sit in different
+    // states, which affects tax treatment, not just display. order.shippingAddress
+    // is the correct per-order source (captured once at checkout, carried
+    // through reorder()); only fall back to the org's primary branch for the
+    // rare order with no shippingAddress at all (optional at the DTO level
+    // even though the UI requires it). Never re-derive this from the org's
+    // *current* primary branch on every read — it's snapshotted once here, at
+    // invoice creation, same as clinicOrgDetails/manufacturerDetails, so a
+    // later branch-address edit can't silently rewrite a past invoice.
+    const shippingAddr = order.shippingAddress as any;
+    const hasShippingAddress = !!(shippingAddr?.line1 && shippingAddr?.city);
+    const clinicAddress = hasShippingAddress
+      ? {
+          address: shippingAddr.line1 ?? null,
+          city: shippingAddr.city ?? null,
+          state: shippingAddr.state ?? null,
+          pincode: shippingAddr.pincode ?? null,
+          phone: shippingAddr.phone ?? null,
+        }
+      : await this.getClinicPrimaryBranchAddress(order.organisationId);
 
     const invoice = this.invoicesRepository.create({
       orderId: order.id,
@@ -624,7 +646,8 @@ export class OrdersService {
       clinicDetails: {
         organisationId: order.organisationId,
         shippingAddress: order.shippingAddress,
-        ...clinicDetails,
+        ...clinicOrgDetails,
+        ...clinicAddress,
       },
       manufacturerDetails,
       items,
@@ -645,28 +668,37 @@ export class OrdersService {
     }
   }
 
-  // organisations has no address/gstin columns — clinic address lives on
-  // branches (see ClinicsService.findMyClinic) and GSTIN on clinic_profiles.
-  // Looked up by string table name since ClinicProfile/manufacturer_profiles
-  // entities aren't registered in OrdersModule (same pattern ClinicsService uses for 'branches').
-  private async getClinicInvoiceDetails(organisationId: string): Promise<Record<string, any>> {
+  // organisations has no gstin column — that lives on clinic_profiles. Looked
+  // up by string table name since ClinicProfile isn't registered in
+  // OrdersModule (same pattern ClinicsService uses for 'branches').
+  private async getClinicOrgDetails(organisationId: string): Promise<Record<string, any>> {
     const manager = this.ordersRepository.manager;
-    const [org, profile, branch] = await Promise.all([
+    const [org, profile] = await Promise.all([
       manager.getRepository('organisations').findOne({ where: { id: organisationId } }) as Promise<any>,
       manager.getRepository('clinic_profiles').findOne({ where: { organisationId } }) as Promise<any>,
-      manager
-        .getRepository('branches')
-        .createQueryBuilder('branch')
-        .where('branch.organisation_id = :orgId', { orgId: organisationId })
-        .andWhere('branch.deleted_at IS NULL')
-        .andWhere('branch.is_active = true')
-        .orderBy('branch.is_primary', 'DESC')
-        .addOrderBy('branch.created_at', 'ASC')
-        .getOne() as Promise<any>,
     ]);
     return {
       name: org?.name ?? null,
       gstin: profile?.gstin ?? null,
+    };
+  }
+
+  // Fallback only, for the rare order with no shippingAddress captured at all
+  // — see the comment above this method's call site in
+  // createInvoiceForDeliveredOrder(). Do not use this as the primary address
+  // source; a clinic's primary branch is not necessarily the branch a given
+  // order was actually for.
+  private async getClinicPrimaryBranchAddress(organisationId: string): Promise<Record<string, any>> {
+    const branch = await this.ordersRepository.manager
+      .getRepository('branches')
+      .createQueryBuilder('branch')
+      .where('branch.organisation_id = :orgId', { orgId: organisationId })
+      .andWhere('branch.deleted_at IS NULL')
+      .andWhere('branch.is_active = true')
+      .orderBy('branch.is_primary', 'DESC')
+      .addOrderBy('branch.created_at', 'ASC')
+      .getOne() as any;
+    return {
       address: branch?.address ?? null,
       city: branch?.city ?? null,
       state: branch?.state ?? null,
