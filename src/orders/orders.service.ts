@@ -405,6 +405,17 @@ export class OrdersService {
       order.cancelledAt = new Date();
       order.cancelledBy = userId;
       order.cancellationReason = updateDto.notes || null;
+
+      // Stock is decremented exactly once, at order creation (create()), and
+      // never touched again by any other transition — so restoring it here is
+      // safe with no double-restore risk, guarded the same way as the
+      // timestamp above (!order.cancelledAt) plus CANCELLED being a terminal
+      // state in ORDER_TRANSITIONS (no transition ever re-enters this branch).
+      if (order.items && order.items.length > 0) {
+        for (const item of order.items) {
+          await this.productsRepository.increment({ id: item.productId }, 'stockQuantity', item.quantity);
+        }
+      }
     }
 
     const savedOrder = await this.ordersRepository.save(order);
