@@ -8,6 +8,8 @@ import { ClinicCapabilities } from '../clinic-capabilities/entities/clinic-capab
 import { ClinicProfile } from './entities/clinic-profile.entity';
 import { ManufacturerProfile } from './entities/manufacturer-profile.entity';
 import { OrganisationContact } from './entities/organisation-contact.entity';
+import { Staff } from '../staff/entities/staff.entity';
+import { Branch } from '../branches/entities/branch.entity';
 import { UsersModule } from '../users/users.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { OrganisationSettingsModule } from '../organisation-settings/organisation-settings.module';
@@ -21,6 +23,8 @@ import { OrganisationSettingsModule } from '../organisation-settings/organisatio
       ClinicProfile,
       ManufacturerProfile,
       OrganisationContact,
+      Staff,
+      Branch,
     ]),
     UsersModule,
     NotificationsModule,

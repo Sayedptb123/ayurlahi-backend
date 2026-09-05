@@ -27,17 +27,17 @@ export class StaffController {
 
   @Get()
   async findAll(@Request() req, @Query() query: GetStaffDto) {
-    return this.staffService.findAll(req.user.userId, req.user.role, query);
+    return this.staffService.findAll(req.user.userId, req.user.role, req.user.organisationType, query);
   }
 
   @Get(':id')
   async findOne(@Param('id', ParseUUIDPipe) id: string, @Request() req) {
-    return this.staffService.findOne(id, req.user.userId, req.user.role);
+    return this.staffService.findOne(id, req.user.userId, req.user.role, req.user.organisationType);
   }
 
   @Post()
   async create(@Request() req, @Body() createDto: CreateStaffDto) {
-    return this.staffService.create(req.user.userId, req.user.role, createDto);
+    return this.staffService.create(req.user.userId, req.user.role, req.user.organisationType, createDto);
   }
 
   @Patch(':id')
@@ -50,6 +50,7 @@ export class StaffController {
       id,
       req.user.userId,
       req.user.role,
+      req.user.organisationType,
       updateDto,
     );
   }
@@ -57,12 +58,12 @@ export class StaffController {
   @Delete(':id')
   @HttpCode(HttpStatus.OK)
   async remove(@Param('id', ParseUUIDPipe) id: string, @Request() req) {
-    return this.staffService.remove(id, req.user.userId, req.user.role);
+    return this.staffService.remove(id, req.user.userId, req.user.role, req.user.organisationType);
   }
 
   @Patch(':id/status')
   async toggleStatus(@Param('id', ParseUUIDPipe) id: string, @Request() req) {
-    return this.staffService.toggleStatus(id, req.user.userId, req.user.role);
+    return this.staffService.toggleStatus(id, req.user.userId, req.user.role, req.user.organisationType);
   }
 
   // ============================================================================
@@ -80,6 +81,7 @@ export class StaffController {
       id,
       req.user.userId,
       req.user.role,
+      req.user.organisationType,
       inviteDto.sendEmail,
       inviteDto.sendSMS,
     );
@@ -95,6 +97,7 @@ export class StaffController {
       id,
       req.user.userId,
       req.user.role,
+      req.user.organisationType,
     );
   }
 }

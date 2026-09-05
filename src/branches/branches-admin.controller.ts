@@ -11,7 +11,9 @@ import {
 } from '@nestjs/common';
 import { BranchesService } from './branches.service';
 import { GetPendingBranchesDto } from './dto/get-pending-branches.dto';
+import { GetBranchesForOrgDto } from './dto/get-branches-for-org.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { isTeamManagementTier } from '../common/utils/team-access.util';
 
 function requireTeam(req: any) {
   if (req.user?.organisationType !== 'AYURLAHI_TEAM') {
@@ -28,6 +30,20 @@ function requireTeam(req: any) {
 @UseGuards(JwtAuthGuard)
 export class BranchesAdminController {
   constructor(private readonly branchesService: BranchesService) {}
+
+  // All branches (active + inactive, not just pending) for a given org —
+  // Team-management tier only. See scope/Super_Admin_Org_Staff_Management_Phase2_Scope.md §2c.
+  // Deliberately its own check (isTeamManagementTier), not requireTeam() —
+  // this is a new endpoint and shouldn't inherit the role-blind check already
+  // flagged as separate cleanup on this controller's existing routes.
+  @Get()
+  findAllForOrg(@Query() query: GetBranchesForOrgDto, @Request() req) {
+    if (!isTeamManagementTier(req.user)) {
+      throw new ForbiddenException('Only Ayurlahi Team management can view this');
+    }
+    const { organisationId, ...rest } = query;
+    return this.branchesService.findAll(organisationId, rest);
+  }
 
   @Get('pending')
   findAllPending(@Query() query: GetPendingBranchesDto, @Request() req) {

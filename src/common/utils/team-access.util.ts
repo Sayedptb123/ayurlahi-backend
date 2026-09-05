@@ -1,4 +1,6 @@
-// Authorization helpers for organisation-users.{controller,service}.ts.
+// Shared "is this caller allowed to act across organisations as Ayurlahi
+// Team management" check, used by any module that needs a Team-wide
+// bypass (organisation-users, staff, and Phase-2 org/branch admin reads).
 //
 // Deliberately does NOT go through RolesGuard/@Roles() — that guard collapses
 // SUPER_ADMIN and every generic org role held by an AYURLAHI_TEAM member into
@@ -7,8 +9,9 @@
 // TEAM_LEAD/SALES_MANAGER). These checks work off the RAW JWT role instead,
 // mirroring the precedent set by crm-access.util.ts for the same problem.
 //
-// See scope/Organisation_Users_Access_Control_Security_Fix.md for the full
-// rule matrix this implements.
+// See scope/Organisation_Users_Access_Control_Security_Fix.md and
+// scope/Super_Admin_Org_Staff_Management_Phase2_Scope.md for the rule
+// matrices this implements.
 
 // Fixed seed id for the internal Team Ayurlahi organisation — also defined
 // locally in orders.service.ts and product-requests.service.ts.

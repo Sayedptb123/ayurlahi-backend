@@ -20,7 +20,7 @@ import {
   getRosterAccess,
   isTeamManagementTier,
   isTeamRosterVisibleRole,
-} from './org-users-access.util';
+} from '../common/utils/team-access.util';
 
 @Injectable()
 export class OrganisationUsersService {

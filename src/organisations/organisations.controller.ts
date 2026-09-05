@@ -18,6 +18,7 @@ import { GetOrganisationsDto } from './dto/get-organisations.dto';
 import { UpdateOrgDetailsDto } from './dto/update-org-details.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { ALL_MODULES, MODULE_PRESETS } from '../auth/guards/module.guard';
+import { isTeamManagementTier } from '../common/utils/team-access.util';
 
 function requireTeam(req: any) {
   if (req.user?.organisationType !== 'AYURLAHI_TEAM') {
@@ -83,6 +84,17 @@ export class OrganisationsController {
   ) {
     requireTeam(req);
     return this.organisationsService.reject(id, rejectionReason, req.user?.userId);
+  }
+
+  // Org 360 view for the Phase 2 super-admin detail screen — Team-management
+  // tier only (not the role-blind isAyurlahiTeam check used elsewhere in this
+  // controller; see scope/Super_Admin_Org_Staff_Management_Phase2_Scope.md).
+  @Get(':id/full')
+  getFull(@Param('id') id: string, @Request() req) {
+    if (!isTeamManagementTier(req.user)) {
+      throw new ForbiddenException('Only Ayurlahi Team management can view this');
+    }
+    return this.organisationsService.getFull(id);
   }
 
   @Get(':id/details')

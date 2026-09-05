@@ -8,6 +8,7 @@ import {
   IsNumber,
   Min,
   IsArray,
+  IsUUID,
   MaxLength,
   ValidateIf,
   ValidateNested,
@@ -53,6 +54,13 @@ export class AddressDto {
 }
 
 export class CreateStaffDto {
+  // Target organisation — only honoured for Team-management-tier callers
+  // (super admin managing another org's staff); ignored for normal callers,
+  // whose own organisation is always used instead.
+  @IsOptional()
+  @IsUUID()
+  organisationId?: string;
+
   @IsNotEmpty()
   @IsString()
   @MaxLength(100)

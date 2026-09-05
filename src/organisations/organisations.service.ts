@@ -17,6 +17,8 @@ import { ClinicCapabilities } from '../clinic-capabilities/entities/clinic-capab
 import { ClinicProfile } from './entities/clinic-profile.entity';
 import { ManufacturerProfile } from './entities/manufacturer-profile.entity';
 import { OrganisationContact } from './entities/organisation-contact.entity';
+import { Staff } from '../staff/entities/staff.entity';
+import { Branch } from '../branches/entities/branch.entity';
 import { UpdateOrgDetailsDto } from './dto/update-org-details.dto';
 import { UsersService } from '../users/users.service';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -38,6 +40,10 @@ export class OrganisationsService {
     private readonly manufacturerProfileRepository: Repository<ManufacturerProfile>,
     @InjectRepository(OrganisationContact)
     private readonly orgContactRepository: Repository<OrganisationContact>,
+    @InjectRepository(Staff)
+    private readonly staffRepository: Repository<Staff>,
+    @InjectRepository(Branch)
+    private readonly branchRepository: Repository<Branch>,
     private readonly usersService: UsersService,
     private readonly notificationsService: NotificationsService,
     private readonly organisationSettingsService: OrganisationSettingsService,
@@ -455,6 +461,54 @@ export class OrganisationsService {
       hasIpd: cap.hasIpd,
       hasOpd: cap.hasOpd,
       enabledModules: cap.enabledModules ?? [],
+    };
+  }
+
+  /**
+   * Org 360 view for Team-management-tier admins: core org fields + profile/
+   * capabilities/contact (merged from getDetails/getCapabilities) + staff and
+   * branch counts + primary owner, in one call instead of 3-4 round trips.
+   * See scope/Super_Admin_Org_Staff_Management_Phase2_Scope.md §2b.
+   */
+  async getFull(orgId: string) {
+    const org = await this.organisationsRepository.findOne({
+      where: { id: orgId, deletedAt: IsNull() },
+    });
+    if (!org) throw new NotFoundException(`Organisation with ID ${orgId} not found`);
+
+    const [details, capabilities, staffCount, branchCount, primaryOwner] =
+      await Promise.all([
+        this.getDetails(orgId).catch(() => null),
+        this.getCapabilities(orgId).catch(() => null),
+        this.staffRepository.count({ where: { organisationId: orgId } }),
+        this.branchRepository.count({ where: { organisationId: orgId } }),
+        this.organisationUserRepository.findOne({
+          where: { organisationId: orgId, isPrimary: true },
+          relations: ['user'],
+          select: { user: { id: true, firstName: true, lastName: true, email: true } },
+        }),
+      ]);
+
+    return {
+      id: org.id,
+      name: org.name,
+      type: org.type,
+      approvalStatus: org.approvalStatus,
+      isActive: org.isActive,
+      createdAt: org.createdAt,
+      details,
+      capabilities,
+      staffCount,
+      branchCount,
+      primaryOwner: primaryOwner?.user
+        ? {
+            id: primaryOwner.user.id,
+            firstName: primaryOwner.user.firstName,
+            lastName: primaryOwner.user.lastName,
+            email: primaryOwner.user.email,
+            role: primaryOwner.role,
+          }
+        : null,
     };
   }
 

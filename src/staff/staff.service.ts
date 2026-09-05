@@ -22,6 +22,7 @@ import * as bcrypt from 'bcryptjs';
 import * as crypto from 'crypto';
 import { NotificationsService } from '../notifications/notifications.service';
 import { normalizePhone } from '../common/utils/phone.util';
+import { isTeamManagementTier } from '../common/utils/team-access.util';
 
 
 @Injectable()
@@ -88,24 +89,25 @@ export class StaffService {
     throw new ForbiddenException('User organization not found');
   }
 
-  async findAll(userId: string, userRole: string, query: GetStaffDto) {
+  async findAll(userId: string, userRole: string, organisationType: string, query: GetStaffDto) {
     console.log('[Staff Service] findAll called:', { userId, userRole, query });
     const { page = 1, limit = 20, position, isActive, organizationId: organisationId } = query;
     const skip = (page - 1) * limit;
+    const isTeam = isTeamManagementTier({ userId, role: userRole, organisationType });
 
-    // Only clinic, manufacturer and admin users can access staff
-    if (!['clinic', 'manufacturer', 'admin', 'SUPER_ADMIN', 'OWNER', 'MANAGER', 'STAFF'].includes(userRole)) {
+    // Only clinic, manufacturer and Team-management-tier users can access staff
+    if (!isTeam && !['clinic', 'manufacturer', 'OWNER', 'MANAGER', 'STAFF'].includes(userRole)) {
       throw new ForbiddenException('You do not have permission to view staff');
     }
 
     // Determine which organization to filter by
     let targetOrganizationId: string | null = null;
 
-    if (organisationId && ['admin', 'SUPER_ADMIN'].includes(userRole)) {
-      // Admin provided specific organisationId in query - use that
+    if (organisationId && isTeam) {
+      // Team-management tier provided a specific organisationId in query - use that
       targetOrganizationId = organisationId;
       console.log('[Staff Service] Admin filtering by provided organisationId:', targetOrganizationId);
-    } else if (!['admin', 'SUPER_ADMIN'].includes(userRole)) {
+    } else if (!isTeam) {
       // Non-admin users: filter by their own organization
       try {
         targetOrganizationId = await this.getOrganizationId(userId);
@@ -115,7 +117,7 @@ export class StaffService {
         throw new ForbiddenException('User organization not found');
       }
     }
-    // If admin and no organisationId provided, targetOrganizationId stays null (show all)
+    // If Team-management tier and no organisationId provided, targetOrganizationId stays null (show all)
 
     // Build query
     const queryBuilder = this.staffRepository.createQueryBuilder('staff');
@@ -167,15 +169,15 @@ export class StaffService {
     };
   }
 
-  async findOne(id: string, userId: string, userRole: string) {
+  async findOne(id: string, userId: string, userRole: string, organisationType: string) {
     const staff = await this.staffRepository.findOne({ where: { id } });
 
     if (!staff) {
       throw new NotFoundException(`Staff member with ID ${id} not found`);
     }
 
-    // Verify user belongs to same organization (unless admin)
-    if (!['admin', 'SUPER_ADMIN'].includes(userRole)) {
+    // Verify user belongs to same organization (unless Team-management tier)
+    if (!isTeamManagementTier({ userId, role: userRole, organisationType })) {
       const organisationId = await this.getOrganizationId(userId);
       if (staff.organisationId !== organisationId) {
         throw new ForbiddenException(
@@ -187,15 +189,27 @@ export class StaffService {
     return this.mapToResponse(staff);
   }
 
-  async create(userId: string, userRole: string, createDto: CreateStaffDto) {
-    // Only clinic and manufacturer users can create staff
-    if (!['clinic', 'manufacturer', 'OWNER', 'MANAGER'].includes(userRole)) {
+  async create(userId: string, userRole: string, organisationType: string, createDto: CreateStaffDto) {
+    const isTeam = isTeamManagementTier({ userId, role: userRole, organisationType });
+
+    // Only clinic and manufacturer users (or Team-management tier, for another org) can create staff
+    if (!isTeam && !['clinic', 'manufacturer', 'OWNER', 'MANAGER'].includes(userRole)) {
       throw new ForbiddenException(
         'Only clinic and manufacturer users can create staff',
       );
     }
 
-    const organisationId = await this.getOrganizationId(userId);
+    let organisationId: string;
+    if (isTeam) {
+      if (!createDto.organisationId) {
+        throw new BadRequestException(
+          'organisationId is required when creating staff as Team management',
+        );
+      }
+      organisationId = createDto.organisationId;
+    } else {
+      organisationId = await this.getOrganizationId(userId);
+    }
 
     // Validate position matches organization type
     // We assume clinic for now if checking organization users, or logic needs to be smarter
@@ -377,6 +391,7 @@ export class StaffService {
     id: string,
     userId: string,
     userRole: string,
+    organisationType: string,
     updateDto: UpdateStaffDto,
   ) {
     const staff = await this.staffRepository.findOne({ where: { id } });
@@ -385,8 +400,8 @@ export class StaffService {
       throw new NotFoundException(`Staff member with ID ${id} not found`);
     }
 
-    // Verify user belongs to same organization (unless admin)
-    if (!['admin', 'SUPER_ADMIN'].includes(userRole)) {
+    // Verify user belongs to same organization (unless Team-management tier)
+    if (!isTeamManagementTier({ userId, role: userRole, organisationType })) {
       const organisationId = await this.getOrganizationId(userId);
       if (staff.organisationId !== organisationId) {
         throw new ForbiddenException(
@@ -580,15 +595,15 @@ export class StaffService {
     return this.mapToResponse(updatedStaff);
   }
 
-  async remove(id: string, userId: string, userRole: string) {
+  async remove(id: string, userId: string, userRole: string, organisationType: string) {
     const staff = await this.staffRepository.findOne({ where: { id } });
 
     if (!staff) {
       throw new NotFoundException(`Staff member with ID ${id} not found`);
     }
 
-    // Verify user belongs to same organization (unless admin)
-    if (!['admin', 'SUPER_ADMIN'].includes(userRole)) {
+    // Verify user belongs to same organization (unless Team-management tier)
+    if (!isTeamManagementTier({ userId, role: userRole, organisationType })) {
       const organisationId = await this.getOrganizationId(userId);
       if (staff.organisationId !== organisationId) {
         throw new ForbiddenException(
@@ -601,15 +616,15 @@ export class StaffService {
     return { message: 'Staff member deleted successfully' };
   }
 
-  async toggleStatus(id: string, userId: string, userRole: string) {
+  async toggleStatus(id: string, userId: string, userRole: string, organisationType: string) {
     const staff = await this.staffRepository.findOne({ where: { id } });
 
     if (!staff) {
       throw new NotFoundException(`Staff member with ID ${id} not found`);
     }
 
-    // Verify user belongs to same organization (unless admin)
-    if (!['admin', 'SUPER_ADMIN'].includes(userRole)) {
+    // Verify user belongs to same organization (unless Team-management tier)
+    if (!isTeamManagementTier({ userId, role: userRole, organisationType })) {
       const organisationId = await this.getOrganizationId(userId);
       if (staff.organisationId !== organisationId) {
         throw new ForbiddenException(
@@ -631,14 +646,16 @@ export class StaffService {
     staffId: string,
     userId: string,
     userRole: string,
+    organisationType: string,
     sendEmail: boolean = true,
     sendSMS: boolean = false,
   ) {
     try {
       console.log('[Staff Service] inviteStaff called:', { staffId, userId, userRole });
+      const isTeam = isTeamManagementTier({ userId, role: userRole, organisationType });
 
-      // Only OWNER, MANAGER, ADMIN can invite staff
-      if (!['OWNER', 'MANAGER', 'ADMIN', 'SUPER_ADMIN'].includes(userRole)) {
+      // Only OWNER, MANAGER, ADMIN (or Team-management tier, for another org) can invite staff
+      if (!isTeam && !['OWNER', 'MANAGER', 'ADMIN'].includes(userRole)) {
         throw new ForbiddenException('You do not have permission to invite staff');
       }
 
@@ -657,8 +674,8 @@ export class StaffService {
         phone: staff.phone
       });
 
-      // Verify user belongs to same organization
-      if (!['SUPER_ADMIN'].includes(userRole)) {
+      // Verify user belongs to same organization (unless Team-management tier)
+      if (!isTeam) {
         console.log('[Staff Service] Verifying organization access...');
         const organisationId = await this.getOrganizationId(userId);
         console.log('[Staff Service] User organisationId:', organisationId);
@@ -860,6 +877,7 @@ export class StaffService {
     staffId: string,
     userId: string,
     userRole: string,
+    organisationType: string,
   ) {
     const staff = await this.staffRepository.findOne({ where: { id: staffId } });
 
@@ -867,8 +885,8 @@ export class StaffService {
       throw new NotFoundException(`Staff member with ID ${staffId} not found`);
     }
 
-    // Verify user belongs to same organization
-    if (!['SUPER_ADMIN'].includes(userRole)) {
+    // Verify user belongs to same organization (unless Team-management tier)
+    if (!isTeamManagementTier({ userId, role: userRole, organisationType })) {
       const organisationId = await this.getOrganizationId(userId);
       if (staff.organisationId !== organisationId) {
         throw new ForbiddenException(
