@@ -189,10 +189,27 @@ export class StaffBranchAssignmentsService {
     return assignments.map((a) => a.branch);
   }
 
+  // Single-branch orgs never get the StaffScreen "Branches" assignment toggle
+  // (it only renders when an org has more than one approved branch — there's
+  // nothing to choose between otherwise), so nobody can ever create a
+  // staff_branch_assignments row for them. Treating that as "unassigned"
+  // would make every single-branch org's only branch permanently show "no
+  // staff" — wrong for what is likely the majority of orgs on the platform.
+  // Mirrors D9's existing "NULL branch_id = org-wide visible" fallback for
+  // single-location organisations, applied to this table's own semantics.
+  private async isSingleBranchOrg(organisationId: string): Promise<boolean> {
+    const count = await this.branchesRepository.count({ where: { organisationId } });
+    return count <= 1;
+  }
+
   async getBranchStaff(
     branchId: string,
     organisationId: string,
   ): Promise<Staff[]> {
+    if (await this.isSingleBranchOrg(organisationId)) {
+      return this.staffRepository.find({ where: { organisationId } });
+    }
+
     const assignments = await this.assignmentsRepository.find({
       where: { branchId, organisationId, isActive: true },
       relations: ['staff'],
@@ -205,8 +222,13 @@ export class StaffBranchAssignmentsService {
   // branch assignment — a real, expected state (assignment is a manual step
   // separate from creating the staff record, see ADR-004 D5), not a bug. Lets
   // the super-admin branch drill-down show "N staff not yet assigned" instead
-  // of silently omitting them from every branch.
+  // of silently omitting them from every branch. Never fires for a
+  // single-branch org — see isSingleBranchOrg().
   async getUnassignedStaff(organisationId: string): Promise<Staff[]> {
+    if (await this.isSingleBranchOrg(organisationId)) {
+      return [];
+    }
+
     const assignedStaffIds = await this.assignmentsRepository
       .createQueryBuilder('assignment')
       .select('DISTINCT assignment.staff_id', 'staffId')
@@ -235,6 +257,18 @@ export class StaffBranchAssignmentsService {
   async getStaffBranchSummary(
     organisationId: string,
   ): Promise<{ staffId: string; branches: { id: string; name: string }[] }[]> {
+    // Single-branch org: nobody can have an explicit assignment row (see
+    // isSingleBranchOrg()), so every staff member is implicitly at the one
+    // branch that exists, if any.
+    if (await this.isSingleBranchOrg(organisationId)) {
+      const [branch, staff] = await Promise.all([
+        this.branchesRepository.findOne({ where: { organisationId } }),
+        this.staffRepository.find({ where: { organisationId } }),
+      ]);
+      if (!branch) return [];
+      return staff.map((s) => ({ staffId: s.id, branches: [{ id: branch.id, name: branch.name }] }));
+    }
+
     const { data } = await this.findAll(organisationId, {
       isActive: true,
       limit: 100,
