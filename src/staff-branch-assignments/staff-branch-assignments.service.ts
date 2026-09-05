@@ -200,6 +200,56 @@ export class StaffBranchAssignmentsService {
 
     return assignments.map((a) => a.staff);
   }
+
+  // Staff who exist on this org's roster but have never been given an active
+  // branch assignment — a real, expected state (assignment is a manual step
+  // separate from creating the staff record, see ADR-004 D5), not a bug. Lets
+  // the super-admin branch drill-down show "N staff not yet assigned" instead
+  // of silently omitting them from every branch.
+  async getUnassignedStaff(organisationId: string): Promise<Staff[]> {
+    const assignedStaffIds = await this.assignmentsRepository
+      .createQueryBuilder('assignment')
+      .select('DISTINCT assignment.staff_id', 'staffId')
+      .where('assignment.organisation_id = :organisationId', { organisationId })
+      .andWhere('assignment.is_active = true')
+      .getRawMany<{ staffId: string }>();
+
+    const qb = this.staffRepository
+      .createQueryBuilder('staff')
+      .where('staff.organisation_id = :organisationId', { organisationId });
+
+    if (assignedStaffIds.length) {
+      qb.andWhere('staff.id NOT IN (:...assignedStaffIds)', {
+        assignedStaffIds: assignedStaffIds.map((r) => r.staffId),
+      });
+    }
+
+    return qb.getMany();
+  }
+
+  // Per-staff list of the branches they're actively assigned to, for the
+  // Staff & Access "Branches" column — a pure read/derivation over the same
+  // findAll() this module's own CRUD controller already uses, so this adds no
+  // new assignment write path. One call for the whole org avoids querying
+  // per-branch-per-staff from the frontend.
+  async getStaffBranchSummary(
+    organisationId: string,
+  ): Promise<{ staffId: string; branches: { id: string; name: string }[] }[]> {
+    const { data } = await this.findAll(organisationId, {
+      isActive: true,
+      limit: 100,
+    } as GetStaffBranchAssignmentsDto);
+
+    const byStaff = new Map<string, { id: string; name: string }[]>();
+    for (const a of data) {
+      if (!a.staffId || !a.branch) continue;
+      const list = byStaff.get(a.staffId) ?? [];
+      list.push({ id: a.branch.id, name: a.branch.name });
+      byStaff.set(a.staffId, list);
+    }
+
+    return Array.from(byStaff.entries()).map(([staffId, branches]) => ({ staffId, branches }));
+  }
 }
 
 

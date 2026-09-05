@@ -11,6 +11,7 @@ import { RejectClinicDto } from './dto/approve-clinic.dto';
 import { User } from '../users/entities/user.entity';
 import { RoleUtils } from '../common/utils/role.utils';
 import { OrganisationUser } from '../organisation-users/entities/organisation-user.entity';
+import { Branch } from '../branches/entities/branch.entity';
 import { NotificationsService } from '../notifications/notifications.service';
 
 @Injectable()
@@ -22,6 +23,8 @@ export class ClinicsService {
     private usersRepository: Repository<User>,
     @InjectRepository(OrganisationUser)
     private organisationUsersRepository: Repository<OrganisationUser>,
+    @InjectRepository(Branch)
+    private branchesRepository: Repository<Branch>,
     private notificationsService: NotificationsService,
   ) { }
 
@@ -34,12 +37,28 @@ export class ClinicsService {
     const where: any = { type: 'CLINIC', deletedAt: IsNull() };
     if (status) where.approvalStatus = status;
 
-    const [data, total] = await this.organisationsRepository.findAndCount({
+    const [orgs, total] = await this.organisationsRepository.findAndCount({
       where,
       order: { createdAt: 'DESC' },
       skip: (page - 1) * limit,
       take: limit,
     });
+
+    // Same count definition as OrganisationsService.getFull()'s branchCount
+    // (all non-deleted branches, any approval status) — one grouped query for
+    // the whole page instead of N+1 per-clinic lookups.
+    const orgIds = orgs.map((o) => o.id);
+    const branchCounts = orgIds.length
+      ? await this.branchesRepository
+        .createQueryBuilder('branch')
+        .select('branch.organisation_id', 'organisationId')
+        .addSelect('COUNT(*)', 'count')
+        .where('branch.organisation_id IN (:...orgIds)', { orgIds })
+        .groupBy('branch.organisation_id')
+        .getRawMany<{ organisationId: string; count: string }>()
+      : [];
+    const branchCountByOrgId = new Map(branchCounts.map((r) => [r.organisationId, parseInt(r.count, 10)]));
+    const data = orgs.map((org) => ({ ...org, branchCount: branchCountByOrgId.get(org.id) ?? 0 }));
 
     return {
       data,
