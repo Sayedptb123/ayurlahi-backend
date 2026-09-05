@@ -314,7 +314,7 @@ export class OrganisationUsersService {
 
     const rows = organisationUsers
       .filter((ou) => ou.user)
-      .map((ou) => ({ ...ou.user, role: ou.role }));
+      .map((ou) => ({ ...ou.user, role: ou.role, permissions: ou.permissions ?? null }));
 
     return access === 'filtered'
       ? rows.filter((row) => isTeamRosterVisibleRole(row.role))
