@@ -16,6 +16,14 @@ import { CreateOrganisationUserDto } from './dto/create-organisation-user.dto';
 import { UpdateOrganisationUserDto } from './dto/update-organisation-user.dto';
 
 const PERMISSION_MANAGERS = ['OWNER', 'MANAGER', 'ADMIN', 'SUPER_ADMIN'];
+// Roles a clinic OWNER/MANAGER/ADMIN can assign to their own staff via
+// PATCH .../by-user/:userId/role. Deliberately excludes OWNER (ownership
+// transfer is a separate, more deliberate flow, not this endpoint) and every
+// Team-tier/clinical value (SUPER_ADMIN, SUPPORT, DOCTOR, NURSE, ...) — this
+// endpoint is not how professional identity or Team access is set. Team-tier
+// callers (isTeam below) are unrestricted, unchanged from before.
+// See scope/Doctor_Admin_Role_Separation_Scope_2026-09-05.md.
+const CLINIC_ASSIGNABLE_ROLES = ['STAFF', 'MANAGER', 'ADMIN'];
 import { GetOrganisationUsersDto } from './dto/get-organisation-users.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { isTeamManagementTier } from '../common/utils/team-access.util';
@@ -88,6 +96,14 @@ export class OrganisationUsersController {
     const isTeam = isTeamManagementTier(req.user);
     if (!isTeam && !PERMISSION_MANAGERS.includes(req.user?.role)) {
       throw new ForbiddenException('Only managers and owners can update staff roles');
+    }
+    if (!isTeam) {
+      if (targetUserId === req.user?.userId) {
+        throw new ForbiddenException('You cannot change your own organisation role');
+      }
+      if (!CLINIC_ASSIGNABLE_ROLES.includes(role)) {
+        throw new ForbiddenException('This role cannot be assigned from here');
+      }
     }
     const organisationId = isTeam && bodyOrganisationId ? bodyOrganisationId : req.user?.organisationId;
     return this.organisationUsersService.updateRoleByUserId(

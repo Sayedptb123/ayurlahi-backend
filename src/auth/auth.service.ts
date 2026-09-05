@@ -573,6 +573,9 @@ export class AuthService {
       const refreshCapabilities = currentOrg
         ? await this.fetchCapabilities(currentOrg.organisation.type, currentOrg.organisation.id)
         : null;
+      const refreshStaffPosition = currentOrg
+        ? await this.fetchStaffPosition(user.id, currentOrg.organisation.id)
+        : null;
 
       return {
         accessToken,
@@ -596,6 +599,7 @@ export class AuthService {
             isActive: currentOrg.organisation.isActive,
             permissions: currentOrg.permissions ?? null,
             capabilities: refreshCapabilities,
+            staffPosition: refreshStaffPosition,
           }
           : null,
         organisations,

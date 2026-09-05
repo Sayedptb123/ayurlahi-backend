@@ -145,21 +145,33 @@ export class StaffService {
     const data = await queryBuilder.getMany();
     console.log('[Staff Service] Data retrieved:', data.length, 'records');
 
-    // Batch-fetch permissions from organisation_users for staff who have user accounts
+    // Batch-fetch permissions + organisation access role from organisation_users
+    // for staff who have user accounts. Role is surfaced read-only here (and
+    // editable via the Access panel, PATCH /organisation-users/by-user/:userId/role)
+    // — never written from staff.position. See
+    // scope/Doctor_Admin_Role_Separation_Scope_2026-09-05.md.
     const userIds = data.filter((s) => s.userId).map((s) => s.userId as string);
     const permissionsMap: Record<string, Record<string, boolean> | null> = {};
+    const roleMap: Record<string, string | null> = {};
     if (userIds.length > 0 && targetOrganizationId) {
       const orgUsers = await this.organisationUsersRepository.find({
         where: { userId: In(userIds), organisationId: targetOrganizationId },
-        select: ['userId', 'permissions'],
+        select: ['userId', 'permissions', 'role'],
       });
       for (const ou of orgUsers) {
-        if (ou.userId) permissionsMap[ou.userId] = ou.permissions ?? null;
+        if (ou.userId) {
+          permissionsMap[ou.userId] = ou.permissions ?? null;
+          roleMap[ou.userId] = ou.role ?? null;
+        }
       }
     }
 
     return {
-      data: data.map((staff) => this.mapToResponse(staff, staff.userId ? (permissionsMap[staff.userId] ?? null) : null)),
+      data: data.map((staff) => this.mapToResponse(
+        staff,
+        staff.userId ? (permissionsMap[staff.userId] ?? null) : null,
+        staff.userId ? (roleMap[staff.userId] ?? null) : null,
+      )),
       pagination: {
         page,
         limit,
@@ -359,8 +371,11 @@ export class StaffService {
         savedUser = await this.usersRepository.save(user);
       }
 
-      // Map staff position to organization role
-      const role = this.mapPositionToRole(savedStaff.position);
+      // New staff accounts always start at STAFF-tier access — organisation
+      // access role must never be inferred from professional position (see
+      // scope/Doctor_Admin_Role_Separation_Scope_2026-09-05.md). An owner or
+      // manager promotes them explicitly afterward via Staff → Access.
+      const role = 'STAFF';
 
       // Create organisation_users entry
       const orgUser = this.organisationUsersRepository.create({
@@ -368,7 +383,7 @@ export class StaffService {
         organisationId: organisationId,
         role: role as any,
         isPrimary: false,
-        permissions: this.getDefaultPermissions(role),
+        permissions: this.getDefaultPermissions(role, savedStaff.position),
       });
 
       await this.organisationUsersRepository.save(orgUser);
@@ -511,16 +526,9 @@ export class StaffService {
 
     const updatedStaff = await this.staffRepository.save(staff);
 
-    // Keep organisation_users.role in sync when position changes for staff
-    // who already have a user account — role is otherwise only set at
-    // account creation time and silently drifts from position afterwards.
-    if (updateDto.position !== undefined && staff.userId) {
-      const syncedRole = this.mapPositionToRole(updatedStaff.position);
-      await this.organisationUsersRepository.update(
-        { userId: staff.userId, organisationId: updatedStaff.organisationId },
-        { role: syncedRole as any, permissions: this.getDefaultPermissions(syncedRole) as any },
-      );
-    }
+    // organisation_users.role is never derived from staff.position — a
+    // position change (e.g. to/from Doctor) must not touch access role. See
+    // scope/Doctor_Admin_Role_Separation_Scope_2026-09-05.md.
 
     // Create user account if requested and doesn't exist
     if (updateDto.createUserAccount && updateDto.password && !staff.userId) {
@@ -573,8 +581,8 @@ export class StaffService {
         savedUser = await (this.usersRepository.save(user) as Promise<User>);
       }
 
-      // Map staff position to organization role
-      const role = this.mapPositionToRole(updatedStaff.position);
+      // New staff accounts always start at STAFF-tier access (see create()).
+      const role = 'STAFF';
 
       // Guard: don't create a duplicate org_user if one already exists
       const existingOrgUser = await this.organisationUsersRepository.findOne({
@@ -587,7 +595,7 @@ export class StaffService {
           organisationId: updatedStaff.organisationId,
           role: role as any,
           isPrimary: false,
-          permissions: this.getDefaultPermissions(role),
+          permissions: this.getDefaultPermissions(role, updatedStaff.position),
         });
         await this.organisationUsersRepository.save(orgUser);
       }
@@ -735,10 +743,8 @@ export class StaffService {
       const savedUser = await this.usersRepository.save(user);
       console.log('[Staff Service] User saved:', { id: savedUser.id });
 
-      // Map staff position to organization role
-      console.log('[Staff Service] Mapping position to role...');
-      const role = this.mapPositionToRole(staff.position);
-      console.log('[Staff Service] Mapped role:', role);
+      // New staff accounts always start at STAFF-tier access (see create()).
+      const role = 'STAFF';
 
       // Create organisation_users entry
       console.log('[Staff Service] Creating organisation_users entry...');
@@ -747,7 +753,7 @@ export class StaffService {
         organisationId: staff.organisationId,
         role: role as any,
         isPrimary: false,
-        permissions: this.getDefaultPermissions(role),
+        permissions: this.getDefaultPermissions(role, staff.position),
       };
       console.log('[Staff Service] OrgUser data:', orgUserData);
 
@@ -941,33 +947,24 @@ export class StaffService {
   // HELPER METHODS
   // ============================================================================
 
-  private getDefaultPermissions(role: string): Record<string, boolean> {
+  // Default permissions depend on access role (organisation_users.role), with
+  // one exception: doctor-specific permissions come from professional
+  // position (staff.position), independently of access tier — a DOCTOR who
+  // is still at STAFF-tier access still needs the `doctors` permission.
+  private getDefaultPermissions(role: string, position?: StaffPosition): Record<string, boolean> {
     const base = { dashboard: true, patients: true, appointments: true, admissions: true, doctors: false, ipd: false, duty: false, billing: false, staff: false, marketplace: false };
-    if (role === 'MANAGER') return Object.fromEntries(Object.keys(base).map(k => [k, true])) as Record<string, boolean>;
-    if (role === 'DOCTOR') return { ...base, doctors: true };
-    return base;
-  }
-
-  private mapPositionToRole(position: StaffPosition): string {
-    const roleMapping = {
-      [StaffPosition.DOCTOR]: 'DOCTOR',
-      [StaffPosition.NURSE]: 'NURSE',
-      [StaffPosition.THERAPIST]: 'THERAPIST',
-      [StaffPosition.PHARMACIST]: 'PHARMACIST',
-      [StaffPosition.RECEPTIONIST]: 'RECEPTIONIST',
-      [StaffPosition.MANAGER]: 'MANAGER',
-      [StaffPosition.ADMINISTRATOR]: 'ADMIN',
-      // Add more mappings as needed
-    };
-
-    return roleMapping[position] || 'STAFF'; // Default to STAFF role
+    const tiered = (role === 'MANAGER' || role === 'OWNER' || role === 'ADMIN')
+      ? (Object.fromEntries(Object.keys(base).map(k => [k, true])) as Record<string, boolean>)
+      : base;
+    if (position === StaffPosition.DOCTOR) return { ...tiered, doctors: true };
+    return tiered;
   }
 
   private generateInvitationToken(): string {
     return crypto.randomBytes(32).toString('hex');
   }
 
-  private mapToResponse(staff: Staff, permissions: Record<string, boolean> | null = null) {
+  private mapToResponse(staff: Staff, permissions: Record<string, boolean> | null = null, organisationRole: string | null = null) {
     return {
       id: staff.id,
       organisationId: staff.organisationId,
@@ -1007,8 +1004,11 @@ export class StaffService {
       invitationExpiresAt: staff.invitationExpiresAt?.toISOString() || null,
       createdAt: staff.createdAt.toISOString(),
       updatedAt: staff.updatedAt.toISOString(),
-      // Permissions from organisation_users (null if staff has no user account)
+      // Permissions + access role from organisation_users (null if staff has
+      // no user account). organisationRole is administrative authority — kept
+      // independent of `position` (professional identity) by design.
       permissions,
+      organisationRole,
     };
   }
 }
