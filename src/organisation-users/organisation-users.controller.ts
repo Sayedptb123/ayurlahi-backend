@@ -18,6 +18,7 @@ import { UpdateOrganisationUserDto } from './dto/update-organisation-user.dto';
 const PERMISSION_MANAGERS = ['OWNER', 'MANAGER', 'ADMIN', 'SUPER_ADMIN'];
 import { GetOrganisationUsersDto } from './dto/get-organisation-users.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { isTeamManagementTier } from '../common/utils/team-access.util';
 
 @Controller('organisation-users')
 @UseGuards(JwtAuthGuard)
@@ -59,12 +60,17 @@ export class OrganisationUsersController {
   updatePermissionsByUser(
     @Param('userId') targetUserId: string,
     @Body('permissions') permissions: Record<string, boolean>,
+    @Body('organisationId') bodyOrganisationId: string | undefined,
     @Request() req,
   ) {
-    if (!PERMISSION_MANAGERS.includes(req.user?.role)) {
+    const isTeam = isTeamManagementTier(req.user);
+    if (!isTeam && !PERMISSION_MANAGERS.includes(req.user?.role)) {
       throw new ForbiddenException('Only managers and owners can update staff permissions');
     }
-    const organisationId = req.user?.organisationId;
+    // Team-management tier may target another org (Phase 2 admin staff
+    // management); everyone else is always confined to their own org,
+    // regardless of what organisationId they send.
+    const organisationId = isTeam && bodyOrganisationId ? bodyOrganisationId : req.user?.organisationId;
     return this.organisationUsersService.updatePermissionsByUserId(
       targetUserId,
       organisationId,
@@ -76,12 +82,14 @@ export class OrganisationUsersController {
   updateRoleByUser(
     @Param('userId') targetUserId: string,
     @Body('role') role: string,
+    @Body('organisationId') bodyOrganisationId: string | undefined,
     @Request() req,
   ) {
-    if (!PERMISSION_MANAGERS.includes(req.user?.role)) {
+    const isTeam = isTeamManagementTier(req.user);
+    if (!isTeam && !PERMISSION_MANAGERS.includes(req.user?.role)) {
       throw new ForbiddenException('Only managers and owners can update staff roles');
     }
-    const organisationId = req.user?.organisationId;
+    const organisationId = isTeam && bodyOrganisationId ? bodyOrganisationId : req.user?.organisationId;
     return this.organisationUsersService.updateRoleByUserId(
       targetUserId,
       organisationId,
