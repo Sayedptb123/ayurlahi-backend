@@ -9,6 +9,7 @@ import { ProductRequest, ProductRequestStatus } from './entities/product-request
 import { OrganisationUser } from '../organisation-users/entities/organisation-user.entity';
 import { CreateProductRequestDto } from './dto/create-product-request.dto';
 import { UpdateProductRequestStatusDto } from './dto/update-product-request-status.dto';
+import { NotifyManufacturerDto } from './dto/notify-manufacturer.dto';
 import { GetProductRequestsDto } from './dto/get-product-requests.dto';
 import { NotificationsService } from '../notifications/notifications.service';
 import { RoleUtils } from '../common/utils/role.utils';
@@ -63,7 +64,7 @@ export class ProductRequestsService {
               userIds,
               title: 'New Product Request',
               body: `${dto.productName}${dto.manufacturerHint ? ` (maybe from ${dto.manufacturerHint})` : ''}`,
-              data: { productRequestId: saved.id, type: 'product_request_created' },
+              data: { productRequestId: saved.id, type: 'product_request_created', organisationId: AYURLAHI_TEAM_ORG_ID },
             })
             .catch(() => {});
         }
@@ -92,8 +93,13 @@ export class ProductRequestsService {
         return { data: [], pagination: { page, limit, total: 0, totalPages: 0 } };
       }
       queryBuilder.andWhere('pr.organisationId = :orgId', { orgId: organisationId });
+    } else if (organisationType === 'MANUFACTURER') {
+      if (!organisationId) {
+        return { data: [], pagination: { page, limit, total: 0, totalPages: 0 } };
+      }
+      // Read-only: a manufacturer sees only requests explicitly routed to them.
+      queryBuilder.andWhere('pr.notifiedManufacturerId = :mfgId', { mfgId: organisationId });
     } else if (organisationType !== 'AYURLAHI_TEAM') {
-      // Manufacturers have no stake in these yet.
       return { data: [], pagination: { page, limit, total: 0, totalPages: 0 } };
     }
 
@@ -105,9 +111,11 @@ export class ProductRequestsService {
     queryBuilder.skip(skip).take(limit).orderBy('pr.createdAt', 'DESC');
     const data = await queryBuilder.getMany();
 
-    // Attach the requesting org's name for display — cheap single query,
-    // avoids a per-row lookup on the frontend.
-    const orgIds = [...new Set(data.map((r) => r.organisationId))];
+    // Attach org display names for the requesting clinic and (if notified)
+    // the manufacturer — cheap single query, avoids per-row frontend lookups.
+    const orgIds = [
+      ...new Set([...data.map((r) => r.organisationId), ...data.map((r) => r.notifiedManufacturerId).filter(Boolean) as string[]]),
+    ];
     let orgNames = new Map<string, string>();
     if (orgIds.length > 0) {
       const rows = await this.productRequestsRepository.manager
@@ -120,7 +128,11 @@ export class ProductRequestsService {
     }
 
     return {
-      data: data.map((r) => ({ ...r, organisationName: orgNames.get(r.organisationId) ?? null })),
+      data: data.map((r) => ({
+        ...r,
+        organisationName: orgNames.get(r.organisationId) ?? null,
+        notifiedManufacturerName: r.notifiedManufacturerId ? orgNames.get(r.notifiedManufacturerId) ?? null : null,
+      })),
       pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
     };
   }
@@ -161,13 +173,56 @@ export class ProductRequestsService {
                 userIds,
                 title: 'Product Request Update',
                 body: `${request.productName} ${resolved}${dto.resolutionNotes ? ` — ${dto.resolutionNotes}` : ''}`,
-                data: { productRequestId: saved.id, type: 'product_request_resolved' },
+                data: { productRequestId: saved.id, type: 'product_request_resolved', organisationId: request.organisationId },
               })
               .catch(() => {});
           }
         })
         .catch(() => {});
     }
+
+    return saved;
+  }
+
+  async notifyManufacturer(id: string, userId: string, userRole: string, dto: NotifyManufacturerDto) {
+    if (!RoleUtils.isAdminOrSupport(userRole)) {
+      throw new ForbiddenException('Only Ayurlahi admin/support can transfer a request to a manufacturer');
+    }
+
+    const request = await this.productRequestsRepository.findOne({ where: { id, deletedAt: IsNull() } });
+    if (!request) {
+      throw new NotFoundException(`Product request with ID ${id} not found`);
+    }
+
+    request.notifiedManufacturerId = dto.manufacturerId;
+    request.notifiedAt = new Date();
+    if (request.status === ProductRequestStatus.PENDING) {
+      request.status = ProductRequestStatus.IN_PROGRESS;
+    }
+    const saved = await this.productRequestsRepository.save(request);
+
+    this.orgUserRepository
+      .find({
+        where: {
+          organisationId: dto.manufacturerId,
+          role: In(['OWNER', 'MANAGER', 'ADMIN']),
+          isActive: true,
+        },
+      })
+      .then((orgUsers) => {
+        const userIds = orgUsers.map((ou) => ou.userId).filter(Boolean);
+        if (userIds.length > 0) {
+          this.notificationsService
+            .sendToUsers({
+              userIds,
+              title: 'Product Requested',
+              body: `A clinic is looking for: ${request.productName}${request.notes ? ` — ${request.notes}` : ''}`,
+              data: { productRequestId: saved.id, type: 'product_request_routed', organisationId: dto.manufacturerId },
+            })
+            .catch(() => {});
+        }
+      })
+      .catch(() => {});
 
     return saved;
   }

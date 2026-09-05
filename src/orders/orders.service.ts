@@ -195,13 +195,22 @@ export class OrdersService {
       this.orgUserRepository
         .find({ where: { organisationId: In(manufacturerIds), role: In(['OWNER', 'MANAGER', 'ADMIN']), isActive: true } })
         .then((orgUsers) => {
-          const userIds = orgUsers.map((ou) => ou.userId).filter(Boolean);
-          if (userIds.length > 0) {
+          // Group by organisation — an order can span multiple manufacturers,
+          // and each notification must carry its own recipient's org so
+          // tapping it switches to the right context, not just any of them.
+          const byOrg = new Map<string, string[]>();
+          for (const ou of orgUsers) {
+            if (!ou.userId) continue;
+            const list = byOrg.get(ou.organisationId) ?? [];
+            list.push(ou.userId);
+            byOrg.set(ou.organisationId, list);
+          }
+          for (const [mfgOrgId, userIds] of byOrg) {
             this.notificationsService.sendToUsers({
               userIds,
               title: 'New Order Received',
               body: `Order ${orderWithRelations?.orderNumber}: ${itemSummary}`,
-              data: { orderId: savedOrder.id, type: 'order_placed' },
+              data: { orderId: savedOrder.id, type: 'order_placed', organisationId: mfgOrgId },
             }).catch(() => {});
           }
         })
@@ -227,7 +236,7 @@ export class OrdersService {
             userIds,
             title: 'New Order to Fulfill',
             body: `Order ${orderWithRelations?.orderNumber}: ${itemSummary} — forward to manufacturer and assign pickup`,
-            data: { orderId: savedOrder.id, type: 'order_needs_fulfillment' },
+            data: { orderId: savedOrder.id, type: 'order_needs_fulfillment', organisationId: OrdersService.AYURLAHI_TEAM_ORG_ID },
           }).catch(() => {});
         }
       })
@@ -748,7 +757,7 @@ export class OrdersService {
                 userIds,
                 title: notif.title,
                 body: notif.body,
-                data: { orderId: savedOrder.id, type: notif.type },
+                data: { orderId: savedOrder.id, type: notif.type, organisationId: recipientOrgId },
               }).catch(() => {});
             }
           })
@@ -801,7 +810,7 @@ export class OrdersService {
       userIds: [dto.userId],
       title: 'Pickup Assigned',
       body: `You've been assigned to collect ${item.productName} (order ${order.orderNumber}) from the manufacturer`,
-      data: { orderId, itemId, type: 'pickup_assigned' },
+      data: { orderId, itemId, type: 'pickup_assigned', organisationId: OrdersService.AYURLAHI_TEAM_ORG_ID },
     }).catch(() => {});
 
     return saved;

@@ -13,6 +13,7 @@ import {
 import { ProductRequestsService } from './product-requests.service';
 import { CreateProductRequestDto } from './dto/create-product-request.dto';
 import { UpdateProductRequestStatusDto } from './dto/update-product-request-status.dto';
+import { NotifyManufacturerDto } from './dto/notify-manufacturer.dto';
 import { GetProductRequestsDto } from './dto/get-product-requests.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 
@@ -49,5 +50,14 @@ export class ProductRequestsController {
     @Body() dto: UpdateProductRequestStatusDto,
   ) {
     return this.productRequestsService.updateStatus(id, req.user.userId, req.user.role, dto);
+  }
+
+  @Patch(':id/notify-manufacturer')
+  async notifyManufacturer(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Request() req,
+    @Body() dto: NotifyManufacturerDto,
+  ) {
+    return this.productRequestsService.notifyManufacturer(id, req.user.userId, req.user.role, dto);
   }
 }

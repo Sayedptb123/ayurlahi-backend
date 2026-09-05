@@ -45,6 +45,12 @@ export class ProductRequest {
   @Column({ type: 'timestamptz', nullable: true })
   resolvedAt: Date | null;
 
+  @Column({ type: 'uuid', nullable: true })
+  notifiedManufacturerId: string | null;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  notifiedAt: Date | null;
+
   @CreateDateColumn()
   createdAt: Date;
 

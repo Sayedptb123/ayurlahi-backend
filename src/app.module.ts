@@ -147,6 +147,7 @@ import { AssetMaintenance } from './assets/entities/asset-maintenance.entity';
 import { BillsModule } from './bills/bills.module';
 import { RecurringBill } from './bills/entities/recurring-bill.entity';
 import { BillPayment } from './bills/entities/bill-payment.entity';
+import { ProductRequest } from './product-requests/entities/product-request.entity';
 
 @Module({
   imports: [
@@ -259,6 +260,7 @@ import { BillPayment } from './bills/entities/bill-payment.entity';
           AssetMaintenance,
           RecurringBill,
           BillPayment,
+          ProductRequest,
         ],
         synchronize: false, // Disabled - synchronize causes issues
         logging: configService.get<string>('NODE_ENV') === 'development',

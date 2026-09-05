@@ -511,6 +511,17 @@ export class StaffService {
 
     const updatedStaff = await this.staffRepository.save(staff);
 
+    // Keep organisation_users.role in sync when position changes for staff
+    // who already have a user account — role is otherwise only set at
+    // account creation time and silently drifts from position afterwards.
+    if (updateDto.position !== undefined && staff.userId) {
+      const syncedRole = this.mapPositionToRole(updatedStaff.position);
+      await this.organisationUsersRepository.update(
+        { userId: staff.userId, organisationId: updatedStaff.organisationId },
+        { role: syncedRole as any, permissions: this.getDefaultPermissions(syncedRole) as any },
+      );
+    }
+
     // Create user account if requested and doesn't exist
     if (updateDto.createUserAccount && updateDto.password && !staff.userId) {
       // Validate email or phone exists
