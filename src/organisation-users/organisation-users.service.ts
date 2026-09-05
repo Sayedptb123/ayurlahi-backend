@@ -3,6 +3,7 @@ import {
   NotFoundException,
   BadRequestException,
   ConflictException,
+  ForbiddenException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, IsNull } from 'typeorm';
@@ -12,6 +13,14 @@ import { User } from '../users/entities/user.entity';
 import { CreateOrganisationUserDto } from './dto/create-organisation-user.dto';
 import { UpdateOrganisationUserDto } from './dto/update-organisation-user.dto';
 import { GetOrganisationUsersDto } from './dto/get-organisation-users.dto';
+import {
+  RequestingUser,
+  canManageMembership,
+  canViewMembershipRow,
+  getRosterAccess,
+  isTeamManagementTier,
+  isTeamRosterVisibleRole,
+} from './org-users-access.util';
 
 @Injectable()
 export class OrganisationUsersService {
@@ -26,8 +35,14 @@ export class OrganisationUsersService {
 
   async create(
     createDto: CreateOrganisationUserDto,
-    createdBy?: string,
+    requestingUser: RequestingUser,
   ): Promise<OrganisationUser> {
+    if (!canManageMembership(requestingUser, createDto.organisationId)) {
+      throw new ForbiddenException(
+        'You do not have permission to add a member to this organisation',
+      );
+    }
+
     // Verify user exists
     const user = await this.usersRepository.findOne({
       where: { id: createDto.userId },
@@ -70,18 +85,38 @@ export class OrganisationUsersService {
 
     const organisationUser = this.organisationUsersRepository.create({
       ...createDto,
-      createdBy,
+      createdBy: requestingUser.userId,
     });
 
     return await this.organisationUsersRepository.save(organisationUser);
   }
 
-  async findAll(query: GetOrganisationUsersDto): Promise<{
+  async findAll(
+    query: GetOrganisationUsersDto,
+    requestingUser: RequestingUser,
+  ): Promise<{
     data: OrganisationUser[];
     total: number;
   }> {
     const { page = 1, limit = 10, userId, organisationId, role } = query;
     const skip = (page - 1) * limit;
+
+    if (organisationId) {
+      const access = getRosterAccess(requestingUser, organisationId);
+      if (access === 'none') {
+        throw new ForbiddenException(
+          "You do not have permission to view this organisation's members",
+        );
+      }
+      // 'filtered' access (non-member reading the Team org's roster) is
+      // narrowed to FIELD_STAFF/TEAM_LEAD rows via the queryBuilder clause
+      // below — see the pickup-assignee picker use case in the scope doc.
+    } else if (!isTeamManagementTier(requestingUser)) {
+      // Unfiltered, platform-wide listing — Team-management tier only.
+      throw new ForbiddenException(
+        'You do not have permission to list organisation members across organisations',
+      );
+    }
 
     const queryBuilder = this.organisationUsersRepository
       .createQueryBuilder('ou')
@@ -99,6 +134,12 @@ export class OrganisationUsersService {
       queryBuilder.andWhere('ou.organisationId = :organisationId', {
         organisationId,
       });
+
+      if (getRosterAccess(requestingUser, organisationId) === 'filtered') {
+        queryBuilder.andWhere('ou.role IN (:...visibleRoles)', {
+          visibleRoles: ['FIELD_STAFF', 'TEAM_LEAD'],
+        });
+      }
     }
 
     if (role) {
@@ -114,7 +155,7 @@ export class OrganisationUsersService {
     return { data, total };
   }
 
-  async findOne(id: string): Promise<OrganisationUser> {
+  private async loadById(id: string): Promise<OrganisationUser> {
     const organisationUser = await this.organisationUsersRepository.findOne({
       where: { id },
       relations: ['user', 'organisation'],
@@ -126,6 +167,18 @@ export class OrganisationUsersService {
 
     if (!organisationUser) {
       throw new NotFoundException(`OrganisationUser with ID ${id} not found`);
+    }
+
+    return organisationUser;
+  }
+
+  async findOne(id: string, requestingUser: RequestingUser): Promise<OrganisationUser> {
+    const organisationUser = await this.loadById(id);
+
+    if (!canViewMembershipRow(requestingUser, organisationUser)) {
+      throw new ForbiddenException(
+        'You do not have permission to view this organisation member',
+      );
     }
 
     return organisationUser;
@@ -147,8 +200,15 @@ export class OrganisationUsersService {
   async update(
     id: string,
     updateDto: UpdateOrganisationUserDto,
+    requestingUser: RequestingUser,
   ): Promise<OrganisationUser> {
-    const organisationUser = await this.findOne(id);
+    const organisationUser = await this.loadById(id);
+
+    if (!canManageMembership(requestingUser, organisationUser.organisationId)) {
+      throw new ForbiddenException(
+        'You do not have permission to update this organisation member',
+      );
+    }
 
     // If setting as primary, unset other primary users
     if (updateDto.isPrimary && !organisationUser.isPrimary) {
@@ -165,8 +225,15 @@ export class OrganisationUsersService {
     return await this.organisationUsersRepository.save(organisationUser);
   }
 
-  async remove(id: string): Promise<void> {
-    const organisationUser = await this.findOne(id);
+  async remove(id: string, requestingUser: RequestingUser): Promise<void> {
+    const organisationUser = await this.loadById(id);
+
+    if (!canManageMembership(requestingUser, organisationUser.organisationId)) {
+      throw new ForbiddenException(
+        'You do not have permission to remove this organisation member',
+      );
+    }
+
     await this.organisationUsersRepository.softDelete(organisationUser.id);
   }
 
@@ -206,7 +273,16 @@ export class OrganisationUsersService {
     return await this.organisationUsersRepository.save(orgUser);
   }
 
-  async getUserOrganisations(userId: string): Promise<Organisation[]> {
+  async getUserOrganisations(
+    userId: string,
+    requestingUser: RequestingUser,
+  ): Promise<Organisation[]> {
+    if (userId !== requestingUser.userId && !isTeamManagementTier(requestingUser)) {
+      throw new ForbiddenException(
+        'You do not have permission to view this user\'s organisations',
+      );
+    }
+
     const organisationUsers = await this.organisationUsersRepository.find({
       where: { userId },
       relations: ['organisation'],
@@ -215,7 +291,17 @@ export class OrganisationUsersService {
     return organisationUsers.map((ou) => ou.organisation);
   }
 
-  async getOrganisationUsers(organisationId: string): Promise<any[]> {
+  async getOrganisationUsers(
+    organisationId: string,
+    requestingUser: RequestingUser,
+  ): Promise<any[]> {
+    const access = getRosterAccess(requestingUser, organisationId);
+    if (access === 'none') {
+      throw new ForbiddenException(
+        "You do not have permission to view this organisation's members",
+      );
+    }
+
     const organisationUsers = await this.organisationUsersRepository.find({
       where: { organisationId },
       relations: ['user'],
@@ -226,8 +312,12 @@ export class OrganisationUsersService {
       },
     });
 
-    return organisationUsers
+    const rows = organisationUsers
       .filter((ou) => ou.user)
       .map((ou) => ({ ...ou.user, role: ou.role }));
+
+    return access === 'filtered'
+      ? rows.filter((row) => isTeamRosterVisibleRole(row.role))
+      : rows;
   }
 }

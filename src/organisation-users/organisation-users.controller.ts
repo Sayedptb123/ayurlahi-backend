@@ -28,30 +28,31 @@ export class OrganisationUsersController {
 
   @Post()
   create(@Body() createDto: CreateOrganisationUserDto, @Request() req) {
-    return this.organisationUsersService.create(createDto, req.user?.userId);
+    return this.organisationUsersService.create(createDto, req.user);
   }
 
   @Get()
-  findAll(@Query() query: GetOrganisationUsersDto) {
-    return this.organisationUsersService.findAll(query);
+  findAll(@Query() query: GetOrganisationUsersDto, @Request() req) {
+    return this.organisationUsersService.findAll(query, req.user);
   }
 
   @Get(':id')
-  findOne(@Param('id') id: string) {
-    return this.organisationUsersService.findOne(id);
+  findOne(@Param('id') id: string, @Request() req) {
+    return this.organisationUsersService.findOne(id, req.user);
   }
 
   @Patch(':id')
   update(
     @Param('id') id: string,
     @Body() updateDto: UpdateOrganisationUserDto,
+    @Request() req,
   ) {
-    return this.organisationUsersService.update(id, updateDto);
+    return this.organisationUsersService.update(id, updateDto, req.user);
   }
 
   @Delete(':id')
-  remove(@Param('id') id: string) {
-    return this.organisationUsersService.remove(id);
+  remove(@Param('id') id: string, @Request() req) {
+    return this.organisationUsersService.remove(id, req.user);
   }
 
   @Patch('by-user/:userId')
@@ -89,12 +90,15 @@ export class OrganisationUsersController {
   }
 
   @Get('user/:userId/organisations')
-  getUserOrganisations(@Param('userId') userId: string) {
-    return this.organisationUsersService.getUserOrganisations(userId);
+  getUserOrganisations(@Param('userId') userId: string, @Request() req) {
+    return this.organisationUsersService.getUserOrganisations(userId, req.user);
   }
 
   @Get('organisation/:organisationId/users')
-  getOrganisationUsers(@Param('organisationId') organisationId: string) {
-    return this.organisationUsersService.getOrganisationUsers(organisationId);
+  getOrganisationUsers(
+    @Param('organisationId') organisationId: string,
+    @Request() req,
+  ) {
+    return this.organisationUsersService.getOrganisationUsers(organisationId, req.user);
   }
 }
