@@ -39,8 +39,17 @@ export class PatientBill {
   @Column({ type: 'uuid', name: 'organisation_id' })
   organisationId: string;
 
-  @Column({ type: 'uuid', name: 'patient_id' })
-  patientId: string;
+  // Nullable — a walk-in bill has no patient (see walkInName/walkInPhone
+  // below). patientId IS NULL is the sole walk-in signal; there is
+  // deliberately no separate billing_type column.
+  @Column({ type: 'uuid', nullable: true, name: 'patient_id' })
+  patientId: string | null;
+
+  @Column({ type: 'varchar', length: 200, nullable: true, name: 'walk_in_name' })
+  walkInName: string | null;
+
+  @Column({ type: 'varchar', length: 20, nullable: true, name: 'walk_in_phone' })
+  walkInPhone: string | null;
 
   @Column({ type: 'uuid', nullable: true, name: 'appointment_id' })
   appointmentId: string | null;
@@ -107,9 +116,9 @@ export class PatientBill {
   @JoinColumn({ name: 'organisation_id' })
   organisation: Organisation;
 
-  @ManyToOne(() => Patient)
+  @ManyToOne(() => Patient, { nullable: true })
   @JoinColumn({ name: 'patient_id' })
-  patient: Patient;
+  patient: Patient | null;
 
   @ManyToOne(() => Appointment, { nullable: true })
   @JoinColumn({ name: 'appointment_id' })

@@ -20,10 +20,24 @@ export class CreateBillDto {
   @MaxLength(100)
   billNumber?: string;
 
-  @IsNotEmpty()
+  // Optional — omit for a walk-in bill (see walkInName/walkInPhone). A
+  // request must not send both patientId and walk-in fields; the service
+  // rejects that combination rather than silently persisting contradictory
+  // data. See scope/Walkin_Billing_Scope_2026-09-06.md.
+  @IsOptional()
   @IsString()
   @MaxLength(36)
-  patientId: string;
+  patientId?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  walkInName?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(20)
+  walkInPhone?: string;
 
   @IsOptional()
   @IsString()

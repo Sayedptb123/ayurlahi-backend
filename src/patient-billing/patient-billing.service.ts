@@ -178,14 +178,25 @@ export class PatientBillingService {
       }
     }
 
-    const patient = await this.patientsRepository.findOne({
-      where: { id: createDto.patientId },
-    });
-    if (!patient) {
-      throw new NotFoundException('Patient not found');
+    // Walk-in bill (no patient) vs patient bill are mutually exclusive —
+    // reject a request that tries to send both rather than silently
+    // persisting contradictory data. See scope/Walkin_Billing_Scope_2026-09-06.md.
+    if (createDto.patientId && (createDto.walkInName || createDto.walkInPhone)) {
+      throw new BadRequestException(
+        'A bill cannot have both a patientId and walk-in details',
+      );
     }
-    if (patient.organisationId !== clinicId) {
-      throw new ForbiddenException('Patient does not belong to this clinic');
+
+    if (createDto.patientId) {
+      const patient = await this.patientsRepository.findOne({
+        where: { id: createDto.patientId },
+      });
+      if (!patient) {
+        throw new NotFoundException('Patient not found');
+      }
+      if (patient.organisationId !== clinicId) {
+        throw new ForbiddenException('Patient does not belong to this clinic');
+      }
     }
 
     if (createDto.appointmentId) {
@@ -274,7 +285,9 @@ export class PatientBillingService {
 
     const bill = this.billsRepository.create({
       organisationId: clinicId,
-      patientId: createDto.patientId,
+      patientId: createDto.patientId || null,
+      walkInName: createDto.walkInName || null,
+      walkInPhone: createDto.walkInPhone || null,
       appointmentId: createDto.appointmentId || null,
       bookingId: createDto.bookingId || null,
       admissionId: createDto.admissionId || null,
