@@ -32,6 +32,16 @@ export class InvoicesController {
     );
   }
 
+  // Must come before @Get(':id') — otherwise Nest/Express would match
+  // "summary" as the :id param.
+  @Get('summary')
+  async getSummary(@Request() req) {
+    return this.invoicesService.getSummary(
+      req.user.organisationId,
+      req.user.organisationType,
+    );
+  }
+
   @Get(':id')
   async findOne(@Param('id', ParseUUIDPipe) id: string, @Request() req) {
     return this.invoicesService.findOne(

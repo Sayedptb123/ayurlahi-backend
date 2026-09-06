@@ -86,6 +86,57 @@ export class InvoicesService {
     };
   }
 
+  // Aggregated in SQL, not by summing a paginated fetch client-side — the
+  // list is capped per page, so client-side summation would silently be
+  // wrong past the first page. Mirrors applyStatusFilter's isPaid/dueDate
+  // logic exactly, so these totals never disagree with what the status
+  // tabs actually show.
+  async getSummary(organisationId?: string, organisationType?: string) {
+    const zero = {
+      totalOutstanding: 0,
+      totalPaid: 0,
+      overdueAmount: 0,
+      pendingCount: 0,
+      paidCount: 0,
+      overdueCount: 0,
+    };
+
+    const queryBuilder = this.invoicesRepository
+      .createQueryBuilder('invoice')
+      .leftJoin('invoice.order', 'order')
+      .where('invoice.deletedAt IS NULL');
+
+    if (organisationType === 'CLINIC') {
+      if (!organisationId) return zero;
+      queryBuilder.andWhere('order.organisation_id = :orgId', { orgId: organisationId });
+    } else if (organisationType === 'MANUFACTURER') {
+      if (!organisationId) return zero;
+      queryBuilder.andWhere(
+        `EXISTS (SELECT 1 FROM order_items oi WHERE oi.order_id = invoice."orderId" AND oi.manufacturer_id = :mfgId)`,
+        { mfgId: organisationId },
+      );
+    }
+    // AYURLAHI_TEAM: no additional filter — summary across every invoice.
+
+    const raw = await queryBuilder
+      .select(`COALESCE(SUM(CASE WHEN invoice."isPaid" = true THEN invoice."totalAmount" ELSE 0 END), 0)`, 'totalPaid')
+      .addSelect(`COALESCE(SUM(CASE WHEN invoice."isPaid" = false THEN invoice."totalAmount" ELSE 0 END), 0)`, 'totalOutstanding')
+      .addSelect(`COALESCE(SUM(CASE WHEN invoice."isPaid" = false AND invoice."dueDate" < NOW() THEN invoice."totalAmount" ELSE 0 END), 0)`, 'overdueAmount')
+      .addSelect(`COUNT(*) FILTER (WHERE invoice."isPaid" = true)`, 'paidCount')
+      .addSelect(`COUNT(*) FILTER (WHERE invoice."isPaid" = false AND (invoice."dueDate" IS NULL OR invoice."dueDate" >= NOW()))`, 'pendingCount')
+      .addSelect(`COUNT(*) FILTER (WHERE invoice."isPaid" = false AND invoice."dueDate" < NOW())`, 'overdueCount')
+      .getRawOne();
+
+    return {
+      totalOutstanding: parseFloat(raw.totalOutstanding) || 0,
+      totalPaid: parseFloat(raw.totalPaid) || 0,
+      overdueAmount: parseFloat(raw.overdueAmount) || 0,
+      pendingCount: parseInt(raw.pendingCount, 10) || 0,
+      paidCount: parseInt(raw.paidCount, 10) || 0,
+      overdueCount: parseInt(raw.overdueCount, 10) || 0,
+    };
+  }
+
   private applyStatusFilter(
     queryBuilder: SelectQueryBuilder<Invoice>,
     status: InvoiceStatus,
