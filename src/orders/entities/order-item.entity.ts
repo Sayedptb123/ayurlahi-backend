@@ -125,7 +125,24 @@ export class OrderItem {
   @Column({ type: 'timestamptz', name: 'picked_up_at', nullable: true })
   pickedUpAt: Date | null;
 
-  @ManyToOne(() => Order, (order) => order.items, { onDelete: 'CASCADE' })
+  // orphanedRowAction: 'disable' -- this is the side TypeORM actually checks
+  // (relation.inverseRelation.orphanedRowAction in
+  // OneToManySubjectBuilder.buildForSubjectRelation, not the option on
+  // Order.items itself) when an item is removed from order.items before
+  // ordersRepository.save(order). Without this, the default ('nullify')
+  // tries to null out order_id on the removed row -- which fails outright
+  // since order_id is NOT NULL, and would crash ANY future save() of an
+  // order that has ever had an item amendment-removed (§6/Step 5 of
+  // scope/Order_Fulfillment_Lifecycle_Scope_2026-09-07.md), not just the
+  // removal call itself. No code path before amendments ever shrank
+  // order.items before saving, so this was never exercised until
+  // removeOrderItem() hit it directly (QueryFailedError: null value in
+  // column "order_id" ... violates not-null constraint) -- found and fixed
+  // during Step 5 live testing, confirmed by reading TypeORM's own source.
+  // 'disable' leaves a removed item's row untouched, which is correct here:
+  // removeOrderItem() already persists its soft-delete explicitly via a
+  // separate orderItemsRepository.save() before removing it from the array.
+  @ManyToOne(() => Order, (order) => order.items, { onDelete: 'CASCADE', orphanedRowAction: 'disable' })
   @JoinColumn({ name: 'order_id' })
   order: Order;
 

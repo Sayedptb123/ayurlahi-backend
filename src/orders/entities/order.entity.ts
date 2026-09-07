@@ -121,7 +121,14 @@ export class Order {
   @DeleteDateColumn({ type: 'timestamp', nullable: true, name: 'deleted_at' })
   deletedAt: Date | null;
 
-  @OneToMany(() => OrderItem, (item) => item.order, { cascade: true })
+  // The actual orphanedRowAction: 'disable' that matters lives on the
+  // inverse @ManyToOne in order-item.entity.ts -- TypeORM's
+  // OneToManySubjectBuilder reads relation.inverseRelation.orphanedRowAction
+  // when deciding what to do with a child removed from this collection, not
+  // this side's own option (confirmed by reading TypeORM's source after this
+  // setting alone here had zero effect). Kept here too as a harmless,
+  // documenting no-op. See the full explanation on that decorator.
+  @OneToMany(() => OrderItem, (item) => item.order, { cascade: true, orphanedRowAction: 'disable' })
   items: OrderItem[];
 
   @CreateDateColumn({ name: 'created_at' })

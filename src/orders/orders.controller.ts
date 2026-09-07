@@ -17,6 +17,8 @@ import { CreateOrderDto } from './dto/create-order.dto';
 import { GetOrdersDto } from './dto/get-orders.dto';
 import { UpdateOrderStatusDto } from './dto/update-order-status.dto';
 import { AssignOrderItemDto } from './dto/assign-order-item.dto';
+import { AddOrderItemDto } from './dto/add-order-item.dto';
+import { UpdateOrderItemQuantityDto } from './dto/update-order-item-quantity.dto';
 import { CreateExternalOrderDto } from './dto/create-external-order.dto';
 import { GrantExternalOrderAccessDto } from './dto/grant-external-order-access.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -147,6 +149,58 @@ export class OrdersController {
       req.user.role,
       req.user.organisationType,
       req.user.organisationId,
+    );
+  }
+
+  // --- Amendments (before PACKED only — see OrdersService.assertCanAmend) ---
+
+  @Post(':id/items')
+  async addOrderItem(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Request() req,
+    @Body() dto: AddOrderItemDto,
+  ) {
+    return this.ordersService.addOrderItem(
+      id,
+      req.user.userId,
+      req.user.role,
+      req.user.organisationType,
+      req.user.organisationId,
+      dto,
+    );
+  }
+
+  @Delete(':orderId/items/:itemId')
+  async removeOrderItem(
+    @Param('orderId', ParseUUIDPipe) orderId: string,
+    @Param('itemId', ParseUUIDPipe) itemId: string,
+    @Request() req,
+  ) {
+    return this.ordersService.removeOrderItem(
+      orderId,
+      itemId,
+      req.user.userId,
+      req.user.role,
+      req.user.organisationType,
+      req.user.organisationId,
+    );
+  }
+
+  @Patch(':orderId/items/:itemId/quantity')
+  async updateOrderItemQuantity(
+    @Param('orderId', ParseUUIDPipe) orderId: string,
+    @Param('itemId', ParseUUIDPipe) itemId: string,
+    @Request() req,
+    @Body() dto: UpdateOrderItemQuantityDto,
+  ) {
+    return this.ordersService.updateOrderItemQuantity(
+      orderId,
+      itemId,
+      req.user.userId,
+      req.user.role,
+      req.user.organisationType,
+      req.user.organisationId,
+      dto,
     );
   }
 }

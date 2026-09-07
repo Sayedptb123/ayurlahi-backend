@@ -16,6 +16,8 @@ import { CreateOrderDto } from './dto/create-order.dto';
 import { GetOrdersDto } from './dto/get-orders.dto';
 import { UpdateOrderStatusDto } from './dto/update-order-status.dto';
 import { AssignOrderItemDto } from './dto/assign-order-item.dto';
+import { AddOrderItemDto } from './dto/add-order-item.dto';
+import { UpdateOrderItemQuantityDto } from './dto/update-order-item-quantity.dto';
 import { CreateExternalOrderDto } from './dto/create-external-order.dto';
 import { GrantExternalOrderAccessDto } from './dto/grant-external-order-access.dto';
 import { InventoryService } from '../inventory/inventory.service';
@@ -102,6 +104,13 @@ export class OrdersService {
     queryBuilder.orderBy('order.createdAt', 'DESC');
 
     const data = await queryBuilder.getMany();
+    // OrderItem.deletedAt is a plain column, not a TypeORM @DeleteDateColumn
+    // (unlike Order's own deletedAt) -- so it's never auto-excluded by the
+    // ORM. An item removed via an amendment (§6/Step 5) must not resurface
+    // here. Filtered in JS rather than in the query builder to avoid
+    // disturbing the existing per-org item-scoping already happening above
+    // (MANUFACTURER callers get the WHERE-filtered join at line 85).
+    data.forEach((o) => { o.items = (o.items || []).filter((i) => !i.deletedAt); });
 
     return {
       data,
@@ -123,6 +132,11 @@ export class OrdersService {
     if (!order) {
       throw new NotFoundException(`Order with ID ${id} not found`);
     }
+
+    // Same reasoning as findAll(): OrderItem.deletedAt is not a TypeORM
+    // @DeleteDateColumn, so a removed item (§6/Step 5) needs an explicit
+    // filter here too.
+    order.items = (order.items || []).filter((i) => !i.deletedAt);
 
     // Role-based access control using organisationType from JWT
     if (organisationType === 'CLINIC') {
@@ -980,6 +994,288 @@ export class OrdersService {
     }
 
     return this.orderItemsRepository.findOne({ where: { id: itemId } });
+  }
+
+  /**
+   * Shared guard for all three amendment methods below (add/remove/change-
+   * quantity). Amendments are manufacturer/admin-support only -- never the
+   * clinic, even for their own order (the confirmed real-world scenario is
+   * the clinic phoning the manufacturer, who enters the change; matches
+   * updateStatus()'s isManufacturer||isAdmin gate, not its separate,
+   * narrower clinic-cancel-only path) -- and only before PACKED, the same
+   * checkpoint billing uses. Once PACKED, an amendment would silently
+   * corrupt or bypass the already-created invoice (see
+   * scope/Order_Fulfillment_Lifecycle_Scope_2026-09-07.md §6's correction).
+   */
+  private assertCanAmend(order: Order, userRole: string, organisationType: string | undefined): void {
+    const normalizedRole = RoleUtils.normalizeRole(userRole, organisationType);
+    const isManufacturer = normalizedRole === 'manufacturer';
+    const isAdmin = ['admin', 'support'].includes(normalizedRole);
+    if (!(isManufacturer || isAdmin)) {
+      throw new ForbiddenException('Only the manufacturer or Ayurlahi Team admin/support can amend an order');
+    }
+    if (![OrderStatus.PENDING, OrderStatus.CONFIRMED, OrderStatus.PROCESSING].includes(order.status)) {
+      throw new BadRequestException(
+        `Order cannot be amended once status is "${order.status}" — amendments are only allowed before packing.`,
+      );
+    }
+  }
+
+  // Append-only audit trail for amendments, piggybacking on the existing
+  // orders.metadata jsonb column rather than a new table/column -- the
+  // scope doc's §6 left this as an implementation-time choice; a dedicated
+  // table would just be tracking the same handful of fields a jsonb array
+  // already represents fine for this volume.
+  private appendAmendmentAudit(order: Order, userId: string, entry: Record<string, any>): void {
+    const metadata = (order.metadata as Record<string, any>) || {};
+    const amendments = Array.isArray(metadata.amendments) ? metadata.amendments : [];
+    amendments.push({ at: new Date().toISOString(), byUserId: userId, ...entry });
+    order.metadata = { ...metadata, amendments };
+  }
+
+  // Order-level subtotal/gstAmount/totalAmount are an aggregate snapshot
+  // (same fields create() sets once) -- any amendment that changes which
+  // items exist or their quantity must recompute them, or the order total
+  // silently drifts from the sum of its own items.
+  private recomputeOrderAggregates(order: Order): void {
+    const activeItems = (order.items || []).filter((i) => !i.deletedAt);
+    order.subtotal = activeItems.reduce((sum, i) => sum + Number(i.subtotal), 0);
+    order.gstAmount = activeItems.reduce((sum, i) => sum + Number(i.gstAmount), 0);
+    order.totalAmount = order.subtotal + order.gstAmount + Number(order.shippingCharges || 0) + Number(order.platformFee || 0);
+  }
+
+  /**
+   * Amendment: add a new line to an order still being packed. Runs the same
+   * cap-to-available reservation logic as order creation
+   * (lockAndSnapshotOrderItems), just for one item -- duplicated rather than
+   * shared with that method to keep this already-large step's diff
+   * isolated and avoid touching already-verified Step 1-4 code.
+   */
+  async addOrderItem(
+    orderId: string,
+    userId: string,
+    userRole: string,
+    organisationType: string | undefined,
+    organisationId: string | undefined,
+    dto: AddOrderItemDto,
+  ): Promise<Order> {
+    const order = await this.findOne(orderId, userId, userRole, organisationType, organisationId);
+    this.assertCanAmend(order, userRole, organisationType);
+
+    let newItem: OrderItem | null = null;
+    await this.productsRepository.manager.transaction(async (manager) => {
+      const productRepo = manager.getRepository(Product);
+      const product = await productRepo.findOne({
+        where: { id: dto.productId, deletedAt: IsNull() },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!product) {
+        throw new NotFoundException(`Product with ID ${dto.productId} not found`);
+      }
+      if (product.status !== 'active') {
+        throw new BadRequestException(`Product ${product.name} is not active`);
+      }
+      if (dto.quantity < product.minOrderQuantity) {
+        throw new BadRequestException(`Minimum order quantity for ${product.name} is ${product.minOrderQuantity}`);
+      }
+
+      // Reserve independently of every other item already on this order —
+      // capped to what's currently available, never rejected outright, same
+      // as order creation.
+      const reservedQuantity = Math.min(dto.quantity, product.stockQuantity);
+      if (reservedQuantity > 0) {
+        await productRepo.decrement({ id: product.id }, 'stockQuantity', reservedQuantity);
+      }
+
+      const unitPrice = Number(product.price);
+      const itemSubtotal = unitPrice * dto.quantity;
+      const itemGstAmount = (itemSubtotal * Number(product.gstRate)) / 100;
+      const itemTotal = itemSubtotal + itemGstAmount;
+      const commissionAmount = (itemTotal * 0.05) / 100;
+
+      newItem = {
+        orderId: order.id,
+        productId: product.id,
+        manufacturerId: product.manufacturerId,
+        productSku: product.sku,
+        productName: product.name,
+        quantity: dto.quantity,
+        reservedQuantity,
+        unitPrice,
+        mrp: product.mrp != null ? Number(product.mrp) : null,
+        hsnCode: product.hsnCode || null,
+        gstRate: Number(product.gstRate),
+        subtotal: itemSubtotal,
+        gstAmount: itemGstAmount,
+        totalAmount: itemTotal,
+        commissionAmount,
+        packedQuantity: 0,
+        discountAmount: 0,
+        notes: dto.notes || null,
+      } as OrderItem;
+    });
+
+    // newItem is always set before the transaction completes without
+    // throwing -- if it threw, this line is never reached.
+    order.items = [...(order.items || []), newItem!];
+    this.recomputeOrderAggregates(order);
+    this.appendAmendmentAudit(order, userId, {
+      type: 'add_item',
+      productId: dto.productId,
+      productName: newItem!.productName,
+      quantity: dto.quantity,
+      reservedQuantity: newItem!.reservedQuantity,
+    });
+
+    await this.ordersRepository.save(order);
+    return this.findOne(orderId, userId, userRole, organisationType, organisationId);
+  }
+
+  /**
+   * Amendment: remove a line from an order still being packed. Releases
+   * whatever was reserved for it back to products.stockQuantity — a plain
+   * .increment() with no explicit lock, same as the existing cancellation-
+   * restore path, since an increment is a single atomic UPDATE and doesn't
+   * need read-then-decide-then-write the way capping a new reservation does.
+   */
+  async removeOrderItem(
+    orderId: string,
+    itemId: string,
+    userId: string,
+    userRole: string,
+    organisationType: string | undefined,
+    organisationId: string | undefined,
+  ): Promise<Order> {
+    const order = await this.findOne(orderId, userId, userRole, organisationType, organisationId);
+    this.assertCanAmend(order, userRole, organisationType);
+
+    const item = order.items?.find((i) => i.id === itemId);
+    if (!item) {
+      throw new NotFoundException(`Order item ${itemId} not found on order ${orderId}`);
+    }
+    if ((order.items || []).length <= 1) {
+      throw new BadRequestException('Cannot remove the only item on an order — cancel the order instead.');
+    }
+
+    if (item.reservedQuantity > 0) {
+      await this.productsRepository.increment({ id: item.productId }, 'stockQuantity', item.reservedQuantity);
+    }
+
+    // Soft delete (OrderItem.deletedAt is a plain column, not a TypeORM
+    // @DeleteDateColumn — see findOne()/findAll()). Must be saved explicitly
+    // here: once removed from order.items below, the cascade save on
+    // ordersRepository.save(order) will no longer touch this row at all
+    // (TypeORM's default cascade does not delete/update orphaned children).
+    item.deletedAt = new Date();
+    await this.orderItemsRepository.save(item);
+
+    order.items = (order.items || []).filter((i) => i.id !== itemId);
+    this.recomputeOrderAggregates(order);
+    this.appendAmendmentAudit(order, userId, {
+      type: 'remove_item',
+      orderItemId: itemId,
+      productId: item.productId,
+      productName: item.productName,
+      releasedQuantity: item.reservedQuantity,
+    });
+
+    await this.ordersRepository.save(order);
+    return this.findOne(orderId, userId, userRole, organisationType, organisationId);
+  }
+
+  /**
+   * Amendment: change the requested quantity of an existing line, before
+   * PACKED. Reservation is recomputed against current stock, capped to
+   * whatever's available, never rejected outright — see the reservation
+   * table worked out in scope/Order_Fulfillment_Lifecycle_Scope_2026-09-07.md
+   * §19 before this was implemented: availableForThisItem = current free
+   * stock + whatever this item already holds (since that's being
+   * re-evaluated, not necessarily kept). unitPrice/gstRate are NOT
+   * re-snapshotted from the product's current catalog price — an amendment
+   * to quantity is not a re-price, only the money derived from quantity
+   * changes.
+   */
+  async updateOrderItemQuantity(
+    orderId: string,
+    itemId: string,
+    userId: string,
+    userRole: string,
+    organisationType: string | undefined,
+    organisationId: string | undefined,
+    dto: UpdateOrderItemQuantityDto,
+  ): Promise<Order> {
+    const order = await this.findOne(orderId, userId, userRole, organisationType, organisationId);
+    this.assertCanAmend(order, userRole, organisationType);
+
+    const item = order.items?.find((i) => i.id === itemId);
+    if (!item) {
+      throw new NotFoundException(`Order item ${itemId} not found on order ${orderId}`);
+    }
+
+    const oldQuantity = item.quantity;
+    const oldReserved = item.reservedQuantity;
+    let newReserved = 0;
+
+    await this.productsRepository.manager.transaction(async (manager) => {
+      const productRepo = manager.getRepository(Product);
+      const product = await productRepo.findOne({
+        where: { id: item.productId, deletedAt: IsNull() },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!product) {
+        throw new NotFoundException(`Product with ID ${item.productId} not found`);
+      }
+      if (dto.quantity < product.minOrderQuantity) {
+        throw new BadRequestException(`Minimum order quantity for ${product.name} is ${product.minOrderQuantity}`);
+      }
+
+      // Pool available to (re)allocate to THIS item: currently-free stock,
+      // plus whatever this item already holds (its current reservation is
+      // being re-evaluated against the new requested quantity, not kept
+      // as-is by default).
+      const availableForThisItem = product.stockQuantity + oldReserved;
+      newReserved = Math.min(dto.quantity, availableForThisItem);
+      const delta = oldReserved - newReserved;
+      if (delta > 0) {
+        // Requested quantity went down (or availability shrank) — release
+        // the difference back to the pool.
+        await productRepo.increment({ id: product.id }, 'stockQuantity', delta);
+      } else if (delta < 0) {
+        // Requested quantity went up and more became available since this
+        // item was last reserved — take the difference. Safe by
+        // construction: newReserved <= availableForThisItem =
+        // product.stockQuantity + oldReserved, so -delta = newReserved -
+        // oldReserved <= product.stockQuantity — can never go negative.
+        await productRepo.decrement({ id: product.id }, 'stockQuantity', -delta);
+      }
+    });
+
+    const itemSubtotal = Number(item.unitPrice) * dto.quantity;
+    const itemGstAmount = (itemSubtotal * Number(item.gstRate)) / 100;
+    const itemTotal = itemSubtotal + itemGstAmount;
+    const commissionAmount = (itemTotal * 0.05) / 100;
+
+    item.quantity = dto.quantity;
+    item.reservedQuantity = newReserved;
+    item.subtotal = itemSubtotal;
+    item.gstAmount = itemGstAmount;
+    item.totalAmount = itemTotal;
+    item.commissionAmount = commissionAmount;
+
+    this.recomputeOrderAggregates(order);
+    this.appendAmendmentAudit(order, userId, {
+      type: 'update_quantity',
+      orderItemId: itemId,
+      productId: item.productId,
+      productName: item.productName,
+      beforeQuantity: oldQuantity,
+      afterQuantity: dto.quantity,
+      beforeReserved: oldReserved,
+      afterReserved: newReserved,
+    });
+
+    await this.ordersRepository.save(order);
+    return this.findOne(orderId, userId, userRole, organisationType, organisationId);
   }
 
   /**
