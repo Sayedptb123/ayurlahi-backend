@@ -73,6 +73,24 @@ export class OrdersService {
     private notificationsService: NotificationsService,
   ) { }
 
+  // Order.organisationId is a plain FK (no ORM relation defined on the
+  // entity), and the clinic's name is never otherwise present anywhere in
+  // an order response -- a manufacturer looking at an order (list or
+  // detail) had no way to see which clinic it was even for. Batched here
+  // rather than a relation/join so both findAll (many orders, possibly many
+  // different clinics) and findOne (one) share the same lookup, matching
+  // the existing string-based getRepository('organisations') pattern
+  // already used in create()/createInvoiceForPackedOrder() in this file.
+  private async attachClinicNames<T extends { organisationId: string }>(orders: T[]): Promise<(T & { clinicName: string | null })[]> {
+    const ids = [...new Set(orders.map((o) => o.organisationId))];
+    if (ids.length === 0) return orders as (T & { clinicName: string | null })[];
+    const orgs = (await this.ordersRepository.manager
+      .getRepository('organisations')
+      .find({ where: { id: In(ids) }, select: ['id', 'name'] })) as { id: string; name: string }[];
+    const nameById = new Map(orgs.map((o) => [o.id, o.name]));
+    return orders.map((o) => Object.assign(o, { clinicName: nameById.get(o.organisationId) ?? null }));
+  }
+
   async findAll(userId: string, userRole: string, organisationType: string | undefined, query: GetOrdersDto, organisationId?: string) {
     const { page = 1, limit = 20, status, source } = query;
     const skip = (page - 1) * limit;
@@ -118,6 +136,9 @@ export class OrdersService {
     // disturbing the existing per-org item-scoping already happening above
     // (MANUFACTURER callers get the WHERE-filtered join at line 85).
     data.forEach((o) => { o.items = (o.items || []).filter((i) => !i.deletedAt); });
+    // Mutates each order in place (Object.assign) -- `data` already carries
+    // clinicName once this resolves.
+    await this.attachClinicNames(data);
 
     return {
       data,
@@ -144,6 +165,9 @@ export class OrdersService {
     // @DeleteDateColumn, so a removed item (§6/Step 5) needs an explicit
     // filter here too.
     order.items = (order.items || []).filter((i) => !i.deletedAt);
+    // Mutates order in place (Object.assign) -- the plain `return order`
+    // below already carries clinicName once this resolves.
+    await this.attachClinicNames([order]);
 
     // Role-based access control using organisationType from JWT
     if (organisationType === 'CLINIC') {
