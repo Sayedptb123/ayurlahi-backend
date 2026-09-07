@@ -89,6 +89,11 @@ export class Order {
   @Column({ type: 'timestamp', nullable: true, name: 'confirmed_at' })
   confirmedAt: Date | null;
 
+  // Set on first entry to PACKED -- guards invoice creation the same way
+  // !deliveredAt used to (one invoice per order, never re-created).
+  @Column({ type: 'timestamp', nullable: true, name: 'packed_at' })
+  packedAt: Date | null;
+
   @Column({ type: 'timestamp', nullable: true, name: 'shipped_at' })
   shippedAt: Date | null;
 

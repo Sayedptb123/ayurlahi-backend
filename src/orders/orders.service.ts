@@ -708,6 +708,59 @@ export class OrdersService {
     // Update timestamps based on status
     if (updateDto.status === OrderStatus.CONFIRMED && !order.confirmedAt) {
       order.confirmedAt = new Date();
+    } else if (
+      updateDto.status === OrderStatus.PACKED &&
+      !order.packedAt
+    ) {
+      order.packedAt = new Date();
+
+      // Record what was actually packed per item (defaults to
+      // reservedQuantity -- the common case, everything reserved got
+      // packed) and any per-item discount. This is not the packing UI and
+      // not an amendment -- it only records the outcome of packing for
+      // items that already exist on the order. See
+      // scope/Order_Fulfillment_Lifecycle_Scope_2026-09-07.md §7.
+      if (order.items && order.items.length > 0) {
+        const providedIds = new Set((updateDto.items || []).map((i) => i.orderItemId));
+        const realIds = new Set(order.items.map((i) => i.id));
+        for (const providedId of providedIds) {
+          if (!realIds.has(providedId)) {
+            throw new BadRequestException(`Order item ${providedId} does not belong to this order`);
+          }
+        }
+        const packedInputById = new Map((updateDto.items || []).map((i) => [i.orderItemId, i]));
+
+        for (const item of order.items) {
+          const input = packedInputById.get(item.id);
+
+          // packedQuantity can never exceed reservedQuantity -- packing
+          // can't physically produce more than was reserved. Omitting it
+          // defaults to "everything reserved got packed"; an explicit lower
+          // value is the only way it lands below reservedQuantity (e.g. a
+          // reserved unit failed a quality check during packing).
+          const requestedPacked = input?.packedQuantity ?? item.reservedQuantity;
+          const packedQuantity = Math.min(requestedPacked, item.reservedQuantity);
+
+          // Reserved-but-never-packed: release back to stock now, same
+          // mechanism already used for cancellation restoration (§5/§6 of
+          // the scope doc) -- this is the reconciliation that section
+          // explicitly deferred until PACKED existed.
+          const toRelease = item.reservedQuantity - packedQuantity;
+          if (toRelease > 0) {
+            await this.productsRepository.increment({ id: item.productId }, 'stockQuantity', toRelease);
+          }
+
+          item.packedQuantity = packedQuantity;
+          item.discountAmount = input?.discountAmount ?? Number(item.discountAmount) ?? 0;
+        }
+
+        order.discountAmount = order.items.reduce((sum, i) => sum + (Number(i.discountAmount) || 0), 0);
+      }
+
+      // Billing now happens here, not on DELIVERED -- packing is the
+      // checkpoint quantities and money are frozen at (§7). Renamed from
+      // createInvoiceForDeliveredOrder to reflect the new trigger.
+      await this.createInvoiceForPackedOrder(order);
     } else if (updateDto.status === OrderStatus.SHIPPED && !order.shippedAt) {
       order.shippedAt = new Date();
     } else if (
@@ -715,23 +768,29 @@ export class OrdersService {
       !order.deliveredAt
     ) {
       order.deliveredAt = new Date();
-      // Sync Inventory
+      // Sync Inventory -- credits the clinic's own stock with what was
+      // actually packed/shipped, not the originally requested quantity.
+      // Judgment call made in the same step as the billing relocation this
+      // sits right next to, since it's the exact same quantity-source bug
+      // (§4 of the scope doc groups this with billing under "the
+      // actual-supplied field" fix) -- flagged explicitly in this step's
+      // report rather than silently bundled in.
       if (order.items && order.items.length > 0) {
-        await this.inventoryService.addStock(
-          order.organisationId,
-          order.items.map((item) => ({
-            productId: item.productId,
-            sku: item.productSku,
-            name: item.productName,
-            quantity: item.quantity,
-            unitPrice: Number(item.unitPrice),
-            orderId: order.id,
-          })),
-        );
+        const deliveredItems = order.items.filter((item) => item.packedQuantity > 0);
+        if (deliveredItems.length > 0) {
+          await this.inventoryService.addStock(
+            order.organisationId,
+            deliveredItems.map((item) => ({
+              productId: item.productId,
+              sku: item.productSku,
+              name: item.productName,
+              quantity: item.packedQuantity,
+              unitPrice: Number(item.unitPrice),
+              orderId: order.id,
+            })),
+          );
+        }
       }
-      // Auto-create invoice record (PDF generation in S3 is deferred to V7;
-      // for now we capture the invoice data so accountants can retrieve it).
-      await this.createInvoiceForDeliveredOrder(order);
     } else if (
       updateDto.status === OrderStatus.CANCELLED &&
       !order.cancelledAt
@@ -924,34 +983,61 @@ export class OrdersService {
   }
 
   /**
-   * Create an invoice row when an order is marked delivered.
+   * Create an invoice row when an order is marked PACKED (moved from
+   * DELIVERED -- see scope/Order_Fulfillment_Lifecycle_Scope_2026-09-07.md
+   * §7). Bills the actual packed quantity, never the originally requested
+   * quantity; an item with packedQuantity === 0 (fully short) does not
+   * appear as a billed line at all -- it's not on the invoice, not a $0 row.
    * PDF rendering + S3 upload is deferred (V7) — when wired, the s3Key/s3Url
    * fields can be populated by a separate worker that picks up invoices
    * with empty s3Key.
    */
-  private async createInvoiceForDeliveredOrder(order: Order): Promise<void> {
+  private async createInvoiceForPackedOrder(order: Order): Promise<void> {
     // Don't duplicate if already exists
     const existing = await this.invoicesRepository.findOne({ where: { orderId: order.id } });
     if (existing) return;
 
-    const items = (order.items || []).map((i) => ({
-      productId: i.productId,
-      productSku: i.productSku,
-      productName: i.productName,
-      quantity: i.quantity,
-      unitPrice: Number(i.unitPrice),
-      mrp: i.mrp != null ? Number(i.mrp) : null,
-      hsnCode: i.hsnCode || null,
-      totalPrice: Number(i.unitPrice) * i.quantity,
-    }));
+    const packedItems = (order.items || []).filter((i) => i.packedQuantity > 0);
+    // Nothing was actually packed (e.g. zero stock was ever reserved for
+    // every item) -- there is nothing to bill. A zero-item, zero-total
+    // invoice would be a real row with no real meaning.
+    if (packedItems.length === 0) return;
+
+    // Per-item subtotal/GST are recomputed from packedQuantity here, not
+    // read from the item's stored subtotal/gstAmount snapshot -- those were
+    // computed at order-creation time from the originally requested
+    // `quantity` (§4) and are stale the moment packedQuantity differs from
+    // it. gstRate itself is an unaffected snapshot field, safe to reuse.
+    const items = packedItems.map((i) => {
+      const lineSubtotal = Number(i.unitPrice) * i.packedQuantity;
+      const lineGstAmount = (lineSubtotal * Number(i.gstRate)) / 100;
+      return {
+        productId: i.productId,
+        productSku: i.productSku,
+        productName: i.productName,
+        quantity: i.packedQuantity,
+        unitPrice: Number(i.unitPrice),
+        mrp: i.mrp != null ? Number(i.mrp) : null,
+        hsnCode: i.hsnCode || null,
+        discountAmount: Number(i.discountAmount) || 0,
+        // Pre-tax, pre-discount line amount -- same convention as before
+        // this change, GST and discount both stay separate aggregate lines
+        // on the invoice rather than being folded into each row.
+        totalPrice: lineSubtotal,
+        gstAmount: lineGstAmount,
+      };
+    });
     const subtotal = items.reduce((sum, i) => sum + i.totalPrice, 0);
-    // Sum each item's real snapshotted GST amount rather than assuming a flat
-    // rate — some PMS products (P Kof, Iro Forte, Immuno Forte) are 18%, not 5%.
-    const gstAmount = (order.items || []).reduce((sum, i) => sum + Number(i.gstAmount), 0);
-    const totalAmount = subtotal + gstAmount;
+    const gstAmount = items.reduce((sum, i) => sum + i.gstAmount, 0);
+    // Per-item discount (§7.3), summed into the single total-discount line
+    // the locked business rule calls for -- not shown as a per-line
+    // deduction, since the rule is "per-item discount, with a
+    // total-discount line in the bill breakdown", not a per-line total.
+    const discountAmount = items.reduce((sum, i) => sum + i.discountAmount, 0);
+    const totalAmount = subtotal + gstAmount - discountAmount;
 
     const invoiceNumber = `INV-${new Date().getFullYear()}-${order.orderNumber}`;
-    const manufacturerId = order.items?.[0]?.manufacturerId;
+    const manufacturerId = packedItems[0]?.manufacturerId;
 
     const [clinicOrgDetails, manufacturerDetails] = await Promise.all([
       this.getClinicOrgDetails(order.organisationId),
@@ -997,6 +1083,7 @@ export class OrdersService {
       items,
       subtotal,
       gstAmount,
+      discountAmount,
       shippingCharges: 0,
       platformFee: 0,
       totalAmount,
@@ -1029,7 +1116,7 @@ export class OrdersService {
 
   // Fallback only, for the rare order with no shippingAddress captured at all
   // — see the comment above this method's call site in
-  // createInvoiceForDeliveredOrder(). Do not use this as the primary address
+  // createInvoiceForPackedOrder(). Do not use this as the primary address
   // source; a clinic's primary branch is not necessarily the branch a given
   // order was actually for.
   private async getClinicPrimaryBranchAddress(organisationId: string): Promise<Record<string, any>> {
