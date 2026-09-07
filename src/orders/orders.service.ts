@@ -660,6 +660,18 @@ export class OrdersService {
     // Update status
     order.status = updateDto.status;
 
+    // Persist an optional transition note (e.g. "2 units unavailable, will
+    // follow up separately") for every status except CANCELLED, which
+    // already has its own dedicated cancellationReason below. Append rather
+    // than overwrite — order.notes already carries the clinic's own note
+    // from order creation, so blindly assigning here would silently destroy
+    // that the first time a manufacturer adds one. This is a communication
+    // patch only — it does not represent structured packing/shortage data.
+    if (updateDto.status !== OrderStatus.CANCELLED && updateDto.notes?.trim()) {
+      const transitionNote = `${updateDto.status} update: ${updateDto.notes.trim()}`;
+      order.notes = order.notes ? `${order.notes}\n\n---\n${transitionNote}` : transitionNote;
+    }
+
     // Update timestamps based on status
     if (updateDto.status === OrderStatus.CONFIRMED && !order.confirmedAt) {
       order.confirmedAt = new Date();
