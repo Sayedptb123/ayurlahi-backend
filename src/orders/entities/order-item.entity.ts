@@ -41,6 +41,18 @@ export class OrderItem {
   @Column({ type: 'int' })
   quantity: number;
 
+  // What was actually committed against products.stockQuantity at
+  // reservation time -- capped to whatever was available, so this can be
+  // less than `quantity` (down to 0) once partial fulfillment is possible.
+  // Distinct from packedQuantity below: reservation is an inventory
+  // commitment made at accept-time; packing is a later, separate,
+  // authoritative fact that can itself land lower than what was reserved
+  // (e.g. a reserved unit fails a quality check during packing). Existing
+  // rows (created before this column existed, when reservation was always
+  // all-or-nothing) are backfilled to `quantity` -- see the migration.
+  @Column({ type: 'int', name: 'reserved_quantity' })
+  reservedQuantity: number;
+
   @Column({ type: 'decimal', precision: 10, scale: 2 })
   unitPrice: number;
 

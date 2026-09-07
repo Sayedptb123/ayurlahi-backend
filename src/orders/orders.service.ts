@@ -247,9 +247,18 @@ export class OrdersService {
 
   /**
    * Shared by create() and createExternalOrder(): validates, pessimistic-locks,
-   * and decrements stock for a set of items inside a transaction, then builds
+   * and reserves stock for a set of items inside a transaction, then builds
    * the OrderItem snapshots (price/MRP/HSN/GST/commission) from the
-   * locked-and-decremented products.
+   * locked-and-reserved products.
+   *
+   * Reservation is capped to whatever stock is actually available, not
+   * rejected when insufficient — `quantity` (what the clinic/manufacturer
+   * requested) is never reduced; `reservedQuantity` (what was actually able
+   * to be committed right now, persisted on OrderItem) can land lower, down
+   * to 0. Money/GST/commission below still derive from the requested
+   * `quantity`, unchanged from before this reservation change — the actual
+   * packed/billed quantity is a separate, later concern (see
+   * scope/Order_Fulfillment_Lifecycle_Scope_2026-09-07.md §7, not this step).
    *
    * priceOverrides (external orders only) maps productId -> manufacturer-
    * agreed unit price. When present for a product, that price drives
@@ -261,7 +270,7 @@ export class OrdersService {
     items: { productId: string; quantity: number; notes?: string }[],
     priceOverrides?: Map<string, number>,
   ): Promise<{ orderItems: Partial<OrderItem>[]; subtotal: number; totalGstAmount: number }> {
-    type ProductWithItem = { product: Product; itemDto: (typeof items)[0] };
+    type ProductWithItem = { product: Product; itemDto: (typeof items)[0]; reservedQuantity: number };
     const products: ProductWithItem[] = [];
 
     await this.productsRepository.manager.transaction(async (manager) => {
@@ -280,21 +289,35 @@ export class OrdersService {
         if (product.status !== 'active') {
           throw new BadRequestException(`Product ${product.name} is not active`);
         }
-        if (product.stockQuantity < item.quantity) {
-          throw new BadRequestException(
-            `Insufficient stock for ${product.name}. Available: ${product.stockQuantity}, Requested: ${item.quantity}`,
-          );
-        }
         if (item.quantity < product.minOrderQuantity) {
           throw new BadRequestException(
             `Minimum order quantity for ${product.name} is ${product.minOrderQuantity}`,
           );
         }
 
+        // Reservation is capped to what's actually available, never rejected
+        // outright — partial fulfillment is expected, not an error (see
+        // scope/Order_Fulfillment_Lifecycle_Scope_2026-09-07.md §2.2/§5).
+        // This intentionally allows reservedQuantity to land at 0 when
+        // nothing is currently in stock: the prior all-or-nothing check
+        // above applied the exact same rejection whether stock was fully
+        // insufficient or just short by one unit, so there is no existing
+        // precedent for treating "zero available" as a distinct, harder
+        // failure than "partially available" — both are the same shortfall,
+        // just at different magnitudes. The separate `status !== 'active'`
+        // check above (a manufacturer-controlled flag, never set
+        // automatically by stock level — confirmed nothing in this codebase
+        // writes ProductStatus.OUT_OF_STOCK) remains the actual mechanism
+        // for a manufacturer to hard-block ordering a specific product;
+        // stock quantity alone no longer does that job.
+        const reservedQuantity = Math.min(item.quantity, product.stockQuantity);
+
         // Decrement inside the transaction while the row is locked
-        await productRepo.decrement({ id: product.id }, 'stockQuantity', item.quantity);
-        product.stockQuantity -= item.quantity;
-        products.push({ product, itemDto: item });
+        if (reservedQuantity > 0) {
+          await productRepo.decrement({ id: product.id }, 'stockQuantity', reservedQuantity);
+          product.stockQuantity -= reservedQuantity;
+        }
+        products.push({ product, itemDto: item, reservedQuantity });
       }
     });
 
@@ -302,7 +325,7 @@ export class OrdersService {
     let totalGstAmount = 0;
     const orderItems: Partial<OrderItem>[] = [];
 
-    for (const { product, itemDto } of products) {
+    for (const { product, itemDto, reservedQuantity } of products) {
       const catalogPrice = Number(product.price);
       const override = priceOverrides?.get(product.id);
       const unitPrice = override != null ? override : catalogPrice;
@@ -321,6 +344,7 @@ export class OrdersService {
         productSku: product.sku,
         productName: product.name,
         quantity: itemDto.quantity,
+        reservedQuantity,
         unitPrice,
         catalogPriceAtOrder: override != null ? catalogPrice : null,
         mrp: product.mrp != null ? Number(product.mrp) : null,
@@ -712,9 +736,19 @@ export class OrdersService {
       // safe with no double-restore risk, guarded the same way as the
       // timestamp above (!order.cancelledAt) plus CANCELLED being a terminal
       // state in ORDER_TRANSITIONS (no transition ever re-enters this branch).
+      //
+      // Restore reservedQuantity, not quantity: since reservation now caps to
+      // whatever was actually available at order-creation time (see
+      // lockAndSnapshotOrderItems), what was actually taken from
+      // products.stockQuantity for a short-supplied item is less than the
+      // clinic's original request. Restoring the full `quantity` here would
+      // hand back stock that was never actually reserved in the first place —
+      // silently inflating stockQuantity beyond what this order ever held.
       if (order.items && order.items.length > 0) {
         for (const item of order.items) {
-          await this.productsRepository.increment({ id: item.productId }, 'stockQuantity', item.quantity);
+          if (item.reservedQuantity > 0) {
+            await this.productsRepository.increment({ id: item.productId }, 'stockQuantity', item.reservedQuantity);
+          }
         }
       }
     }
