@@ -33,13 +33,17 @@ export class InvoicesService {
     organisationId?: string,
     organisationType?: string,
   ) {
-    const { page = 1, limit = 20, status } = query;
+    const { page = 1, limit = 20, status, orderId } = query;
     const skip = (page - 1) * limit;
 
     const queryBuilder = this.invoicesRepository
       .createQueryBuilder('invoice')
       .leftJoinAndSelect('invoice.order', 'order')
       .where('invoice.deletedAt IS NULL');
+
+    if (orderId) {
+      queryBuilder.andWhere('invoice."orderId" = :orderId', { orderId });
+    }
 
     // Multi-tenancy: scope to the caller's own organisation. Team Ayurlahi
     // (AYURLAHI_TEAM) is the only org type allowed to see every invoice,

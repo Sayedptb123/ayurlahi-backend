@@ -1,4 +1,4 @@
-import { IsOptional, IsInt, IsEnum, Min } from 'class-validator';
+import { IsOptional, IsInt, IsEnum, IsUUID, Min } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export enum InvoiceStatus {
@@ -24,4 +24,11 @@ export class GetInvoicesDto {
   @IsOptional()
   @IsEnum(InvoiceStatus)
   status?: InvoiceStatus;
+
+  // So the packing/fulfillment UI can fetch "the invoice for this order"
+  // directly instead of paging through every invoice client-side --
+  // invoices.orderId is unique, so this returns at most one row.
+  @IsOptional()
+  @IsUUID()
+  orderId?: string;
 }

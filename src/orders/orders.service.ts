@@ -1079,6 +1079,18 @@ export class OrdersService {
       if (!product) {
         throw new NotFoundException(`Product with ID ${dto.productId} not found`);
       }
+      // A manufacturer can only add their own products -- assertCanAmend()
+      // only confirms the caller is *a* manufacturer associated with this
+      // order via some existing item, not that they own the specific
+      // product being added. Without this, any manufacturer on the order
+      // could add a different manufacturer's product to someone else's
+      // order. Admin/support are exempt (matches every other admin-bypass
+      // check in this service).
+      const normalizedRole = RoleUtils.normalizeRole(userRole, organisationType);
+      const isAdmin = ['admin', 'support'].includes(normalizedRole);
+      if (!isAdmin && product.manufacturerId !== organisationId) {
+        throw new ForbiddenException('You can only add your own products to an order');
+      }
       if (product.status !== 'active') {
         throw new BadRequestException(`Product ${product.name} is not active`);
       }
