@@ -24,10 +24,19 @@ import { RoleUtils } from '../common/utils/role.utils';
 import { Invoice } from '../invoices/entities/invoice.entity';
 
 // Valid order status transitions. Anything not in the allowed set is rejected.
+// PACKED sits between PROCESSING and SHIPPED (§10 of
+// scope/Order_Fulfillment_Lifecycle_Scope_2026-09-07.md) -- the direct
+// CONFIRMED -> SHIPPED skip-ahead that existed before this step is dropped:
+// it belonged to a world where nothing meaningful happened during packing,
+// which is no longer true once partial fulfillment/billing hang off PACKED.
+// Packing quantities, billing-on-PACKED, and everything else PACKED will
+// eventually gate are separate, later steps -- this step only adds the
+// status itself and its transition edges.
 const ORDER_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
   [OrderStatus.PENDING]: [OrderStatus.CONFIRMED, OrderStatus.CANCELLED],
-  [OrderStatus.CONFIRMED]: [OrderStatus.PROCESSING, OrderStatus.SHIPPED, OrderStatus.CANCELLED],
-  [OrderStatus.PROCESSING]: [OrderStatus.SHIPPED, OrderStatus.CANCELLED],
+  [OrderStatus.CONFIRMED]: [OrderStatus.PROCESSING, OrderStatus.PACKED, OrderStatus.CANCELLED],
+  [OrderStatus.PROCESSING]: [OrderStatus.PACKED, OrderStatus.CANCELLED],
+  [OrderStatus.PACKED]: [OrderStatus.SHIPPED, OrderStatus.CANCELLED],
   [OrderStatus.SHIPPED]: [OrderStatus.DELIVERED, OrderStatus.RETURNED],
   [OrderStatus.DELIVERED]: [OrderStatus.RETURNED],
   [OrderStatus.CANCELLED]: [], // terminal

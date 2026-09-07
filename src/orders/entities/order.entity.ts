@@ -13,6 +13,11 @@ export enum OrderStatus {
   PENDING = 'pending',
   CONFIRMED = 'confirmed',
   PROCESSING = 'processing',
+  // Packing complete -- quantities and billing are frozen from here on
+  // (scope/Order_Fulfillment_Lifecycle_Scope_2026-09-07.md §10). Plain
+  // varchar(20) at the DB level, not a native Postgres enum, so adding this
+  // value needed no migration -- see that section for why.
+  PACKED = 'packed',
   SHIPPED = 'shipped',
   DELIVERED = 'delivered',
   CANCELLED = 'cancelled',
