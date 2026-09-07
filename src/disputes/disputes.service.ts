@@ -81,31 +81,50 @@ export class DisputesService {
     };
   }
 
-  async findOne(id: string, userId: string, userRole: string, organisationId?: string) {
+  /**
+   * Fixed 2026-09-07 (scope/Order_Fulfillment_Lifecycle_Scope_2026-09-07.md
+   * §9/§17): this previously checked `userRole === 'clinic'`, which never
+   * matches a real role value (OWNER/MANAGER/etc. are roles; CLINIC is an
+   * organisationType) — so a real clinic OWNER fell through to the
+   * `!RoleUtils.isAdminOrSupport(userRole)` branch and got a 403 on their
+   * own dispute. Fixed to check organisationType, matching the pattern
+   * already used correctly in create() above. Also adds a MANUFACTURER
+   * branch that never existed here at all — the manufacturer associated
+   * with the disputed order needs read access too (e.g. to process a
+   * replacement against it), and previously had none.
+   */
+  async findOne(id: string, userId: string, userRole: string, organisationType?: string, organisationId?: string) {
     const dispute = await this.disputesRepository.findOne({
       where: { id, deletedAt: IsNull() },
-      relations: ['order', 'clinic'],
+      relations: ['order', 'order.items'],
     });
 
     if (!dispute) {
       throw new NotFoundException(`Dispute with ID ${id} not found`);
     }
 
-    // Role-based access control
-    if (userRole === 'clinic') {
-      const user = await this.usersRepository.findOne({
-        where: { id: userId },
-      });
+    if (RoleUtils.isAdminOrSupport(userRole)) {
+      return dispute;
+    }
+
+    if (organisationType === 'CLINIC') {
       if (!organisationId || dispute.organisationId !== organisationId) {
         throw new ForbiddenException('You do not have access to this dispute');
       }
-    } else if (!RoleUtils.isAdminOrSupport(userRole)) {
-      throw new ForbiddenException(
-        'You do not have permission to view disputes',
-      );
+      return dispute;
     }
 
-    return dispute;
+    if (organisationType === 'MANUFACTURER') {
+      const hasManufacturerItems = dispute.order?.items?.some(
+        (item) => item.manufacturerId === organisationId,
+      );
+      if (!organisationId || !hasManufacturerItems) {
+        throw new ForbiddenException('You do not have access to this dispute');
+      }
+      return dispute;
+    }
+
+    throw new ForbiddenException('You do not have permission to view disputes');
   }
 
   async resolve(

@@ -19,6 +19,7 @@ import { UpdateOrderStatusDto } from './dto/update-order-status.dto';
 import { AssignOrderItemDto } from './dto/assign-order-item.dto';
 import { AddOrderItemDto } from './dto/add-order-item.dto';
 import { UpdateOrderItemQuantityDto } from './dto/update-order-item-quantity.dto';
+import { CreateReplacementDto } from './dto/create-replacement.dto';
 import { CreateExternalOrderDto } from './dto/create-external-order.dto';
 import { GrantExternalOrderAccessDto } from './dto/grant-external-order-access.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -201,6 +202,70 @@ export class OrdersController {
       req.user.organisationType,
       req.user.organisationId,
       dto,
+    );
+  }
+
+  // --- Replacements (post-delivery discrepancy) ---
+
+  @Post(':orderId/replacements')
+  async createReplacement(
+    @Param('orderId', ParseUUIDPipe) orderId: string,
+    @Request() req,
+    @Body() dto: CreateReplacementDto,
+  ) {
+    return this.ordersService.createReplacement(
+      orderId,
+      req.user.userId,
+      req.user.role,
+      req.user.organisationType,
+      req.user.organisationId,
+      dto,
+    );
+  }
+
+  @Get(':orderId/replacements')
+  async listReplacements(
+    @Param('orderId', ParseUUIDPipe) orderId: string,
+    @Request() req,
+  ) {
+    return this.ordersService.listReplacements(
+      orderId,
+      req.user.userId,
+      req.user.role,
+      req.user.organisationType,
+      req.user.organisationId,
+    );
+  }
+
+  @Patch(':orderId/replacements/:replacementId/ship')
+  async shipReplacement(
+    @Param('orderId', ParseUUIDPipe) orderId: string,
+    @Param('replacementId', ParseUUIDPipe) replacementId: string,
+    @Request() req,
+  ) {
+    return this.ordersService.shipReplacement(
+      orderId,
+      replacementId,
+      req.user.userId,
+      req.user.role,
+      req.user.organisationType,
+      req.user.organisationId,
+    );
+  }
+
+  @Patch(':orderId/replacements/:replacementId/resolve')
+  async resolveReplacement(
+    @Param('orderId', ParseUUIDPipe) orderId: string,
+    @Param('replacementId', ParseUUIDPipe) replacementId: string,
+    @Request() req,
+  ) {
+    return this.ordersService.resolveReplacement(
+      orderId,
+      replacementId,
+      req.user.userId,
+      req.user.role,
+      req.user.organisationType,
+      req.user.organisationId,
     );
   }
 }

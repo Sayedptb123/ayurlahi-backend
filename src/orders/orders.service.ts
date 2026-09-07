@@ -24,6 +24,9 @@ import { InventoryService } from '../inventory/inventory.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { RoleUtils } from '../common/utils/role.utils';
 import { Invoice } from '../invoices/entities/invoice.entity';
+import { OrderReplacement, ReplacementReason, ReplacementStatus } from './entities/order-replacement.entity';
+import { CreateReplacementDto } from './dto/create-replacement.dto';
+import { Dispute, DisputeStatus } from '../disputes/entities/dispute.entity';
 
 // Valid order status transitions. Anything not in the allowed set is rejected.
 // PACKED sits between PROCESSING and SHIPPED (§10 of
@@ -62,6 +65,10 @@ export class OrdersService {
     private invoicesRepository: Repository<Invoice>,
     @InjectRepository(ManufacturerExternalOrderAccess)
     private externalOrderAccessRepository: Repository<ManufacturerExternalOrderAccess>,
+    @InjectRepository(OrderReplacement)
+    private orderReplacementsRepository: Repository<OrderReplacement>,
+    @InjectRepository(Dispute)
+    private disputesRepository: Repository<Dispute>,
     private inventoryService: InventoryService,
     private notificationsService: NotificationsService,
   ) { }
@@ -1276,6 +1283,205 @@ export class OrdersService {
 
     await this.ordersRepository.save(order);
     return this.findOne(orderId, userId, userRole, organisationType, organisationId);
+  }
+
+  // Shared tenant check for all three replacement methods: the clinic that
+  // owns the order, the manufacturer associated with it (has at least one
+  // item), or admin/support. Mirrors the access pattern already used in
+  // findOne() above and (now) disputes.service.ts's own findOne().
+  private assertCanAccessOrderForReplacement(
+    order: Order,
+    organisationType: string | undefined,
+    organisationId: string | undefined,
+  ): { isClinic: boolean; isManufacturer: boolean; isAdmin: boolean } {
+    const isAdmin = organisationType === 'AYURLAHI_TEAM';
+    const isClinic = organisationType === 'CLINIC' && !!organisationId && order.organisationId === organisationId;
+    const isManufacturer =
+      organisationType === 'MANUFACTURER' &&
+      !!organisationId &&
+      (order.items || []).some((item) => item.manufacturerId === organisationId);
+
+    if (!(isAdmin || isClinic || isManufacturer)) {
+      throw new ForbiddenException('You do not have access to this order');
+    }
+    return { isClinic, isManufacturer, isAdmin };
+  }
+
+  /**
+   * Post-delivery discrepancy report (missing/wrong/damaged item) — raised
+   * by the clinic that owns the order, against a specific already-
+   * delivered item. Always a $0 correction against the original order;
+   * never a new order or invoice (§9 of
+   * scope/Order_Fulfillment_Lifecycle_Scope_2026-09-07.md). Stock is not
+   * touched here — only when the replacement actually ships
+   * (shipReplacement), matching the locked design's
+   * "created -> shipped -> resolved" sequence.
+   */
+  async createReplacement(
+    orderId: string,
+    userId: string,
+    userRole: string,
+    organisationType: string | undefined,
+    organisationId: string | undefined,
+    dto: CreateReplacementDto,
+  ): Promise<OrderReplacement> {
+    const order = await this.findOne(orderId, userId, userRole, organisationType, organisationId);
+    const normalizedRole = RoleUtils.normalizeRole(userRole, organisationType);
+    const isAdmin = ['admin', 'support'].includes(normalizedRole);
+    const isClinicOwner = organisationType === 'CLINIC' && !!organisationId && order.organisationId === organisationId;
+    if (!(isClinicOwner || isAdmin)) {
+      throw new ForbiddenException('Only the clinic that placed this order (or Ayurlahi Team admin/support) can report a replacement');
+    }
+
+    // Replacement is a post-delivery concept -- the locked business rule is
+    // explicitly "post-delivery discrepancy", not "anything at any stage".
+    if (order.status !== OrderStatus.DELIVERED) {
+      throw new BadRequestException(`Replacements can only be reported once an order is delivered (current status: "${order.status}")`);
+    }
+
+    const item = order.items?.find((i) => i.id === dto.orderItemId);
+    if (!item) {
+      throw new NotFoundException(`Order item ${dto.orderItemId} not found on order ${orderId}`);
+    }
+
+    if (dto.disputeId) {
+      const dispute = await this.disputesRepository.findOne({ where: { id: dto.disputeId, deletedAt: IsNull() } });
+      if (!dispute || dispute.orderId !== orderId) {
+        throw new BadRequestException('disputeId must reference an existing dispute on this same order');
+      }
+    }
+
+    // Cap against what was actually delivered, cumulative across every
+    // prior replacement already raised for this item -- a unit can't be
+    // replaced twice over. packedQuantity is the best available "what did
+    // this clinic actually get" signal today: shippedQuantity/
+    // deliveredQuantity remain deliberately dormant (§11) -- wiring them is
+    // not this step's job.
+    const priorReplacements = await this.orderReplacementsRepository.find({
+      where: { orderItemId: item.id, deletedAt: IsNull() },
+    });
+    const alreadyReplaced = priorReplacements.reduce((sum, r) => sum + r.quantity, 0);
+    const remaining = item.packedQuantity - alreadyReplaced;
+    if (dto.quantity > remaining) {
+      throw new BadRequestException(
+        `Cannot replace ${dto.quantity} units — only ${remaining} of ${item.packedQuantity} delivered units on this line remain un-replaced.`,
+      );
+    }
+
+    const replacement = this.orderReplacementsRepository.create({
+      organisationId: order.organisationId,
+      orderId: order.id,
+      orderItemId: item.id,
+      disputeId: dto.disputeId || null,
+      quantity: dto.quantity,
+      reason: dto.reason,
+      charge: 0,
+      status: ReplacementStatus.PENDING,
+      createdBy: userId,
+    });
+    return this.orderReplacementsRepository.save(replacement);
+  }
+
+  /** List replacements for an order — same tenant access as the order itself. */
+  async listReplacements(
+    orderId: string,
+    userId: string,
+    userRole: string,
+    organisationType: string | undefined,
+    organisationId: string | undefined,
+  ): Promise<OrderReplacement[]> {
+    const order = await this.findOne(orderId, userId, userRole, organisationType, organisationId);
+    this.assertCanAccessOrderForReplacement(order, organisationType, organisationId);
+    return this.orderReplacementsRepository.find({
+      where: { orderId, deletedAt: IsNull() },
+      order: { createdAt: 'DESC' },
+    });
+  }
+
+  /**
+   * Ship a replacement -- the manufacturer associated with the order (or
+   * admin/support) physically sends the replacement unit(s). This is the
+   * moment stock actually moves: decrements products.stockQuantity by the
+   * replacement quantity, same as any other unit leaving the warehouse. Not
+   * capped/rejected on insufficient stock -- unlike a normal order
+   * reservation, a replacement is an obligatory correction for the
+   * manufacturer's own error, not a fresh sale subject to availability.
+   */
+  async shipReplacement(
+    orderId: string,
+    replacementId: string,
+    userId: string,
+    userRole: string,
+    organisationType: string | undefined,
+    organisationId: string | undefined,
+  ): Promise<OrderReplacement> {
+    const order = await this.findOne(orderId, userId, userRole, organisationType, organisationId);
+    const { isManufacturer, isAdmin } = this.assertCanAccessOrderForReplacement(order, organisationType, organisationId);
+    if (!(isManufacturer || isAdmin)) {
+      throw new ForbiddenException('Only the manufacturer associated with this order (or Ayurlahi Team admin/support) can ship a replacement');
+    }
+
+    const replacement = await this.orderReplacementsRepository.findOne({ where: { id: replacementId, orderId, deletedAt: IsNull() } });
+    if (!replacement) {
+      throw new NotFoundException(`Replacement ${replacementId} not found on order ${orderId}`);
+    }
+    if (replacement.status !== ReplacementStatus.PENDING) {
+      throw new BadRequestException(`Replacement cannot be shipped from status "${replacement.status}"`);
+    }
+
+    const item = order.items?.find((i) => i.id === replacement.orderItemId);
+    if (item) {
+      await this.productsRepository.decrement({ id: item.productId }, 'stockQuantity', replacement.quantity);
+    }
+
+    replacement.status = ReplacementStatus.SHIPPED;
+    return this.orderReplacementsRepository.save(replacement);
+  }
+
+  /**
+   * Resolve a replacement (delivered/acknowledged) — no further stock or
+   * money effect. Also resolves the linked dispute, if one exists, so the
+   * human-facing case and the mechanical fulfillment record close together.
+   */
+  async resolveReplacement(
+    orderId: string,
+    replacementId: string,
+    userId: string,
+    userRole: string,
+    organisationType: string | undefined,
+    organisationId: string | undefined,
+  ): Promise<OrderReplacement> {
+    const order = await this.findOne(orderId, userId, userRole, organisationType, organisationId);
+    const { isManufacturer, isAdmin } = this.assertCanAccessOrderForReplacement(order, organisationType, organisationId);
+    if (!(isManufacturer || isAdmin)) {
+      throw new ForbiddenException('Only the manufacturer associated with this order (or Ayurlahi Team admin/support) can resolve a replacement');
+    }
+
+    const replacement = await this.orderReplacementsRepository.findOne({ where: { id: replacementId, orderId, deletedAt: IsNull() } });
+    if (!replacement) {
+      throw new NotFoundException(`Replacement ${replacementId} not found on order ${orderId}`);
+    }
+    if (replacement.status !== ReplacementStatus.SHIPPED) {
+      throw new BadRequestException(`Replacement cannot be resolved from status "${replacement.status}"`);
+    }
+
+    replacement.status = ReplacementStatus.RESOLVED;
+    replacement.resolvedAt = new Date();
+    const saved = await this.orderReplacementsRepository.save(replacement);
+
+    if (replacement.disputeId) {
+      await this.disputesRepository.update(
+        { id: replacement.disputeId, deletedAt: IsNull() },
+        {
+          status: DisputeStatus.RESOLVED,
+          resolution: `Resolved via replacement ${replacement.id} (${replacement.quantity} unit(s), reason: ${replacement.reason}).`,
+          resolvedAt: new Date(),
+          resolvedBy: userId,
+        },
+      );
+    }
+
+    return saved;
   }
 
   /**

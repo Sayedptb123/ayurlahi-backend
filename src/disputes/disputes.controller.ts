@@ -54,7 +54,7 @@ export class DisputesController {
 
   @Get(':id')
   async findOne(@Param('id', ParseUUIDPipe) id: string, @Request() req) {
-    return this.disputesService.findOne(id, req.user.userId, req.user.role, req.user.organisationId);
+    return this.disputesService.findOne(id, req.user.userId, req.user.role, req.user.organisationType, req.user.organisationId);
   }
 
   @Patch(':id/resolve')
