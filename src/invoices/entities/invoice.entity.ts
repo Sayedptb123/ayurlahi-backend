@@ -59,6 +59,12 @@ export class Invoice {
   @Column({ type: 'decimal', precision: 12, scale: 2, name: 'totalAmount' })
   totalAmount: number;
 
+  // Snapshotted total discount at invoice-creation time, mirroring
+  // orders.discountAmount the same way every other total here is a snapshot
+  // rather than a live re-read of the order.
+  @Column({ type: 'decimal', precision: 12, scale: 2, name: 'discountAmount', default: 0 })
+  discountAmount: number;
+
   @Column({ type: 'boolean', default: false, name: 'isGstInvoice' })
   isGstInvoice: boolean;
 

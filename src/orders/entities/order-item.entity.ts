@@ -85,6 +85,22 @@ export class OrderItem {
   @Column({ type: 'int', default: 0 })
   deliveredQuantity: number;
 
+  // Actual packed/supplied quantity, recorded by the manufacturer during
+  // packing -- authoritative for billing and clinic inventory credit once
+  // partial fulfillment is supported. `quantity` above stays the immutable
+  // requested amount. Deliberately a new column rather than repurposing
+  // shippedQuantity/deliveredQuantity (both confirmed dormant, but packing,
+  // shipping, and delivery are separately-observable events) -- see
+  // scope/Order_Fulfillment_Lifecycle_Scope_2026-09-07.md §11.
+  @Column({ type: 'int', name: 'packed_quantity', default: 0 })
+  packedQuantity: number;
+
+  // Per-item discount entered by the manufacturer's packing team -- a flat
+  // amount, not a percentage, summed into order.discountAmount /
+  // invoice.discountAmount for the bill breakdown's total-discount line.
+  @Column({ type: 'decimal', precision: 12, scale: 2, name: 'discount_amount', default: 0 })
+  discountAmount: number;
+
   @Column({ type: 'text', nullable: true })
   notes: string | null;
 

@@ -61,6 +61,11 @@ export class Order {
   @Column({ type: 'decimal', precision: 12, scale: 2, name: 'total_amount' })
   totalAmount: number;
 
+  // Sum of order_items.discountAmount across this order's items -- the
+  // total-discount line shown on the bill breakdown. See order-item.entity.ts.
+  @Column({ type: 'decimal', precision: 12, scale: 2, name: 'discount_amount', default: 0 })
+  discountAmount: number;
+
   // Snapshot of shipping address at time of order
   @Column({ type: 'jsonb', nullable: true, name: 'shipping_address' })
   shippingAddress: {

@@ -5,6 +5,7 @@ import { OrdersService } from './orders.service';
 import { Order } from './entities/order.entity';
 import { OrderItem } from './entities/order-item.entity';
 import { ManufacturerExternalOrderAccess } from './entities/manufacturer-external-order-access.entity';
+import { OrderReplacement } from './entities/order-replacement.entity';
 import { Product } from '../products/entities/product.entity';
 import { User } from '../users/entities/user.entity';
 import { OrganisationUser } from '../organisation-users/entities/organisation-user.entity';
@@ -15,7 +16,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Order, OrderItem, ManufacturerExternalOrderAccess, Product, User, OrganisationUser, Invoice]),
+    TypeOrmModule.forFeature([Order, OrderItem, ManufacturerExternalOrderAccess, OrderReplacement, Product, User, OrganisationUser, Invoice]),
     InventoryModule,
     NotificationsModule,
   ],
