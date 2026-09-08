@@ -873,11 +873,27 @@ export class OrdersService {
     //   - whichever party cancelled → notify the other party
     const clinicOrgId = savedOrder.organisationId;
     const mfgOrgId = savedOrder.items?.[0]?.manufacturerId;
+
+    // Packed body surfaces a shortfall explicitly ("8 of 10 items packed")
+    // rather than silently billing/shipping less than ordered -- matches the
+    // visibility principle in scope/Order_Fulfillment_Lifecycle_Scope_2026-09-07.md §13.
+    const totalQty = savedOrder.items?.reduce((sum, i) => sum + i.quantity, 0) ?? 0;
+    const totalPacked = savedOrder.items?.reduce((sum, i) => sum + i.packedQuantity, 0) ?? 0;
+    const packedBody =
+      totalPacked < totalQty
+        ? `Order ${savedOrder.orderNumber} has been packed and billed — ${totalPacked} of ${totalQty} items packed`
+        : `Order ${savedOrder.orderNumber} has been packed and billed`;
+
     const notifMap: Record<string, { title: string; body: string; type: string }> = {
       [OrderStatus.CONFIRMED]: {
         title: 'Order Confirmed',
         body: `Order ${savedOrder.orderNumber} has been confirmed by the manufacturer`,
         type: 'order_confirmed',
+      },
+      [OrderStatus.PACKED]: {
+        title: 'Order Packed',
+        body: packedBody,
+        type: 'order_packed',
       },
       [OrderStatus.SHIPPED]: {
         title: 'Order Shipped',
