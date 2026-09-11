@@ -263,7 +263,7 @@ export class OrdersService {
             this.notificationsService.sendToUsers({
               userIds,
               title: 'New Order Received',
-              body: `Order ${orderWithRelations?.orderNumber}: ${itemSummary}`,
+              body: `${clinic.name} placed Order ${orderWithRelations?.orderNumber}: ${itemSummary}`,
               data: { orderId: savedOrder.id, type: 'order_placed', organisationId: mfgOrgId },
             }).catch(() => {});
           }
@@ -289,7 +289,7 @@ export class OrdersService {
           this.notificationsService.sendToUsers({
             userIds,
             title: 'New Order to Fulfill',
-            body: `Order ${orderWithRelations?.orderNumber}: ${itemSummary} — forward to manufacturer and assign pickup`,
+            body: `${clinic.name} — Order ${orderWithRelations?.orderNumber}: ${itemSummary} — forward to manufacturer and assign pickup`,
             data: { orderId: savedOrder.id, type: 'order_needs_fulfillment', organisationId: OrdersService.AYURLAHI_TEAM_ORG_ID },
           }).catch(() => {});
         }
