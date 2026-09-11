@@ -12,6 +12,7 @@ import { User } from '../users/entities/user.entity';
 import { RoleUtils } from '../common/utils/role.utils';
 import { OrganisationUser } from '../organisation-users/entities/organisation-user.entity';
 import { Branch } from '../branches/entities/branch.entity';
+import { OrganisationContact } from '../organisations/entities/organisation-contact.entity';
 import { NotificationsService } from '../notifications/notifications.service';
 
 @Injectable()
@@ -25,6 +26,8 @@ export class ClinicsService {
     private organisationUsersRepository: Repository<OrganisationUser>,
     @InjectRepository(Branch)
     private branchesRepository: Repository<Branch>,
+    @InjectRepository(OrganisationContact)
+    private orgContactRepository: Repository<OrganisationContact>,
     private notificationsService: NotificationsService,
   ) { }
 
@@ -128,14 +131,27 @@ export class ClinicsService {
       .addOrderBy('branch.created_at', 'ASC')
       .getOne();
 
+    // Field-by-field fallback to the org's primary contact (Organisation
+    // Details screen — organisation_contacts, a completely separate table
+    // from branches) when the branch itself is missing that field. Real
+    // case: a clinic filled in their address via Organisation Details,
+    // genuinely believing that was "the" clinic address, while this
+    // endpoint only ever read the branch — order-shipping autofill came
+    // back entirely blank despite the org clearly having an address on
+    // file somewhere. Branch data wins when present since it's the more
+    // specific, actually-used-for-shipping source; this only fills gaps.
+    const contact = await this.orgContactRepository.findOne({
+      where: { organisationId: clinic.id, isPrimary: true },
+    });
+
     return {
       ...clinic,
-      address: branch?.address ?? null,
-      city: branch?.city ?? null,
-      district: null, // branches has no separate district column
-      state: branch?.state ?? null,
-      pincode: branch?.pincode ?? null,
-      phone: branch?.phone ?? null,
+      address: branch?.address ?? contact?.addressLine1 ?? null,
+      city: branch?.city ?? contact?.city ?? null,
+      district: contact?.district ?? null, // branches has no separate district column
+      state: branch?.state ?? contact?.state ?? null,
+      pincode: branch?.pincode ?? contact?.pincode ?? null,
+      phone: branch?.phone ?? contact?.phone ?? null,
     };
   }
 

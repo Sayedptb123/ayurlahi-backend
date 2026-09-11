@@ -6,10 +6,11 @@ import { Organisation } from '../organisations/entities/organisation.entity';
 import { User } from '../users/entities/user.entity';
 import { OrganisationUser } from '../organisation-users/entities/organisation-user.entity';
 import { Branch } from '../branches/entities/branch.entity';
+import { OrganisationContact } from '../organisations/entities/organisation-contact.entity';
 import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Organisation, User, OrganisationUser, Branch]), NotificationsModule],
+  imports: [TypeOrmModule.forFeature([Organisation, User, OrganisationUser, Branch, OrganisationContact]), NotificationsModule],
   controllers: [ClinicsController],
   providers: [ClinicsService],
   exports: [ClinicsService],
