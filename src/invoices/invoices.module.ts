@@ -6,9 +6,14 @@ import { Invoice } from './entities/invoice.entity';
 import { Order } from '../orders/entities/order.entity';
 import { OrderItem } from '../orders/entities/order-item.entity';
 import { User } from '../users/entities/user.entity';
+import { OrganisationUser } from '../organisation-users/entities/organisation-user.entity';
+import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Invoice, Order, OrderItem, User])],
+  imports: [
+    TypeOrmModule.forFeature([Invoice, Order, OrderItem, User, OrganisationUser]),
+    NotificationsModule,
+  ],
   controllers: [InvoicesController],
   providers: [InvoicesService],
   exports: [InvoicesService],

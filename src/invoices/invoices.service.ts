@@ -4,14 +4,16 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, IsNull, SelectQueryBuilder } from 'typeorm';
+import { Repository, IsNull, In, SelectQueryBuilder } from 'typeorm';
 import { Invoice } from './entities/invoice.entity';
 import { GetInvoicesDto, InvoiceStatus } from './dto/get-invoices.dto';
 import { MarkInvoicePaidDto } from './dto/mark-invoice-paid.dto';
 import { Order, OrderSource } from '../orders/entities/order.entity';
 import { OrderItem } from '../orders/entities/order-item.entity';
 import { User } from '../users/entities/user.entity';
+import { OrganisationUser } from '../organisation-users/entities/organisation-user.entity';
 import { RoleUtils } from '../common/utils/role.utils';
+import { NotificationsService } from '../notifications/notifications.service';
 
 @Injectable()
 export class InvoicesService {
@@ -24,6 +26,9 @@ export class InvoicesService {
     private orderItemsRepository: Repository<OrderItem>,
     @InjectRepository(User)
     private usersRepository: Repository<User>,
+    @InjectRepository(OrganisationUser)
+    private orgUserRepository: Repository<OrganisationUser>,
+    private notificationsService: NotificationsService,
   ) {}
 
   async findAll(
@@ -215,6 +220,28 @@ export class InvoicesService {
     invoice.paymentRecordedBy = userId;
 
     await this.invoicesRepository.save(invoice);
+
+    // markAsPaid previously fired no notification at all — the clinic had
+    // no way to know their payment had been recorded short of opening the
+    // Invoices screen. Uses invoice_paid, the type notificationRouting.ts
+    // already had a route ready for but no backend event ever emitted.
+    const clinicOrgId = invoice.order?.organisationId;
+    if (clinicOrgId) {
+      this.orgUserRepository
+        .find({ where: { organisationId: clinicOrgId, role: In(['OWNER', 'MANAGER', 'ADMIN']), isActive: true } })
+        .then((orgUsers) => {
+          const userIds = orgUsers.map((ou) => ou.userId).filter(Boolean);
+          if (userIds.length > 0) {
+            this.notificationsService.sendToUsers({
+              userIds,
+              title: 'Payment Recorded',
+              body: `Payment of ₹${Number(invoice.paidAmount).toFixed(2)} for Invoice ${invoice.invoiceNumber} has been recorded`,
+              data: { orderId: invoice.orderId, invoiceId: invoice.id, type: 'invoice_paid', organisationId: clinicOrgId },
+            }).catch(() => {});
+          }
+        })
+        .catch(() => {});
+    }
 
     return {
       ...invoice,

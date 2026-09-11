@@ -890,6 +890,11 @@ export class OrdersService {
         body: `Order ${savedOrder.orderNumber} has been confirmed by the manufacturer`,
         type: 'order_confirmed',
       },
+      [OrderStatus.PROCESSING]: {
+        title: 'Order Processing',
+        body: `Order ${savedOrder.orderNumber} is now being processed by the manufacturer`,
+        type: 'order_processing',
+      },
       [OrderStatus.PACKED]: {
         title: 'Order Packed',
         body: packedBody,
@@ -938,6 +943,32 @@ export class OrdersService {
           })
           .catch(() => {});
       }
+
+      // Ayurlahi Team previously only heard about an order once, at
+      // creation — every later status change (confirm/process/pack/ship/
+      // deliver/cancel) was invisible to them unless they went and checked
+      // the Orders screen themselves. Give them the same visibility the
+      // clinic already gets, same role set as the creation-time ping.
+      this.orgUserRepository
+        .find({
+          where: {
+            organisationId: OrdersService.AYURLAHI_TEAM_ORG_ID,
+            role: In(['FIELD_STAFF', 'TEAM_LEAD', 'SUPPORT']),
+            isActive: true,
+          },
+        })
+        .then((orgUsers) => {
+          const userIds = orgUsers.map((ou) => ou.userId).filter(Boolean);
+          if (userIds.length > 0) {
+            this.notificationsService.sendToUsers({
+              userIds,
+              title: notif.title,
+              body: notif.body,
+              data: { orderId: savedOrder.id, type: notif.type, organisationId: OrdersService.AYURLAHI_TEAM_ORG_ID },
+            }).catch(() => {});
+          }
+        })
+        .catch(() => {});
     }
 
     return savedOrder;
@@ -1646,6 +1677,25 @@ export class OrdersService {
     });
     try {
       await this.invoicesRepository.save(invoice);
+
+      // Invoice creation was previously silent — the clinic only found out
+      // a bill existed by opening the Invoices screen themselves. Reuses
+      // the invoice_paid route's screen ('Invoices') with its own type so
+      // tapping lands on the list; the clinic's own bill sits at the top.
+      this.orgUserRepository
+        .find({ where: { organisationId: order.organisationId, role: In(['OWNER', 'MANAGER', 'ADMIN']), isActive: true } })
+        .then((orgUsers) => {
+          const userIds = orgUsers.map((ou) => ou.userId).filter(Boolean);
+          if (userIds.length > 0) {
+            this.notificationsService.sendToUsers({
+              userIds,
+              title: 'Invoice Ready',
+              body: `Invoice ${invoiceNumber} for Order ${order.orderNumber} is ready — ₹${totalAmount.toFixed(2)}`,
+              data: { orderId: order.id, invoiceId: invoice.id, type: 'invoice_ready', organisationId: order.organisationId },
+            }).catch(() => {});
+          }
+        })
+        .catch(() => {});
     } catch (err: any) {
       // Don't fail the order delivery if invoice creation hits a constraint;
       // log and continue. Accountants can regenerate via separate flow.
