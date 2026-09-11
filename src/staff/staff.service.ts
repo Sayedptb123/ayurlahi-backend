@@ -526,6 +526,41 @@ export class StaffService {
 
     const updatedStaff = await this.staffRepository.save(staff);
 
+    // Keep the linked login account's email/phone in sync. Editing a staff
+    // member here previously only ever touched the staff row — for a staff
+    // member who already has a user account, their login credential (email
+    // or phone, checked against `users`, not `staff`) silently kept using
+    // the old value forever, even though every UI showing staff.email/phone
+    // displayed the new one. Real case: staff.email edited to a new address,
+    // users.email never updated, so email login broke while phone login
+    // (untouched) kept working — looked like "email not updated everywhere"
+    // but was actually "email never updated where login checks it."
+    if (staff.userId && (updateDto.email !== undefined || updateDto.phone !== undefined)) {
+      const linkedUser = await this.usersRepository.findOne({ where: { id: staff.userId } });
+      if (linkedUser) {
+        let linkedUserChanged = false;
+        if (updateDto.email !== undefined && updateDto.email !== linkedUser.email) {
+          if (updateDto.email) {
+            const emailConflict = await this.usersRepository.findOne({ where: { email: updateDto.email } });
+            if (emailConflict && emailConflict.id !== linkedUser.id) {
+              throw new ConflictException('This email is already registered to another user account');
+            }
+          }
+          linkedUser.email = updateDto.email || null;
+          linkedUserChanged = true;
+        }
+        if (updateDto.phone !== undefined && finalPhone && finalPhone !== linkedUser.phone) {
+          const phoneConflict = await this.usersRepository.findOne({ where: { phone: finalPhone } });
+          if (phoneConflict && phoneConflict.id !== linkedUser.id) {
+            throw new ConflictException('This phone number is already registered to another user account');
+          }
+          linkedUser.phone = finalPhone;
+          linkedUserChanged = true;
+        }
+        if (linkedUserChanged) await this.usersRepository.save(linkedUser);
+      }
+    }
+
     // organisation_users.role is never derived from staff.position — a
     // position change (e.g. to/from Doctor) must not touch access role. See
     // scope/Doctor_Admin_Role_Separation_Scope_2026-09-05.md.
