@@ -1668,9 +1668,23 @@ export class OrdersService {
     const invoiceNumber = `INV-${new Date().getFullYear()}-${order.orderNumber}`;
     const manufacturerId = packedItems[0]?.manufacturerId;
 
-    const [clinicOrgDetails, manufacturerDetails] = await Promise.all([
+    const [clinicOrgDetails, manufacturerDetails, branchName] = await Promise.all([
       this.getClinicOrgDetails(order.organisationId),
       manufacturerId ? this.getManufacturerInvoiceDetails(manufacturerId) : Promise.resolve(null),
+      // ADR-005 — order.branchId is the authoritative source for which
+      // branch this order belongs to. Deliberately NOT read from
+      // shippingAddress.name: that field is shippingContactName, which only
+      // happens to hold the branch name when the "use branch address"
+      // toggle was on -- when a clinic types a manual shipping address it
+      // holds an actual recipient person's name instead, and using that as
+      // a "branch" label would be wrong. NULL branchId (single-location
+      // clinic, or an order predating this column) stays NULL here too.
+      order.branchId
+        ? this.ordersRepository.manager
+            .getRepository('branches')
+            .findOne({ where: { id: order.branchId }, select: ['name'] })
+            .then((b: any) => b?.name ?? null)
+        : Promise.resolve(null),
     ]);
 
     // The "Billed To" address must reflect the branch this specific order
@@ -1707,6 +1721,7 @@ export class OrdersService {
         shippingAddress: order.shippingAddress,
         ...clinicOrgDetails,
         ...clinicAddress,
+        branchName,
       },
       manufacturerDetails,
       items,
