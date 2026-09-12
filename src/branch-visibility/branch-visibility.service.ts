@@ -106,15 +106,30 @@ export class BranchVisibilityService {
       where: { organisationId, deletedAt: IsNull() },
     });
 
-    // Not a per-branch org (the common case today), or a per-branch org
-    // that somehow has zero branches (shouldn't happen -- inventoryPolicy
-    // can only become PER_BRANCH at the moment a branch is created -- but
-    // handled defensively rather than assumed impossible): every write is
-    // organisation-level. A requested branchId is ignored, not honored --
-    // this is what keeps Invariant 2 true even under a stale/malformed
-    // client request.
-    if (settings.inventoryPolicy !== InventoryPolicy.PER_BRANCH || branchCount === 0) {
-      return null;
+    // Not a per-branch org (the common case today). A requested branchId
+    // is ignored, not honored -- the write is resolved to whatever this
+    // org's existing rows already use, never re-derived from the request.
+    //
+    // BUG FIXED 2026-09-12 (found auditing for Step 4, before any Step 4
+    // code existed): this used to unconditionally return null here. That
+    // was wrong for SAIFIS/CNS/PMS -- each already has a real primary
+    // branch (from ADR-004 D9/D5 or the Step 2 backfill), and their
+    // existing inventory_branch_stock rows already carry that branch's
+    // real UUID, NOT null. Returning null caused update()/remove() to
+    // search for a branchId=null row, fail to find the real one, and
+    // silently CREATE A DUPLICATE phantom row instead of touching the
+    // real one -- a live data-integrity bug on real customer data (three
+    // independently-drifting copies of the same item, exactly what the
+    // authoritative-source invariant exists to prevent). NULL is only
+    // correct for a genuinely branch-less org (zero branches, e.g. Anjala
+    // Ayur Home) -- "not per-branch" and "has no branches" are different
+    // facts and must not be conflated.
+    if (settings.inventoryPolicy !== InventoryPolicy.PER_BRANCH) {
+      if (branchCount === 0) return null;
+      const primary = await this.branchesRepository.findOne({
+        where: { organisationId, isPrimary: true, deletedAt: IsNull() },
+      });
+      return primary?.id ?? null;
     }
 
     if (!requestedBranchId) {

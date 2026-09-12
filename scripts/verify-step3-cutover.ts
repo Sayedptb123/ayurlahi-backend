@@ -106,6 +106,29 @@ async function main() {
   if (taggedMovement) await movementRepo.softDelete(taggedMovement.id);
   console.log('(cleaned up TEST 3 synthetic item/stock/movement)');
 
+  console.log('\n=== TEST 3b: editing a REAL pre-existing item on a non-per-branch org must NOT create a duplicate branch-stock row ===');
+  // The exact bug found auditing for Step 4: resolveBranchIdForWrite used
+  // to return NULL unconditionally for a non-per-branch org, but
+  // SAIFIS/CNS/PMS's real pre-existing rows carry their real primary
+  // branch's UUID (from the Step 2 backfill), not NULL. Editing a real
+  // item (not a freshly-created synthetic one) is the only way to catch
+  // this -- a synthetic item's first stock row is created fresh under
+  // whatever branchId gets resolved, so it never collides.
+  const pmsRealItem = await masterRepo.findOne({ where: { organisationId: PMS, deletedAt: IsNull() } });
+  check('PMS has a real pre-existing item to test against', !!pmsRealItem);
+  const beforeRowCount = await stockRepo.count({ where: { itemMasterId: pmsRealItem!.id, deletedAt: IsNull() } });
+  const realStockBefore = await stockRepo.findOne({ where: { itemMasterId: pmsRealItem!.id, deletedAt: IsNull() } });
+  const originalStock = realStockBefore!.currentStock;
+  await inventoryService.update(PMS, pmsRealItem!.id, { currentStock: originalStock + 1 } as any, 'test-script', 'OWNER');
+  const afterRowCount = await stockRepo.count({ where: { itemMasterId: pmsRealItem!.id, deletedAt: IsNull() } });
+  check('No duplicate branch-stock row created (row count unchanged)', afterRowCount === beforeRowCount);
+  const realStockAfter = await stockRepo.findOne({ where: { itemMasterId: pmsRealItem!.id, deletedAt: IsNull() } });
+  check('The REAL row (with its real branch_id) was the one updated', realStockAfter!.branchId === realStockBefore!.branchId && realStockAfter!.currentStock === originalStock + 1);
+  // restore exactly as it was
+  await inventoryService.update(PMS, pmsRealItem!.id, { currentStock: originalStock } as any, 'test-script', 'OWNER');
+  const restored = await stockRepo.findOne({ where: { itemMasterId: pmsRealItem!.id, deletedAt: IsNull() } });
+  check('Restored to original stock value with still no duplicate row', restored!.currentStock === originalStock && (await stockRepo.count({ where: { itemMasterId: pmsRealItem!.id, deletedAt: IsNull() } })) === beforeRowCount);
+
   console.log('\n=== TEST 4: PurchaseOrdersService.receivePurchaseOrder() via item_master_id (CNS, synthetic) ===');
   const testMaster2 = await masterRepo.save(masterRepo.create({
     organisationId: CNS,
@@ -123,10 +146,17 @@ async function main() {
     } as any,
     CNS_OWNER_USER_ID, 'OWNER',
   );
-  check('PO created with branchId resolved (CNS is shared/1-branch -> null expected)', po.branchId === null);
+  const cnsPrimary = await branchRepo.findOne({ where: { organisationId: CNS, isPrimary: true, deletedAt: IsNull() } });
+  // Post-fix expectation: CNS is shared but already has a real primary
+  // branch, and its existing stock rows already carry that branch's real
+  // UUID (Step 2 backfill) -- resolveBranchIdForWrite must match that,
+  // not return null, or a new PO's receipt would create a phantom
+  // duplicate row instead of landing on the same branch as CNS's real
+  // existing stock.
+  check('PO created with branchId resolved to CNS\'s real primary branch (not null)', po.branchId === cnsPrimary!.id);
   await poService.update(CNS, po.id, { status: 'received' } as any);
-  const receivedStock = await stockRepo.findOne({ where: { itemMasterId: testMaster2.id, branchId: IsNull() } });
-  check('receivePurchaseOrder() created branch-stock row via item_master_id', !!receivedStock && receivedStock.currentStock === 10);
+  const receivedStock = await stockRepo.findOne({ where: { itemMasterId: testMaster2.id, branchId: cnsPrimary!.id } });
+  check('receivePurchaseOrder() created branch-stock row via item_master_id, on CNS\'s real branch', !!receivedStock && receivedStock.currentStock === 10);
   const poMovement = await movementRepo.findOne({
     where: { referenceType: 'purchase_order', referenceId: po.id },
   });
