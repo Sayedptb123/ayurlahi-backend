@@ -78,6 +78,7 @@ export class InvoicesService {
     queryBuilder.orderBy('invoice.createdAt', 'DESC');
 
     const data = await queryBuilder.getMany();
+    await this.attachOrderIdentity(data);
 
     const transformedData = data.map((invoice) => ({
       ...invoice,
@@ -175,6 +176,7 @@ export class InvoicesService {
     }
 
     await this.assertCanAccess(invoice, organisationId, organisationType);
+    await this.attachOrderIdentity([invoice]);
 
     return {
       ...invoice,
@@ -268,6 +270,36 @@ export class InvoicesService {
       return;
     }
     // AYURLAHI_TEAM: no restriction.
+  }
+
+  // Invoice.order carries organisationId/branchId (plain columns, no ORM
+  // relation to organisations/branches), but the Invoices screen had no way
+  // to show which clinic or which branch of a multi-branch clinic (e.g.
+  // PMS's 3 branches) an invoice belongs to -- mirrors
+  // OrdersService.attachClinicNames/attachBranchNames. Mutates
+  // invoice.order in place so the caller's existing `{ ...invoice }` spread
+  // already carries the names once this resolves.
+  private async attachOrderIdentity(invoices: Invoice[]): Promise<void> {
+    const orgIds = [...new Set(invoices.map((i) => i.order?.organisationId).filter((id): id is string => !!id))];
+    const branchIds = [...new Set(invoices.map((i) => i.order?.branchId).filter((id): id is string => !!id))];
+
+    const [orgs, branches] = await Promise.all([
+      orgIds.length > 0
+        ? (this.invoicesRepository.manager.getRepository('organisations').find({ where: { id: In(orgIds) }, select: ['id', 'name'] }) as Promise<{ id: string; name: string }[]>)
+        : Promise.resolve([]),
+      branchIds.length > 0
+        ? (this.invoicesRepository.manager.getRepository('branches').find({ where: { id: In(branchIds) }, select: ['id', 'name'] }) as Promise<{ id: string; name: string }[]>)
+        : Promise.resolve([]),
+    ]);
+
+    const orgNameById = new Map(orgs.map((o) => [o.id, o.name]));
+    const branchNameById = new Map(branches.map((b) => [b.id, b.name]));
+
+    for (const invoice of invoices) {
+      if (!invoice.order) continue;
+      (invoice.order as any).clinicName = orgNameById.get(invoice.order.organisationId) ?? null;
+      (invoice.order as any).branchName = invoice.order.branchId ? branchNameById.get(invoice.order.branchId) ?? null : null;
+    }
   }
 
   private getInvoiceStatus(invoice: Invoice): string {

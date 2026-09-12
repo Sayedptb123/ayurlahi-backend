@@ -91,6 +91,22 @@ export class OrdersService {
     return orders.map((o) => Object.assign(o, { clinicName: nameById.get(o.organisationId) ?? null }));
   }
 
+  // Same reasoning and pattern as attachClinicNames, for order.branchId
+  // (ADR-005 first step) -- a manufacturer serving a multi-branch clinic
+  // (e.g. PMS's 3 branches) sees only the clinic name today, which doesn't
+  // say which branch actually placed the order. NULL for orders predating
+  // this column or from single-location clinics (ADR-004 D9) -- that's the
+  // correct, permanent state, not a gap to paper over.
+  private async attachBranchNames<T extends { branchId?: string | null }>(orders: T[]): Promise<(T & { branchName: string | null })[]> {
+    const ids = [...new Set(orders.map((o) => o.branchId).filter((id): id is string => !!id))];
+    if (ids.length === 0) return orders.map((o) => Object.assign(o, { branchName: null }));
+    const branches = (await this.ordersRepository.manager
+      .getRepository('branches')
+      .find({ where: { id: In(ids) }, select: ['id', 'name'] })) as { id: string; name: string }[];
+    const nameById = new Map(branches.map((b) => [b.id, b.name]));
+    return orders.map((o) => Object.assign(o, { branchName: o.branchId ? nameById.get(o.branchId) ?? null : null }));
+  }
+
   async findAll(userId: string, userRole: string, organisationType: string | undefined, query: GetOrdersDto, organisationId?: string) {
     const { page = 1, limit = 20, status, source } = query;
     const skip = (page - 1) * limit;
@@ -139,6 +155,7 @@ export class OrdersService {
     // Mutates each order in place (Object.assign) -- `data` already carries
     // clinicName once this resolves.
     await this.attachClinicNames(data);
+    await this.attachBranchNames(data);
 
     return {
       data,
@@ -168,6 +185,7 @@ export class OrdersService {
     // Mutates order in place (Object.assign) -- the plain `return order`
     // below already carries clinicName once this resolves.
     await this.attachClinicNames([order]);
+    await this.attachBranchNames([order]);
 
     // Role-based access control using organisationType from JWT
     if (organisationType === 'CLINIC') {
