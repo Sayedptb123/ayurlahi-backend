@@ -232,10 +232,12 @@ export class InvoicesService {
         .then((orgUsers) => {
           const userIds = orgUsers.map((ou) => ou.userId).filter(Boolean);
           if (userIds.length > 0) {
+            const branchName = (invoice.order?.shippingAddress as any)?.name as string | undefined;
+            const branchLabel = branchName ? ` (${branchName})` : '';
             this.notificationsService.sendToUsers({
               userIds,
               title: 'Payment Recorded',
-              body: `Payment of ₹${Number(invoice.paidAmount).toFixed(2)} for Invoice ${invoice.invoiceNumber} has been recorded`,
+              body: `Payment of ₹${Number(invoice.paidAmount).toFixed(2)} for Invoice ${invoice.invoiceNumber}${branchLabel} has been recorded`,
               data: { orderId: invoice.orderId, invoiceId: invoice.id, type: 'invoice_paid', organisationId: clinicOrgId },
             }).catch(() => {});
           }

@@ -245,6 +245,15 @@ export class OrdersService {
     // Notify manufacturer owners/managers about new order
     const manufacturerIds = [...new Set(orderItems.map((i) => i.manufacturerId).filter(Boolean))];
     const itemSummary = orderWithRelations?.items?.map((i) => `${i.productName} x${i.quantity}`).join(', ') ?? '';
+    // Multi-branch clinics are common (see scope/ADR-005-branch-scoped-inventory.md)
+    // — a notification naming only the org, never the branch, leaves the
+    // manufacturer/Team guessing which physical location an order is for.
+    // shippingAddress.name is the branch name captured at order-creation time
+    // (CreateOrderScreen's "Use branch address as shipping" autofill); falls
+    // back to nothing (not a guess) when the order was shipped to a manually
+    // entered address with no contact name given.
+    const branchName = (orderWithRelations?.shippingAddress as any)?.name as string | undefined;
+    const branchLabel = branchName ? ` (${branchName})` : '';
     if (manufacturerIds.length > 0) {
       this.orgUserRepository
         .find({ where: { organisationId: In(manufacturerIds), role: In(['OWNER', 'MANAGER', 'ADMIN']), isActive: true } })
@@ -263,7 +272,7 @@ export class OrdersService {
             this.notificationsService.sendToUsers({
               userIds,
               title: 'New Order Received',
-              body: `${clinic.name} placed Order ${orderWithRelations?.orderNumber}: ${itemSummary}`,
+              body: `${clinic.name}${branchLabel} placed Order ${orderWithRelations?.orderNumber}: ${itemSummary}`,
               data: { orderId: savedOrder.id, type: 'order_placed', organisationId: mfgOrgId },
             }).catch(() => {});
           }
@@ -289,7 +298,7 @@ export class OrdersService {
           this.notificationsService.sendToUsers({
             userIds,
             title: 'New Order to Fulfill',
-            body: `${clinic.name} — Order ${orderWithRelations?.orderNumber}: ${itemSummary} — forward to manufacturer and assign pickup`,
+            body: `${clinic.name}${branchLabel} — Order ${orderWithRelations?.orderNumber}: ${itemSummary} — forward to manufacturer and assign pickup`,
             data: { orderId: savedOrder.id, type: 'order_needs_fulfillment', organisationId: OrdersService.AYURLAHI_TEAM_ORG_ID },
           }).catch(() => {});
         }
@@ -647,6 +656,11 @@ export class OrdersService {
     // (Mirrors create()'s manufacturer-notification block, but flipped: the
     // manufacturer here already knows, since they just created it.)
     const itemSummary = orderWithRelations?.items?.map((i) => `${i.productName} x${i.quantity}`).join(', ') ?? '';
+    // branch.name (the actual branch entity, already fetched above) rather
+    // than re-parsing shippingAddress — same reasoning as create()/
+    // updateStatus(): multi-branch clinics need to know which branch a
+    // notification is about, not just which org.
+    const branchLabel = branchAny.name ? ` (${branchAny.name})` : '';
     this.orgUserRepository
       .find({ where: { organisationId: dto.clinicId, role: In(['OWNER', 'MANAGER', 'ADMIN']), isActive: true } })
       .then((orgUsers) => {
@@ -655,7 +669,7 @@ export class OrdersService {
           this.notificationsService.sendToUsers({
             userIds,
             title: 'Order Recorded on Your Behalf',
-            body: `Your manufacturer recorded an order: ${itemSummary}`,
+            body: `Your manufacturer recorded an order${branchLabel}: ${itemSummary}`,
             data: { orderId: savedOrder.id, type: 'external_order_created', organisationId: dto.clinicId },
           }).catch(() => {});
         }
@@ -679,7 +693,7 @@ export class OrdersService {
           this.notificationsService.sendToUsers({
             userIds,
             title: 'New Order to Fulfill',
-            body: `Order ${orderWithRelations?.orderNumber}: ${itemSummary} — forward to manufacturer and assign pickup`,
+            body: `Order ${orderWithRelations?.orderNumber}${branchLabel}: ${itemSummary} — forward to manufacturer and assign pickup`,
             data: { orderId: savedOrder.id, type: 'order_needs_fulfillment', organisationId: OrdersService.AYURLAHI_TEAM_ORG_ID },
           }).catch(() => {});
         }
@@ -873,6 +887,12 @@ export class OrdersService {
     //   - whichever party cancelled → notify the other party
     const clinicOrgId = savedOrder.organisationId;
     const mfgOrgId = savedOrder.items?.[0]?.manufacturerId;
+    // See the matching comment in create() — branch name from the
+    // order's own shipping-address snapshot, so Team (who now gets these
+    // same status-change notifications) can tell which branch without
+    // opening the order.
+    const branchName = (savedOrder.shippingAddress as any)?.name as string | undefined;
+    const branchLabel = branchName ? ` (${branchName})` : '';
 
     // Packed body surfaces a shortfall explicitly ("8 of 10 items packed")
     // rather than silently billing/shipping less than ordered -- matches the
@@ -881,18 +901,18 @@ export class OrdersService {
     const totalPacked = savedOrder.items?.reduce((sum, i) => sum + i.packedQuantity, 0) ?? 0;
     const packedBody =
       totalPacked < totalQty
-        ? `Order ${savedOrder.orderNumber} has been packed and billed — ${totalPacked} of ${totalQty} items packed`
-        : `Order ${savedOrder.orderNumber} has been packed and billed`;
+        ? `Order ${savedOrder.orderNumber}${branchLabel} has been packed and billed — ${totalPacked} of ${totalQty} items packed`
+        : `Order ${savedOrder.orderNumber}${branchLabel} has been packed and billed`;
 
     const notifMap: Record<string, { title: string; body: string; type: string }> = {
       [OrderStatus.CONFIRMED]: {
         title: 'Order Confirmed',
-        body: `Order ${savedOrder.orderNumber} has been confirmed by the manufacturer`,
+        body: `Order ${savedOrder.orderNumber}${branchLabel} has been confirmed by the manufacturer`,
         type: 'order_confirmed',
       },
       [OrderStatus.PROCESSING]: {
         title: 'Order Processing',
-        body: `Order ${savedOrder.orderNumber} is now being processed by the manufacturer`,
+        body: `Order ${savedOrder.orderNumber}${branchLabel} is now being processed by the manufacturer`,
         type: 'order_processing',
       },
       [OrderStatus.PACKED]: {
@@ -902,17 +922,17 @@ export class OrdersService {
       },
       [OrderStatus.SHIPPED]: {
         title: 'Order Shipped',
-        body: `Order ${savedOrder.orderNumber} has been shipped and is on the way`,
+        body: `Order ${savedOrder.orderNumber}${branchLabel} has been shipped and is on the way`,
         type: 'order_shipped',
       },
       [OrderStatus.DELIVERED]: {
         title: 'Order Delivered',
-        body: `Order ${savedOrder.orderNumber} has been delivered. Inventory updated.`,
+        body: `Order ${savedOrder.orderNumber}${branchLabel} has been delivered. Inventory updated.`,
         type: 'order_delivered',
       },
       [OrderStatus.CANCELLED]: {
         title: 'Order Cancelled',
-        body: `Order ${savedOrder.orderNumber} has been cancelled`,
+        body: `Order ${savedOrder.orderNumber}${branchLabel} has been cancelled`,
         type: 'order_cancelled',
       },
     };
@@ -1687,10 +1707,12 @@ export class OrdersService {
         .then((orgUsers) => {
           const userIds = orgUsers.map((ou) => ou.userId).filter(Boolean);
           if (userIds.length > 0) {
+            const branchName = (order.shippingAddress as any)?.name as string | undefined;
+            const branchLabel = branchName ? ` (${branchName})` : '';
             this.notificationsService.sendToUsers({
               userIds,
               title: 'Invoice Ready',
-              body: `Invoice ${invoiceNumber} for Order ${order.orderNumber} is ready — ₹${totalAmount.toFixed(2)}`,
+              body: `Invoice ${invoiceNumber} for Order ${order.orderNumber}${branchLabel} is ready — ₹${totalAmount.toFixed(2)}`,
               data: { orderId: order.id, invoiceId: invoice.id, type: 'invoice_ready', organisationId: order.organisationId },
             }).catch(() => {});
           }
