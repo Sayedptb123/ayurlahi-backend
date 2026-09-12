@@ -42,15 +42,27 @@ export class OrderItem {
   @Column({ type: 'int' })
   quantity: number;
 
-  // What was actually committed against products.stockQuantity at
-  // reservation time -- capped to whatever was available, so this can be
-  // less than `quantity` (down to 0) once partial fulfillment is possible.
-  // Distinct from packedQuantity below: reservation is an inventory
-  // commitment made at accept-time; packing is a later, separate,
-  // authoritative fact that can itself land lower than what was reserved
-  // (e.g. a reserved unit fails a quality check during packing). Existing
-  // rows (created before this column existed, when reservation was always
-  // all-or-nothing) are backfilled to `quantity` -- see the migration.
+  // LIVE figure: how much of products.stockQuantity is CURRENTLY held in
+  // reservation for this item, right now -- not a frozen snapshot of what
+  // was reserved at creation. Capped to whatever was available at creation,
+  // so this can be less than `quantity` (down to 0) once partial fulfillment
+  // is possible. Every operation in orders.service.ts that releases reserved
+  // stock back to the product (removeOrderItem, updateOrderItemQuantity's
+  // delta-release branch, and PACKED's shortfall release) decrements this by
+  // the exact amount released; every operation that takes more stock into
+  // reservation increments it to match. cancelOrder-equivalent logic can
+  // therefore always safely restore "whatever this currently is" without
+  // needing to know the order's history. (A prior version of PACKED's
+  // shortfall release violated this invariant -- fixed 2026-09-12, see the
+  // comment in orders.service.ts's CANCELLED branch.)
+  // Distinct from packedQuantity below: reservation is inventory
+  // COMMITMENT (can go up or down before packing); packing is a later,
+  // separate, authoritative fact that can itself land lower than the final
+  // reservedQuantity it was capped by (e.g. a reserved unit fails a quality
+  // check during packing) -- packedQuantity never changes after PACKED, but
+  // reservedQuantity does, once, at that same transition (see above).
+  // Existing rows (created before this column existed, when reservation was
+  // always all-or-nothing) are backfilled to `quantity` -- see the migration.
   @Column({ type: 'int', name: 'reserved_quantity' })
   reservedQuantity: number;
 

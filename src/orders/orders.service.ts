@@ -879,8 +879,42 @@ export class OrdersService {
             await this.productsRepository.increment({ id: item.productId }, 'stockQuantity', toRelease);
           }
 
+          // reservedQuantity is a LIVE figure -- "how much is currently held
+          // in reservation for this item" -- kept in sync by every other
+          // stock-release path in this file (removeOrderItem,
+          // updateOrderItemQuantity's delta-release branch). This was the
+          // one place that released stock without updating it to match,
+          // which meant a later PACKED -> CANCELLED (a legal transition)
+          // restored the item's ORIGINAL reservation on top of what packing
+          // had already released here -- double-crediting the shortfall
+          // back to stock. Fixed 2026-09-12 (audit finding, HIGH severity):
+          // shrink reservedQuantity by exactly what was just released, so
+          // whatever restores it later (cancellation) restores only what's
+          // still actually outstanding.
+          item.reservedQuantity = packedQuantity;
+
           item.packedQuantity = packedQuantity;
           item.discountAmount = input?.discountAmount ?? Number(item.discountAmount) ?? 0;
+
+          // Per-item subtotal/gstAmount/totalAmount/commissionAmount were
+          // previously left at their order-creation values (computed from
+          // the originally REQUESTED quantity) and never resynced here --
+          // unlike the order-level aggregates (fixed earlier the same day),
+          // this per-item drift silently corrupted analytics.service.ts's
+          // "Top Selling Medicines" query, which sums these fields directly.
+          // Recomputed from packedQuantity, same formula shape as
+          // createInvoiceForPackedOrder's own per-line math just below, so
+          // these numbers can never disagree with what actually gets
+          // invoiced. Deliberately NOT discount-inclusive, matching the
+          // existing convention for this field everywhere else in the file
+          // (order.discountAmount stays a separate aggregate line, not
+          // folded into totalAmount).
+          const packedSubtotal = Number(item.unitPrice) * packedQuantity;
+          const packedGstAmount = (packedSubtotal * Number(item.gstRate)) / 100;
+          item.subtotal = packedSubtotal;
+          item.gstAmount = packedGstAmount;
+          item.totalAmount = packedSubtotal + packedGstAmount;
+          item.commissionAmount = (item.totalAmount * 0.05) / 100;
         }
 
         order.discountAmount = order.items.reduce((sum, i) => sum + (Number(i.discountAmount) || 0), 0);
@@ -931,11 +965,26 @@ export class OrdersService {
       order.cancelledBy = userId;
       order.cancellationReason = updateDto.notes || null;
 
-      // Stock is decremented exactly once, at order creation (create()), and
-      // never touched again by any other transition — so restoring it here is
-      // safe with no double-restore risk, guarded the same way as the
-      // timestamp above (!order.cancelledAt) plus CANCELLED being a terminal
-      // state in ORDER_TRANSITIONS (no transition ever re-enters this branch).
+      // Correction 2026-09-12 (audit finding, HIGH severity): this comment
+      // used to claim "stock is decremented exactly once, at order creation,
+      // and never touched again by any other transition" -- that was true
+      // when written but became false the moment PACKED started releasing a
+      // packing shortfall back to stock (see the PACKED branch above), and
+      // was never updated. Restoring the full `item.reservedQuantity` here
+      // WAS a double-restore for any order packed-with-a-shortfall and then
+      // cancelled: PACKED already released (reservedQuantity - packedQuantity)
+      // once, and this block restored the untouched, still-original
+      // reservedQuantity a second time.
+      //
+      // Fixed by making reservedQuantity a genuinely LIVE figure: every
+      // operation that releases reserved stock (removeOrderItem,
+      // updateOrderItemQuantity, and now PACKED) decrements it by the exact
+      // amount released, and every operation that takes more stock into
+      // reservation increments it to match. Under that invariant, this line
+      // is correct by construction -- it restores "whatever is still
+      // currently reserved," never more, regardless of how much (if any) was
+      // already released earlier in the order's life. No status-specific
+      // branching needed here.
       //
       // Restore reservedQuantity, not quantity: since reservation now caps to
       // whatever was actually available at order-creation time (see
@@ -1713,6 +1762,20 @@ export class OrdersService {
     // total-discount line in the bill breakdown", not a per-line total.
     const discountAmount = items.reduce((sum, i) => sum + i.discountAmount, 0);
     const totalAmount = subtotal + gstAmount - discountAmount;
+
+    // Once a real invoice exists it's the financial source of truth (actual
+    // packed quantities + packing-time discount) -- order.subtotal/gstAmount/
+    // totalAmount were only ever a pre-packing estimate (set at order
+    // creation from requested quantity, never recomputed since). Sync them
+    // here so every other reader of the order's own total (list cards,
+    // notifications, etc.) agrees with what was actually billed, instead of
+    // silently drifting once a discount is applied at packing. order is the
+    // same instance updateStatus() saves after this call returns -- no
+    // separate save needed. order.discountAmount is already set by the
+    // caller just above, from the same packed items.
+    order.subtotal = subtotal;
+    order.gstAmount = gstAmount;
+    order.totalAmount = totalAmount;
 
     const invoiceNumber = `INV-${new Date().getFullYear()}-${order.orderNumber}`;
     const manufacturerId = packedItems[0]?.manufacturerId;
