@@ -26,6 +26,12 @@ export class PurchaseOrder {
   @JoinColumn({ name: 'organisation_id' })
   organisation: Organisation;
 
+  // ADR-005 Step 2/3 -- nullable; NULL means "this org has no branches"
+  // (Invariant 2), resolved via BranchVisibilityService.resolveBranchIdForWrite
+  // rather than trusted verbatim from the request.
+  @Column({ name: 'branch_id', type: 'uuid', nullable: true })
+  branchId: string | null;
+
   @Column({ name: 'supplier_id' })
   supplierId: string;
 

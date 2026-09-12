@@ -5,6 +5,7 @@ import {
   OrganisationSettings,
   PatientVisibility,
   StaffPolicy,
+  InventoryPolicy,
 } from './entities/organisation-settings.entity';
 
 // Deliberately a real service with its own lookup methods, not the scattered
@@ -46,7 +47,14 @@ export class OrganisationSettingsService {
   // can participate in BranchesService's existing first-branch transaction.
   async applyOnboardingPolicy(
     organisationId: string,
-    policy: { patientVisibility?: PatientVisibility; staffPolicy?: StaffPolicy },
+    policy: {
+      patientVisibility?: PatientVisibility;
+      staffPolicy?: StaffPolicy;
+      // ADR-005 Step 3 -- same "asked once, at the first-additional-branch
+      // moment" pattern as the two fields above. Independent of
+      // patientVisibility; never inferred from it.
+      inventoryPolicy?: InventoryPolicy;
+    },
     manager?: EntityManager,
   ): Promise<OrganisationSettings> {
     const repo = manager ? manager.getRepository(OrganisationSettings) : this.settingsRepository;
@@ -54,6 +62,7 @@ export class OrganisationSettingsService {
     const target = existing ?? repo.create({ organisationId });
     if (policy.patientVisibility) target.patientVisibility = policy.patientVisibility;
     if (policy.staffPolicy) target.staffPolicy = policy.staffPolicy;
+    if (policy.inventoryPolicy) target.inventoryPolicy = policy.inventoryPolicy;
     return repo.save(target);
   }
 }

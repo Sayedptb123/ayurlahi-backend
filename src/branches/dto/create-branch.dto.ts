@@ -11,6 +11,7 @@ import {
 import {
   PatientVisibility,
   StaffPolicy,
+  InventoryPolicy,
 } from '../../organisation-settings/entities/organisation-settings.entity';
 
 export class CreateBranchDto {
@@ -97,6 +98,12 @@ export class CreateBranchDto {
   @IsOptional()
   @IsEnum(StaffPolicy)
   staffPolicy?: StaffPolicy;
+
+  // ADR-005 Step 3 -- same "only read on the first additional branch" rule
+  // as the two fields above.
+  @IsOptional()
+  @IsEnum(InventoryPolicy)
+  inventoryPolicy?: InventoryPolicy;
 }
 
 

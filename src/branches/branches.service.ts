@@ -24,6 +24,7 @@ import { OrganisationSettingsService } from '../organisation-settings/organisati
 import {
   PatientVisibility,
   StaffPolicy,
+  InventoryPolicy,
 } from '../organisation-settings/entities/organisation-settings.entity';
 
 @Injectable()
@@ -66,7 +67,7 @@ export class BranchesService {
   private async materialiseFirstBranchAndBackfill(
     organisationId: string,
     createdBy?: string,
-    policy?: { patientVisibility?: PatientVisibility; staffPolicy?: StaffPolicy },
+    policy?: { patientVisibility?: PatientVisibility; staffPolicy?: StaffPolicy; inventoryPolicy?: InventoryPolicy },
   ): Promise<Branch> {
     return this.dataSource.transaction(async (manager) => {
       const org = await manager.findOne(Organisation, { where: { id: organisationId } });
@@ -98,7 +99,7 @@ export class BranchesService {
       // ADR-004 D2/D5 — the first-additional-location moment is also when the
       // customer answers the onboarding policy questions, if they were asked.
       // Same transaction as the branch/backfill writes above — one atomic event.
-      if (policy?.patientVisibility || policy?.staffPolicy) {
+      if (policy?.patientVisibility || policy?.staffPolicy || policy?.inventoryPolicy) {
         await this.organisationSettingsService.applyOnboardingPolicy(organisationId, policy, manager);
       }
 
@@ -133,6 +134,7 @@ export class BranchesService {
       await this.materialiseFirstBranchAndBackfill(organisationId, createdBy, {
         patientVisibility: createDto.patientVisibility,
         staffPolicy: createDto.staffPolicy,
+        inventoryPolicy: createDto.inventoryPolicy,
       });
     }
 

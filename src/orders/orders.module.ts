@@ -11,13 +11,14 @@ import { User } from '../users/entities/user.entity';
 import { OrganisationUser } from '../organisation-users/entities/organisation-user.entity';
 import { Invoice } from '../invoices/entities/invoice.entity';
 import { Dispute } from '../disputes/entities/dispute.entity';
+import { Branch } from '../branches/entities/branch.entity';
 
 import { InventoryModule } from '../inventory/inventory.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([Order, OrderItem, ManufacturerExternalOrderAccess, OrderReplacement, Product, User, OrganisationUser, Invoice, Dispute]),
+    TypeOrmModule.forFeature([Order, OrderItem, ManufacturerExternalOrderAccess, OrderReplacement, Product, User, OrganisationUser, Invoice, Dispute, Branch]),
     InventoryModule,
     NotificationsModule,
   ],

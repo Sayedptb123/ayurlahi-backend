@@ -29,6 +29,11 @@ export enum ReportingPolicy {
 
 export enum InventoryPolicy {
   SHARED = 'shared',
+  // ADR-005 Step 3 -- an organisation whose inventory is tracked
+  // separately per branch (inventory_branch_stock), rather than pooled
+  // org-wide. Never controlled by patientVisibility -- an org's patient
+  // and inventory visibility are independent decisions.
+  PER_BRANCH = 'per_branch',
 }
 
 export enum NumberingPolicy {

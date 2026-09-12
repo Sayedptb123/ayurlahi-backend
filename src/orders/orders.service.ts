@@ -27,6 +27,7 @@ import { Invoice } from '../invoices/entities/invoice.entity';
 import { OrderReplacement, ReplacementReason, ReplacementStatus } from './entities/order-replacement.entity';
 import { CreateReplacementDto } from './dto/create-replacement.dto';
 import { Dispute, DisputeStatus } from '../disputes/entities/dispute.entity';
+import { Branch } from '../branches/entities/branch.entity';
 
 // Valid order status transitions. Anything not in the allowed set is rejected.
 // PACKED sits between PROCESSING and SHIPPED (§10 of
@@ -69,9 +70,47 @@ export class OrdersService {
     private orderReplacementsRepository: Repository<OrderReplacement>,
     @InjectRepository(Dispute)
     private disputesRepository: Repository<Dispute>,
+    @InjectRepository(Branch)
+    private branchesRepository: Repository<Branch>,
     private inventoryService: InventoryService,
     private notificationsService: NotificationsService,
   ) { }
+
+  // ADR-005 Step 3 (§6) — the one place the pre-Step-1 legacy-order
+  // fallback lives. order.branchId present -> use it directly (the normal
+  // case for every order placed after Step 1 reached the clinic).
+  // Otherwise: a genuinely branch-less org's NULL is correct and final
+  // (Invariant 2); a multi-branch org's legacy NULL is genuinely ambiguous
+  // and falls back to the primary branch (same rule as the Step 2 stock
+  // backfill), tagged so the fallback is identifiable rather than
+  // silently indistinguishable from a real branch-less-org movement.
+  private async resolveDeliveryBranchId(
+    order: Order,
+  ): Promise<{ branchId: string | null; isFallback: boolean }> {
+    if (order.branchId) return { branchId: order.branchId, isFallback: false };
+
+    const branchCount = await this.branchesRepository.count({
+      where: { organisationId: order.organisationId, deletedAt: IsNull() },
+    });
+    if (branchCount === 0) return { branchId: null, isFallback: false };
+
+    const primary = await this.branchesRepository.findOne({
+      where: { organisationId: order.organisationId, isPrimary: true, deletedAt: IsNull() },
+    });
+    if (!primary) {
+      // Shouldn't happen (every org with branches has exactly one primary
+      // -- asserted before Step 2's migration ran), but fail safe rather
+      // than block a delivery mid-flow.
+      console.warn(
+        `[OrdersService] resolveDeliveryBranchId: org ${order.organisationId} has branches but no primary branch found`,
+      );
+      return { branchId: null, isFallback: false };
+    }
+    console.warn(
+      `[OrdersService] Legacy order ${order.id} has no branch_id; falling back to primary branch ${primary.id} (${primary.name})`,
+    );
+    return { branchId: primary.id, isFallback: true };
+  }
 
   // Order.organisationId is a plain FK (no ORM relation defined on the
   // entity), and the clinic's name is never otherwise present anywhere in
@@ -861,8 +900,10 @@ export class OrdersService {
       if (order.items && order.items.length > 0) {
         const deliveredItems = order.items.filter((item) => item.packedQuantity > 0);
         if (deliveredItems.length > 0) {
+          const { branchId: deliveryBranchId, isFallback } = await this.resolveDeliveryBranchId(order);
           await this.inventoryService.addStock(
             order.organisationId,
+            deliveryBranchId,
             deliveredItems.map((item) => ({
               productId: item.productId,
               sku: item.productSku,
@@ -870,6 +911,7 @@ export class OrdersService {
               quantity: item.packedQuantity,
               unitPrice: Number(item.unitPrice),
               orderId: order.id,
+              movementNote: isFallback ? 'branch_fallback:legacy_order_no_branch_id' : null,
             })),
           );
         }

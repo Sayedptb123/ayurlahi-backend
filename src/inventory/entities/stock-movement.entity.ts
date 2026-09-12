@@ -39,12 +39,33 @@ export class StockMovement {
   @JoinColumn({ name: 'organisation_id' })
   organisation: Organisation;
 
-  @Column({ name: 'inventory_item_id', type: 'uuid' })
-  inventoryItemId: string;
+  // Nullable as of ADR-005 Step 3 (2026-09-12-stock-movements-nullable-
+  // item.sql) -- a legacy inventory_items row, when one exists (every
+  // pre-cutover item). NULL for a movement against an item created after
+  // Step 3's cutover, which has no legacy row to point at -- branchId
+  // below is the reference for those.
+  @Column({ name: 'inventory_item_id', type: 'uuid', nullable: true })
+  inventoryItemId: string | null;
 
-  @ManyToOne(() => InventoryItem, { onDelete: 'CASCADE' })
+  @ManyToOne(() => InventoryItem, { onDelete: 'CASCADE', nullable: true })
   @JoinColumn({ name: 'inventory_item_id' })
-  inventoryItem: InventoryItem;
+  inventoryItem: InventoryItem | null;
+
+  // ADR-005 Step 2/3 -- which branch this movement affected. NULL for a
+  // branch-less org (Invariant 2), populated for every movement recorded
+  // through the new item-master/branch-stock code path regardless of
+  // whether inventoryItemId is also set.
+  @Column({ name: 'branch_id', type: 'uuid', nullable: true })
+  branchId: string | null;
+
+  // ADR-005 Step 3 -- which inventory_branch_stock row this movement is
+  // for. NULL for a legacy movement (inventoryItemId set instead);
+  // populated for every movement recorded through the new
+  // item-master/branch-stock code path. The two are mutually exclusive in
+  // practice, not enforced at the DB level -- InventoryService always sets
+  // exactly one.
+  @Column({ name: 'inventory_branch_stock_id', type: 'uuid', nullable: true })
+  inventoryBranchStockId: string | null;
 
   @Column({ name: 'movement_type', type: 'varchar', length: 30 })
   movementType: StockMovementType;

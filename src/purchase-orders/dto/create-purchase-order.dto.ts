@@ -12,9 +12,16 @@ import {
 import { Type } from 'class-transformer';
 
 export class CreatePurchaseOrderItemDto {
+  // Legacy -- resolves against inventory_items. Left for backward
+  // compatibility; new callers should use itemMasterId instead.
   @IsUUID()
   @IsOptional()
   itemId?: string;
+
+  // ADR-005 Step 3 -- resolves against inventory_item_masters.
+  @IsUUID()
+  @IsOptional()
+  itemMasterId?: string;
 
   @IsString()
   @IsNotEmpty()
@@ -30,6 +37,13 @@ export class CreatePurchaseOrderItemDto {
 }
 
 export class CreatePurchaseOrderDto {
+  // ADR-005 Step 3 -- resolved server-side via
+  // BranchVisibilityService.resolveBranchIdForWrite, same rule as every
+  // other inventory write path.
+  @IsOptional()
+  @IsUUID()
+  branchId?: string | null;
+
   @IsUUID()
   @IsNotEmpty()
   supplierId: string;

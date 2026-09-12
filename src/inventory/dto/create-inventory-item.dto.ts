@@ -10,6 +10,17 @@ import {
 } from 'class-validator';
 
 export class CreateInventoryItemDto {
+  // ADR-005 Step 3 -- only meaningful for a per-branch org (see
+  // BranchVisibilityService.resolveBranchIdForWrite); ignored for every
+  // org still on the default 'shared' inventory policy, which today means
+  // every org (PMS included -- flipping it is deferred to Step 4). Kept as
+  // one flat DTO rather than split into item-master/branch-stock request
+  // bodies, since the existing frontend sends one flat object and isn't
+  // being changed in this step.
+  @IsOptional()
+  @IsUUID()
+  branchId?: string | null;
+
   @IsString()
   @IsNotEmpty()
   name: string;
@@ -75,6 +86,11 @@ export class CreateInventoryItemDto {
 }
 
 export class UpdateInventoryItemDto {
+  // ADR-005 Step 3 -- same as CreateInventoryItemDto.branchId.
+  @IsOptional()
+  @IsUUID()
+  branchId?: string | null;
+
   @IsString()
   @IsOptional()
   name?: string;

@@ -1,10 +1,11 @@
-import { Injectable } from '@nestjs/common';
+import { ForbiddenException, Injectable, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { IsNull, Repository } from 'typeorm';
 import { Staff } from '../staff/entities/staff.entity';
 import { StaffBranchAssignment } from '../staff-branch-assignments/entities/staff-branch-assignment.entity';
 import { OrganisationSettingsService } from '../organisation-settings/organisation-settings.service';
-import { PatientVisibility } from '../organisation-settings/entities/organisation-settings.entity';
+import { PatientVisibility, InventoryPolicy } from '../organisation-settings/entities/organisation-settings.entity';
+import { Branch } from '../branches/entities/branch.entity';
 
 // Organisation leadership roles are never branch-scoped — an OWNER/ADMIN/MANAGER
 // has no `staff` row in most orgs (they're not front-line staff), and even when
@@ -25,6 +26,8 @@ export class BranchVisibilityService {
     private readonly staffRepository: Repository<Staff>,
     @InjectRepository(StaffBranchAssignment)
     private readonly assignmentsRepository: Repository<StaffBranchAssignment>,
+    @InjectRepository(Branch)
+    private readonly branchesRepository: Repository<Branch>,
   ) {}
 
   // Returns:
@@ -43,14 +46,36 @@ export class BranchVisibilityService {
     role?: string,
   ): Promise<string[] | null> {
     if (!organisationId) return null;
-
     const settings = await this.organisationSettingsService.getOrCreate(organisationId);
-    if (settings.patientVisibility !== PatientVisibility.ISOLATED) {
-      return null;
-    }
+    if (settings.patientVisibility !== PatientVisibility.ISOLATED) return null;
+    return this.resolveViaAssignments(userId, organisationId, role);
+  }
 
+  // ADR-005 Step 3 — same contract and same fail-closed rule as
+  // resolveVisibleBranchIds above, but gated on inventoryPolicy instead of
+  // patientVisibility. Deliberately NOT derived from patientVisibility —
+  // an org's patient and inventory visibility are independent decisions
+  // (Invariant 1 of Step3_Inventory_Service_Cutover_Implementation_Plan.md).
+  async resolveVisibleBranchIdsForInventory(
+    userId: string | undefined,
+    organisationId: string | undefined,
+    role?: string,
+  ): Promise<string[] | null> {
+    if (!organisationId) return null;
+    const settings = await this.organisationSettingsService.getOrCreate(organisationId);
+    if (settings.inventoryPolicy !== InventoryPolicy.PER_BRANCH) return null;
+    return this.resolveViaAssignments(userId, organisationId, role);
+  }
+
+  // Shared tail of both resolvers above — same staff_branch_assignments
+  // lookup and ORG_WIDE_ROLES exemption regardless of which policy field
+  // gated entry into it.
+  private async resolveViaAssignments(
+    userId: string | undefined,
+    organisationId: string,
+    role?: string,
+  ): Promise<string[] | null> {
     if (role && ORG_WIDE_ROLES.has(role)) return null;
-
     if (!userId) return [];
 
     const staff = await this.staffRepository.findOne({
@@ -62,5 +87,55 @@ export class BranchVisibilityService {
       where: { staffId: staff.id, organisationId, isActive: true },
     });
     return assignments.map((a) => a.branchId);
+  }
+
+  // ADR-005 Step 3 (§1.5) — the single choke point every inventory/purchase-
+  // order WRITE path resolves its branchId through. A client-supplied
+  // branchId is a request, never a trusted value: this method is the only
+  // place that turns "what the caller asked for" into "what's actually
+  // written". Throws rather than returning an ambiguous value, since a
+  // write (unlike a read) has no safe default to fall back to.
+  async resolveBranchIdForWrite(
+    organisationId: string,
+    userId: string | undefined,
+    role: string | undefined,
+    requestedBranchId?: string | null,
+  ): Promise<string | null> {
+    const settings = await this.organisationSettingsService.getOrCreate(organisationId);
+    const branchCount = await this.branchesRepository.count({
+      where: { organisationId, deletedAt: IsNull() },
+    });
+
+    // Not a per-branch org (the common case today), or a per-branch org
+    // that somehow has zero branches (shouldn't happen -- inventoryPolicy
+    // can only become PER_BRANCH at the moment a branch is created -- but
+    // handled defensively rather than assumed impossible): every write is
+    // organisation-level. A requested branchId is ignored, not honored --
+    // this is what keeps Invariant 2 true even under a stale/malformed
+    // client request.
+    if (settings.inventoryPolicy !== InventoryPolicy.PER_BRANCH || branchCount === 0) {
+      return null;
+    }
+
+    if (!requestedBranchId) {
+      throw new BadRequestException(
+        'This organisation tracks inventory per branch — a branchId is required for this action.',
+      );
+    }
+
+    const branch = await this.branchesRepository.findOne({
+      where: { id: requestedBranchId, organisationId, deletedAt: IsNull() },
+    });
+    if (!branch) {
+      throw new BadRequestException('Branch not found for this organisation.');
+    }
+
+    if (role && ORG_WIDE_ROLES.has(role)) return branch.id;
+
+    const visible = await this.resolveViaAssignments(userId, organisationId, role);
+    if (visible !== null && !visible.includes(branch.id)) {
+      throw new ForbiddenException('You do not have access to this branch.');
+    }
+    return branch.id;
   }
 }

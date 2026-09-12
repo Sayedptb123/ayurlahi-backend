@@ -2,14 +2,18 @@ import {
   Injectable,
   NotFoundException,
   BadRequestException,
+  ForbiddenException,
+  ConflictException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In } from 'typeorm';
-import { InventoryItem } from './entities/inventory-item.entity';
+import { Repository, In, IsNull } from 'typeorm';
+import { InventoryItemMaster } from './entities/inventory-item-master.entity';
+import { InventoryBranchStock } from './entities/inventory-branch-stock.entity';
 import {
   StockMovement,
   StockMovementType,
 } from './entities/stock-movement.entity';
+import { Branch } from '../branches/entities/branch.entity';
 import { OrganisationUser } from '../organisation-users/entities/organisation-user.entity';
 import { Product } from '../products/entities/product.entity';
 import {
@@ -17,30 +21,155 @@ import {
   UpdateInventoryItemDto,
 } from './dto/create-inventory-item.dto';
 import { NotificationsService } from '../notifications/notifications.service';
+import { BranchVisibilityService } from '../branch-visibility/branch-visibility.service';
+
+// ADR-005 Step 3 — the shape every read endpoint returns, unchanged from
+// the pre-cutover InventoryItem entity's fields (see
+// Step3_Inventory_Service_Cutover_Implementation_Plan.md §0.2 / §4).
+// Existing frontend (InventoryScreen.tsx etc.) is not touched this step
+// and must keep working against this exact shape.
+export interface LegacyShapedItem {
+  id: string;
+  organisationId: string;
+  name: string;
+  sku: string | null;
+  description: string | null;
+  category: string | null;
+  productId: string | null;
+  batchNumber: string | null;
+  expiryDate: string | null;
+  hsnCode: string | null;
+  gstRate: number | null;
+  unit: string;
+  currentStock: number;
+  minStockLevel: number;
+  unitPrice: number | null;
+  costPrice: number | null;
+  isActive: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+  deletedAt: Date | null;
+}
 
 @Injectable()
 export class InventoryService {
   constructor(
-    @InjectRepository(InventoryItem)
-    private readonly inventoryRepository: Repository<InventoryItem>,
+    @InjectRepository(InventoryItemMaster)
+    private readonly masterRepository: Repository<InventoryItemMaster>,
+    @InjectRepository(InventoryBranchStock)
+    private readonly stockRepository: Repository<InventoryBranchStock>,
     @InjectRepository(StockMovement)
     private readonly stockMovementRepository: Repository<StockMovement>,
+    @InjectRepository(Branch)
+    private readonly branchesRepository: Repository<Branch>,
     @InjectRepository(OrganisationUser)
     private readonly orgUserRepository: Repository<OrganisationUser>,
     @InjectRepository(Product)
     private readonly productRepository: Repository<Product>,
     private readonly notificationsService: NotificationsService,
-  ) { }
+    private readonly branchVisibilityService: BranchVisibilityService,
+  ) {}
 
-  /**
-   * Phase 24C.1 — append a stock-movement ledger row. Best-effort: a ledger
-   * failure must never break the stock change itself, so errors are swallowed.
-   */
+  // --- shared helpers ---------------------------------------------------
+
+  private toLegacyShape(master: InventoryItemMaster, stock: {
+    currentStock: number;
+    minStockLevel: number;
+    batchNumber: string | null;
+    expiryDate: string | null;
+  }): LegacyShapedItem {
+    return {
+      id: master.id,
+      organisationId: master.organisationId,
+      name: master.name,
+      sku: master.sku,
+      description: master.description,
+      category: master.category,
+      productId: master.productId,
+      batchNumber: stock.batchNumber,
+      expiryDate: stock.expiryDate,
+      hsnCode: master.hsnCode,
+      gstRate: master.gstRate,
+      unit: master.unit,
+      currentStock: stock.currentStock,
+      minStockLevel: stock.minStockLevel,
+      unitPrice: master.unitPrice,
+      costPrice: master.costPrice,
+      isActive: master.isActive,
+      createdAt: master.createdAt,
+      updatedAt: master.updatedAt,
+      deletedAt: master.deletedAt,
+    };
+  }
+
+  /** Aggregates one master's branch-stock rows into a single legacy-shaped
+   * view: sums current_stock/min_stock_level across the given rows (a
+   * meaningful "total" for both); batch/expiry only carry over when
+   * exactly one row is being aggregated (per-batch fields don't have a
+   * sensible combined value across branches). */
+  private aggregateStock(rows: InventoryBranchStock[]) {
+    if (rows.length === 0) {
+      return { currentStock: 0, minStockLevel: 10, batchNumber: null, expiryDate: null };
+    }
+    if (rows.length === 1) {
+      return {
+        currentStock: rows[0].currentStock,
+        minStockLevel: rows[0].minStockLevel,
+        batchNumber: rows[0].batchNumber,
+        expiryDate: rows[0].expiryDate,
+      };
+    }
+    return {
+      currentStock: rows.reduce((sum, r) => sum + r.currentStock, 0),
+      minStockLevel: rows.reduce((sum, r) => sum + r.minStockLevel, 0),
+      batchNumber: null,
+      expiryDate: null,
+    };
+  }
+
+  /** Read-side branch check -- verifies a caller-requested branchId is one
+   * they're actually allowed to see, without the write-side's throwing
+   * "you must specify a branch" requirement (an omitted branchId on a read
+   * legitimately means "sum what I can see"). */
+  private async assertBranchReadable(
+    organisationId: string,
+    userId: string | undefined,
+    role: string | undefined,
+    branchId: string,
+  ): Promise<void> {
+    const branch = await this.branchesRepository.findOne({
+      where: { id: branchId, organisationId, deletedAt: IsNull() },
+    });
+    if (!branch) throw new NotFoundException('Branch not found for this organisation');
+
+    const visible = await this.branchVisibilityService.resolveVisibleBranchIdsForInventory(
+      userId,
+      organisationId,
+      role,
+    );
+    if (visible !== null && !visible.includes(branchId)) {
+      throw new ForbiddenException('You do not have access to this branch');
+    }
+  }
+
+  private async assertProductExists(productId: string): Promise<void> {
+    const product = await this.productRepository.findOne({ where: { id: productId } });
+    if (!product) {
+      throw new BadRequestException('Linked marketplace product not found');
+    }
+  }
+
+  /** ADR-005 Step 3 -- writes exclusively to stock_movements' new columns
+   * (branchId / inventoryBranchStockId). Never touches inventoryItemId --
+   * that stays legacy-only, per the authoritative-source rule. Best-effort
+   * (matches the pre-cutover method's behavior): a ledger failure must
+   * never block the stock change itself. */
   private async recordMovement(m: {
     organisationId: string;
-    inventoryItemId: string;
+    branchId: string | null;
+    inventoryBranchStockId: string;
     movementType: StockMovementType;
-    quantity: number; // signed delta
+    quantity: number;
     balanceAfter: number;
     unitCost?: number | null;
     referenceType?: string | null;
@@ -48,11 +177,13 @@ export class InventoryService {
     note?: string | null;
   }): Promise<void> {
     try {
-      if (m.quantity === 0) return; // nothing changed
+      if (m.quantity === 0) return;
       await this.stockMovementRepository.save(
         this.stockMovementRepository.create({
           organisationId: m.organisationId,
-          inventoryItemId: m.inventoryItemId,
+          branchId: m.branchId,
+          inventoryBranchStockId: m.inventoryBranchStockId,
+          inventoryItemId: null,
           movementType: m.movementType,
           quantity: m.quantity,
           balanceAfter: m.balanceAfter,
@@ -67,176 +198,343 @@ export class InventoryService {
     }
   }
 
-  /** Phase 24C.1 — movement history for one item (newest first), org-scoped. */
-  async getMovements(
+  private async lowStockNotify(
     organisationId: string,
-    id: string,
-  ): Promise<StockMovement[]> {
-    await this.findOne(organisationId, id); // enforces org ownership / 404
-    return this.stockMovementRepository.find({
-      where: { organisationId, inventoryItemId: id },
-      order: { createdAt: 'DESC' },
-      take: 100,
+    itemName: string,
+    stock: InventoryBranchStock,
+  ): Promise<void> {
+    if (stock.currentStock > stock.minStockLevel) return;
+    const orgUsers = await this.orgUserRepository.find({
+      where: { organisationId, role: In(['OWNER', 'MANAGER', 'ADMIN']), isActive: true },
     });
+    const userIds = orgUsers.map((ou) => ou.userId).filter(Boolean);
+    if (userIds.length === 0) return;
+
+    let branchLabel = '';
+    if (stock.branchId) {
+      const branch = await this.branchesRepository.findOne({ where: { id: stock.branchId } });
+      if (branch) branchLabel = ` (${branch.name})`;
+    }
+
+    const isOutOfStock = stock.currentStock === 0;
+    this.notificationsService.sendToUsers({
+      userIds,
+      title: isOutOfStock ? 'Out of Stock' : 'Low Stock Alert',
+      body: isOutOfStock
+        ? `${itemName}${branchLabel} is completely out of stock. Please reorder immediately.`
+        : `${itemName}${branchLabel} is running low (${stock.currentStock} remaining)`,
+      data: { inventoryItemId: stock.itemMasterId, type: isOutOfStock ? 'out_of_stock' : 'low_stock' },
+    }).catch(() => {});
   }
 
-  /**
-   * Phase 24A.0 — verify a linked marketplace product exists (and isn't
-   * soft-deleted; TypeORM excludes deleted rows by default). Only called when a
-   * productId is actually supplied; null/undefined leaves the item unlinked.
-   */
-  private async assertProductExists(productId: string): Promise<void> {
-    const product = await this.productRepository.findOne({
-      where: { id: productId },
-    });
-    if (!product) {
-      throw new BadRequestException('Linked marketplace product not found');
-    }
-  }
+  // --- public API ---------------------------------------------------
 
   async create(
     organisationId: string,
-    createInventoryItemDto: CreateInventoryItemDto,
-  ): Promise<InventoryItem> {
-    if (createInventoryItemDto.productId) {
-      await this.assertProductExists(createInventoryItemDto.productId);
+    dto: CreateInventoryItemDto,
+    userId: string,
+    role: string,
+  ): Promise<LegacyShapedItem> {
+    if (dto.productId) {
+      await this.assertProductExists(dto.productId);
     }
-    const item = this.inventoryRepository.create({
-      ...createInventoryItemDto,
+    const branchId = await this.branchVisibilityService.resolveBranchIdForWrite(
       organisationId,
+      userId,
+      role,
+      dto.branchId,
+    );
+
+    const master = this.masterRepository.create({
+      organisationId,
+      name: dto.name,
+      sku: dto.sku ?? null,
+      description: dto.description ?? null,
+      category: dto.category ?? null,
+      unit: dto.unit,
+      unitPrice: dto.unitPrice ?? null,
+      costPrice: dto.costPrice ?? null,
+      hsnCode: dto.hsnCode ?? null,
+      gstRate: dto.gstRate ?? null,
+      productId: dto.productId ?? null,
+      isActive: true,
+      legacyItemId: null,
     });
-    const saved = await this.inventoryRepository.save(item);
-    // Phase 24C.1 — opening balance as the first ledger entry
-    if (saved.currentStock > 0) {
+    let savedMaster: InventoryItemMaster;
+    try {
+      savedMaster = await this.masterRepository.save(master);
+    } catch (err: any) {
+      if (err?.code === '23505') {
+        throw new ConflictException(
+          'An item with this name or SKU already exists — edit the existing item instead of creating a duplicate.',
+        );
+      }
+      throw err;
+    }
+
+    const stock = await this.stockRepository.save(
+      this.stockRepository.create({
+        organisationId,
+        branchId,
+        itemMasterId: savedMaster.id,
+        currentStock: dto.currentStock ?? 0,
+        minStockLevel: dto.minStockLevel ?? 10,
+        batchNumber: dto.batchNumber ?? null,
+        expiryDate: dto.expiryDate ?? null,
+      }),
+    );
+
+    if (stock.currentStock > 0) {
       await this.recordMovement({
         organisationId,
-        inventoryItemId: saved.id,
+        branchId,
+        inventoryBranchStockId: stock.id,
         movementType: 'initial',
-        quantity: saved.currentStock,
-        balanceAfter: saved.currentStock,
-        unitCost: saved.costPrice ?? saved.unitPrice ?? null,
+        quantity: stock.currentStock,
+        balanceAfter: stock.currentStock,
+        unitCost: savedMaster.costPrice ?? savedMaster.unitPrice ?? null,
         referenceType: 'manual',
         note: 'Opening stock',
       });
     }
-    return saved;
+
+    return this.toLegacyShape(savedMaster, stock);
   }
 
   async findAll(
     organisationId: string,
-    query?: { page?: number; limit?: number; category?: string; isActive?: boolean },
+    query: { page?: number; limit?: number; category?: string; isActive?: boolean; branchId?: string },
+    userId: string | undefined,
+    role: string | undefined,
   ): Promise<{
-    data: InventoryItem[];
+    data: LegacyShapedItem[];
     pagination: { page: number; limit: number; total: number; totalPages: number };
   }> {
     const page = query?.page ?? 1;
     const limit = query?.limit ?? 20;
     const skip = (page - 1) * limit;
 
-    const queryBuilder = this.inventoryRepository
-      .createQueryBuilder('item')
-      .where('item.organisation_id = :organisationId', { organisationId });
+    const qb = this.masterRepository
+      .createQueryBuilder('m')
+      .where('m.organisation_id = :organisationId', { organisationId });
+    if (query?.category) qb.andWhere('m.category = :category', { category: query.category });
+    if (query?.isActive !== undefined) qb.andWhere('m.is_active = :isActive', { isActive: query.isActive });
 
-    if (query?.category) {
-      queryBuilder.andWhere('item.category = :category', { category: query.category });
+    const total = await qb.getCount();
+    qb.skip(skip).take(limit).orderBy('m.name', 'ASC');
+    const masters = await qb.getMany();
+    if (masters.length === 0) {
+      return { data: [], pagination: { page, limit, total, totalPages: Math.ceil(total / limit) } };
     }
-    if (query?.isActive !== undefined) {
-      queryBuilder.andWhere('item.is_active = :isActive', { isActive: query.isActive });
+
+    const masterIds = masters.map((m) => m.id);
+    const stockQb = this.stockRepository
+      .createQueryBuilder('s')
+      .where('s.item_master_id IN (:...masterIds)', { masterIds })
+      .andWhere('s.deleted_at IS NULL');
+
+    if (query?.branchId) {
+      await this.assertBranchReadable(organisationId, userId, role, query.branchId);
+      stockQb.andWhere('s.branch_id = :branchId', { branchId: query.branchId });
+    } else {
+      const visible = await this.branchVisibilityService.resolveVisibleBranchIdsForInventory(
+        userId,
+        organisationId,
+        role,
+      );
+      if (visible !== null) {
+        // Per-branch org, scoped staff: never "all branches regardless of
+        // visibility" (Invariant 2) -- an empty array here correctly sums
+        // to zero for every item, not everything.
+        if (visible.length === 0) {
+          const data = masters.map((m) => this.toLegacyShape(m, this.aggregateStock([])));
+          return { data, pagination: { page, limit, total, totalPages: Math.ceil(total / limit) } };
+        }
+        stockQb.andWhere('s.branch_id IN (:...visible)', { visible });
+      }
+      // visible === null: not a per-branch org, or an org-wide leadership
+      // role -- sum across every branch the org actually has (or its one
+      // branch-less row). Still not an authorization bypass: for a
+      // non-per-branch org there is only ever the implicit org-wide bucket.
     }
 
-    const total = await queryBuilder.getCount();
-    queryBuilder.skip(skip).take(limit).orderBy('item.name', 'ASC');
-    const data = await queryBuilder.getMany();
+    const stockRows = await stockQb.getMany();
+    const byMaster = new Map<string, InventoryBranchStock[]>();
+    for (const row of stockRows) {
+      const list = byMaster.get(row.itemMasterId) ?? [];
+      list.push(row);
+      byMaster.set(row.itemMasterId, list);
+    }
 
+    const data = masters.map((m) => this.toLegacyShape(m, this.aggregateStock(byMaster.get(m.id) ?? [])));
     return { data, pagination: { page, limit, total, totalPages: Math.ceil(total / limit) } };
   }
 
-  async findOne(organisationId: string, id: string): Promise<InventoryItem> {
-    const item = await this.inventoryRepository.findOne({
-      where: { id, organisationId },
-    });
+  async findOne(
+    organisationId: string,
+    id: string,
+    userId?: string,
+    role?: string,
+    branchId?: string,
+  ): Promise<LegacyShapedItem> {
+    const master = await this.masterRepository.findOne({ where: { id, organisationId } });
+    if (!master) throw new NotFoundException(`Inventory item with ID ${id} not found`);
 
-    if (!item) {
-      throw new NotFoundException(`Inventory item with ID ${id} not found`);
+    const stockQb = this.stockRepository
+      .createQueryBuilder('s')
+      .where('s.item_master_id = :id', { id })
+      .andWhere('s.deleted_at IS NULL');
+
+    if (branchId) {
+      await this.assertBranchReadable(organisationId, userId, role, branchId);
+      stockQb.andWhere('s.branch_id = :branchId', { branchId });
+    } else {
+      const visible = await this.branchVisibilityService.resolveVisibleBranchIdsForInventory(
+        userId,
+        organisationId,
+        role,
+      );
+      if (visible !== null) {
+        if (visible.length === 0) return this.toLegacyShape(master, this.aggregateStock([]));
+        stockQb.andWhere('s.branch_id IN (:...visible)', { visible });
+      }
     }
 
-    return item;
+    const rows = await stockQb.getMany();
+    return this.toLegacyShape(master, this.aggregateStock(rows));
   }
 
   async update(
     organisationId: string,
     id: string,
-    updateInventoryItemDto: UpdateInventoryItemDto,
-  ): Promise<InventoryItem> {
-    const item = await this.findOne(organisationId, id);
+    dto: UpdateInventoryItemDto,
+    userId: string,
+    role: string,
+  ): Promise<LegacyShapedItem> {
+    const master = await this.masterRepository.findOne({ where: { id, organisationId } });
+    if (!master) throw new NotFoundException(`Inventory item with ID ${id} not found`);
 
-    if (updateInventoryItemDto.productId) {
-      await this.assertProductExists(updateInventoryItemDto.productId);
+    if (dto.productId) await this.assertProductExists(dto.productId);
+
+    // Catalog fields -- affect every branch.
+    if (dto.name !== undefined) master.name = dto.name;
+    if (dto.sku !== undefined) master.sku = dto.sku;
+    if (dto.description !== undefined) master.description = dto.description;
+    if (dto.category !== undefined) master.category = dto.category;
+    if (dto.productId !== undefined) master.productId = dto.productId;
+    if (dto.hsnCode !== undefined) master.hsnCode = dto.hsnCode;
+    if (dto.gstRate !== undefined) master.gstRate = dto.gstRate;
+    if (dto.unit !== undefined) master.unit = dto.unit;
+    if (dto.unitPrice !== undefined) master.unitPrice = dto.unitPrice;
+    if (dto.costPrice !== undefined) master.costPrice = dto.costPrice;
+    if (dto.isActive !== undefined) master.isActive = dto.isActive;
+    let savedMaster: InventoryItemMaster;
+    try {
+      savedMaster = await this.masterRepository.save(master);
+    } catch (err: any) {
+      if (err?.code === '23505') {
+        throw new ConflictException('An item with this name or SKU already exists for this organisation.');
+      }
+      throw err;
     }
 
-    const previousStock = item.currentStock;
-    Object.assign(item, updateInventoryItemDto);
-    const saved = await this.inventoryRepository.save(item);
+    // Stock fields -- affect exactly one branch, resolved the same way
+    // every other write path resolves it.
+    const branchId = await this.branchVisibilityService.resolveBranchIdForWrite(
+      organisationId,
+      userId,
+      role,
+      dto.branchId,
+    );
+    let stock = await this.stockRepository.findOne({
+      where: { itemMasterId: id, branchId: branchId ?? IsNull() },
+    });
+    if (!stock) {
+      stock = this.stockRepository.create({
+        organisationId,
+        branchId,
+        itemMasterId: id,
+        currentStock: 0,
+        minStockLevel: 10,
+      });
+    }
+    const previousStock = stock.currentStock;
+    if (dto.currentStock !== undefined) stock.currentStock = dto.currentStock;
+    if (dto.minStockLevel !== undefined) stock.minStockLevel = dto.minStockLevel;
+    if (dto.batchNumber !== undefined) stock.batchNumber = dto.batchNumber;
+    if (dto.expiryDate !== undefined) stock.expiryDate = dto.expiryDate;
+    const savedStock = await this.stockRepository.save(stock);
 
-    // Phase 24C.1 — record a manual adjustment for any stock delta
-    const delta = saved.currentStock - previousStock;
+    const delta = savedStock.currentStock - previousStock;
     if (delta !== 0) {
       await this.recordMovement({
         organisationId,
-        inventoryItemId: saved.id,
+        branchId,
+        inventoryBranchStockId: savedStock.id,
         movementType: 'manual_adjustment',
         quantity: delta,
-        balanceAfter: saved.currentStock,
-        unitCost: saved.costPrice ?? saved.unitPrice ?? null,
+        balanceAfter: savedStock.currentStock,
+        unitCost: savedMaster.costPrice ?? savedMaster.unitPrice ?? null,
         referenceType: 'manual',
       });
+      await this.lowStockNotify(organisationId, savedMaster.name, savedStock);
     }
 
-    // Send stock alert if current stock is at or below minimum
-    if (saved.currentStock <= saved.minStockLevel) {
-      this.orgUserRepository
-        .find({ where: { organisationId, role: In(['OWNER', 'MANAGER', 'ADMIN']), isActive: true } })
-        .then((orgUsers) => {
-          const userIds = orgUsers.map((ou) => ou.userId).filter(Boolean);
-          if (userIds.length > 0) {
-            const isOutOfStock = saved.currentStock === 0;
-            this.notificationsService.sendToUsers({
-              userIds,
-              title: isOutOfStock ? 'Out of Stock' : 'Low Stock Alert',
-              body: isOutOfStock
-                ? `${saved.name} is completely out of stock. Please reorder immediately.`
-                : `${saved.name} is running low (${saved.currentStock} ${saved.unit ?? 'units'} remaining)`,
-              data: { inventoryItemId: saved.id, type: isOutOfStock ? 'out_of_stock' : 'low_stock' },
-            }).catch(() => {});
-          }
-        })
-        .catch(() => {});
+    return this.toLegacyShape(savedMaster, savedStock);
+  }
+
+  async remove(
+    organisationId: string,
+    id: string,
+    userId: string,
+    role: string,
+    branchId?: string,
+  ): Promise<void> {
+    const master = await this.masterRepository.findOne({ where: { id, organisationId } });
+    if (!master) throw new NotFoundException(`Inventory item with ID ${id} not found`);
+
+    const resolvedBranchId = await this.branchVisibilityService.resolveBranchIdForWrite(
+      organisationId,
+      userId,
+      role,
+      branchId,
+    );
+    const stock = await this.stockRepository.findOne({
+      where: { itemMasterId: id, branchId: resolvedBranchId ?? IsNull() },
+    });
+    if (stock) await this.stockRepository.softDelete(stock.id);
+
+    const remaining = await this.stockRepository.count({
+      where: { itemMasterId: id, deletedAt: IsNull() },
+    });
+    if (remaining === 0) {
+      await this.masterRepository.softDelete(master.id);
     }
-
-    return saved;
   }
 
-  async remove(organisationId: string, id: string): Promise<void> {
-    const item = await this.findOne(organisationId, id);
-    await this.inventoryRepository.softDelete(item.id);
-  }
-
-  async checkLowStock(organisationId: string): Promise<InventoryItem[]> {
-    return await this.inventoryRepository
-      .createQueryBuilder('item')
-      .where('item.organisation_id = :organisationId', { organisationId })
-      .andWhere('item.current_stock <= item.min_stock_level')
-      .getMany();
+  async checkLowStock(
+    organisationId: string,
+    userId: string | undefined,
+    role: string | undefined,
+    branchId?: string,
+  ): Promise<LegacyShapedItem[]> {
+    const { data } = await this.findAll(organisationId, { limit: 100000, isActive: true, branchId }, userId, role);
+    return data.filter((item) => item.currentStock <= item.minStockLevel);
   }
 
   /**
-   * Phase 24A.2 — stock-in for a delivered marketplace order. Matches the
-   * clinic's inventory by the authoritative `product_id` link first (so stock
-   * lands on the same item the "Order Now" came from, 24A.1), then falls back to
-   * SKU, then auto-creates. When matched by SKU, backfills the product link.
+   * ADR-005 Step 3 — stock-in for a delivered marketplace order. `branchId`
+   * is required at the type level as `string | null`: the caller
+   * (OrdersService, §6 of the implementation plan) must have already
+   * resolved it (order.branchId directly, a genuinely branch-less org's
+   * null, or the explicit legacy-order primary-branch fallback) --
+   * addStock never re-derives or re-validates it from a request, since it
+   * only ever receives values this codebase already resolved, never
+   * external input.
    */
   async addStock(
     organisationId: string,
+    branchId: string | null,
     items: Array<{
       productId?: string | null;
       sku?: string;
@@ -245,60 +543,104 @@ export class InventoryService {
       unitPrice: number;
       unit?: string;
       orderId?: string | null;
+      movementNote?: string | null;
     }>,
   ): Promise<void> {
     for (const item of items) {
-      let inventoryItem: InventoryItem | null = null;
+      let master: InventoryItemMaster | null = null;
 
-      // 1. Prefer the marketplace product link (Phase 24A).
       if (item.productId) {
-        inventoryItem = await this.inventoryRepository.findOne({
-          where: { organisationId, productId: item.productId },
-        });
+        master = await this.masterRepository.findOne({ where: { organisationId, productId: item.productId } });
       }
-
-      // 2. Fall back to SKU; backfill the link if it was unset.
-      if (!inventoryItem && item.sku) {
-        inventoryItem = await this.inventoryRepository.findOne({
-          where: { organisationId, sku: item.sku },
-        });
-        if (inventoryItem && item.productId && !inventoryItem.productId) {
-          inventoryItem.productId = item.productId;
+      if (!master && item.sku) {
+        master = await this.masterRepository.findOne({ where: { organisationId, sku: item.sku } });
+        if (master && item.productId && !master.productId) {
+          master.productId = item.productId;
         }
       }
 
-      if (inventoryItem) {
-        inventoryItem.currentStock += item.quantity;
-        // Keep latest purchase price (simple; not weighted average)
-        inventoryItem.unitPrice = item.unitPrice;
-        await this.inventoryRepository.save(inventoryItem);
-      } else {
-        // 3. Auto-create, carrying the product link forward.
-        inventoryItem = this.inventoryRepository.create({
+      if (!master) {
+        master = this.masterRepository.create({
           organisationId,
           name: item.name,
-          sku: item.sku,
+          sku: item.sku ?? null,
           productId: item.productId ?? null,
-          currentStock: item.quantity,
-          unitPrice: item.unitPrice,
           unit: item.unit || 'Unit',
-          minStockLevel: 10,
+          unitPrice: item.unitPrice,
           costPrice: item.unitPrice,
+          isActive: true,
+          legacyItemId: null,
         });
-        await this.inventoryRepository.save(inventoryItem);
+      } else {
+        master.unitPrice = item.unitPrice; // latest purchase price, matches pre-cutover behavior
       }
+      master = await this.masterRepository.save(master);
 
-      // Phase 24C.1 — ledger the delivery stock-in
+      let stock = await this.stockRepository.findOne({
+        where: { itemMasterId: master.id, branchId: branchId ?? IsNull() },
+      });
+      if (!stock) {
+        stock = this.stockRepository.create({
+          organisationId,
+          branchId,
+          itemMasterId: master.id,
+          currentStock: 0,
+          minStockLevel: 10,
+        });
+      }
+      stock.currentStock += item.quantity;
+      stock = await this.stockRepository.save(stock);
+
       await this.recordMovement({
         organisationId,
-        inventoryItemId: inventoryItem.id,
+        branchId,
+        inventoryBranchStockId: stock.id,
         movementType: 'order_delivery',
         quantity: item.quantity,
-        balanceAfter: inventoryItem.currentStock,
+        balanceAfter: stock.currentStock,
         unitCost: item.unitPrice,
         referenceType: 'order',
         referenceId: item.orderId ?? null,
+        note: item.movementNote ?? null,
       });
     }
+  }
+
+  /** Merges legacy movements (pre-cutover, referenced via
+   * inventoryItemId/legacyItemId) with new movements (referenced via
+   * inventoryBranchStockId) so an item's full history survives the
+   * cutover point, not just what happened after it. */
+  async getMovements(
+    organisationId: string,
+    id: string,
+    userId?: string,
+    role?: string,
+    branchId?: string,
+  ): Promise<StockMovement[]> {
+    const master = await this.masterRepository.findOne({ where: { id, organisationId } });
+    if (!master) throw new NotFoundException(`Inventory item with ID ${id} not found`);
+
+    if (branchId) await this.assertBranchReadable(organisationId, userId, role, branchId);
+
+    const stockQb = this.stockRepository
+      .createQueryBuilder('s')
+      .where('s.item_master_id = :id', { id });
+    if (branchId) stockQb.andWhere('s.branch_id = :branchId', { branchId });
+    const stockRows = await stockQb.getMany();
+    const stockIds = stockRows.map((s) => s.id);
+
+    const qb = this.stockMovementRepository
+      .createQueryBuilder('sm')
+      .where('sm.organisation_id = :organisationId', { organisationId })
+      .andWhere(
+        master.legacyItemId
+          ? '(sm.inventory_branch_stock_id IN (:...stockIds) OR sm.inventory_item_id = :legacyId)'
+          : 'sm.inventory_branch_stock_id IN (:...stockIds)',
+        { stockIds: stockIds.length > 0 ? stockIds : ['00000000-0000-0000-0000-000000000000'], legacyId: master.legacyItemId },
+      )
+      .orderBy('sm.created_at', 'DESC')
+      .take(100);
+
+    return qb.getMany();
   }
 }

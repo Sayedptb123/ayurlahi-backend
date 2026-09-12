@@ -4,15 +4,18 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, DataSource } from 'typeorm';
+import { Repository, DataSource, IsNull } from 'typeorm';
 import { PurchaseOrder } from './entities/purchase-order.entity';
 import { PurchaseOrderItem } from './entities/purchase-order-item.entity';
 import {
   CreatePurchaseOrderDto,
   UpdatePurchaseOrderDto,
 } from './dto/create-purchase-order.dto';
+import { InventoryItemMaster } from '../inventory/entities/inventory-item-master.entity';
+import { InventoryBranchStock } from '../inventory/entities/inventory-branch-stock.entity';
 import { InventoryItem } from '../inventory/entities/inventory-item.entity';
 import { StockMovement } from '../inventory/entities/stock-movement.entity';
+import { BranchVisibilityService } from '../branch-visibility/branch-visibility.service';
 
 @Injectable()
 export class PurchaseOrdersService {
@@ -21,19 +24,29 @@ export class PurchaseOrdersService {
     private readonly poRepository: Repository<PurchaseOrder>,
     @InjectRepository(PurchaseOrderItem)
     private readonly poItemRepository: Repository<PurchaseOrderItem>,
-    @InjectRepository(InventoryItem)
-    private readonly inventoryRepository: Repository<InventoryItem>,
+    @InjectRepository(InventoryItemMaster)
+    private readonly masterRepository: Repository<InventoryItemMaster>,
+    @InjectRepository(InventoryBranchStock)
+    private readonly stockRepository: Repository<InventoryBranchStock>,
     private readonly dataSource: DataSource,
+    private readonly branchVisibilityService: BranchVisibilityService,
   ) {}
 
   async create(
     organisationId: string,
     createDto: CreatePurchaseOrderDto,
     userId: string,
+    role: string,
   ): Promise<PurchaseOrder> {
-    const { items: itemsDto, ...poData } = createDto;
+    const branchId = await this.branchVisibilityService.resolveBranchIdForWrite(
+      organisationId,
+      userId,
+      role,
+      createDto.branchId,
+    );
 
-    // Calculate totals
+    const { items: itemsDto, branchId: _ignored, ...poData } = createDto;
+
     let totalAmount = 0;
     const items = itemsDto.map((itemDto) => {
       const totalPrice = itemDto.quantity * itemDto.unitPrice;
@@ -47,6 +60,7 @@ export class PurchaseOrdersService {
     const po = this.poRepository.create({
       ...poData,
       organisationId,
+      branchId,
       createdById: userId,
       totalAmount,
       items,
@@ -67,7 +81,7 @@ export class PurchaseOrdersService {
   async findOne(organisationId: string, id: string): Promise<PurchaseOrder> {
     const po = await this.poRepository.findOne({
       where: { id, organisationId },
-      relations: ['supplier', 'items', 'items.item'],
+      relations: ['supplier', 'items', 'items.item', 'items.itemMaster'],
     });
 
     if (!po) {
@@ -94,6 +108,13 @@ export class PurchaseOrdersService {
     return await this.poRepository.save(po);
   }
 
+  // ADR-005 Step 3 -- resolves/creates against the new item-master +
+  // branch-stock model (po.branchId, already resolved at create time --
+  // never re-resolved here). item.itemId (legacy) is left untouched;
+  // item.itemMasterId is what this method actually acts on. The one
+  // existing PO (CNS, PO-414905) has both null on its single item, so no
+  // existing data flows through either path -- this only affects POs
+  // created from here on.
   private async receivePurchaseOrder(po: PurchaseOrder): Promise<void> {
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
@@ -101,20 +122,55 @@ export class PurchaseOrdersService {
 
     try {
       for (const item of po.items) {
-        if (item.itemId) {
-          const inventoryItem = await queryRunner.manager.findOne(
-            InventoryItem,
-            {
-              where: { id: item.itemId },
-            },
-          );
+        if (item.itemMasterId) {
+          const master = await queryRunner.manager.findOne(InventoryItemMaster, {
+            where: { id: item.itemMasterId },
+          });
+          if (master) {
+            master.costPrice = item.unitPrice;
+            await queryRunner.manager.save(master);
 
+            let stock = await queryRunner.manager.findOne(InventoryBranchStock, {
+              where: { itemMasterId: master.id, branchId: po.branchId ?? IsNull() },
+            });
+            if (!stock) {
+              stock = queryRunner.manager.create(InventoryBranchStock, {
+                organisationId: po.organisationId,
+                branchId: po.branchId,
+                itemMasterId: master.id,
+                currentStock: 0,
+                minStockLevel: 10,
+              });
+            }
+            stock.currentStock += item.quantity;
+            await queryRunner.manager.save(stock);
+
+            await queryRunner.manager.save(
+              queryRunner.manager.create(StockMovement, {
+                organisationId: po.organisationId,
+                branchId: po.branchId,
+                inventoryBranchStockId: stock.id,
+                inventoryItemId: null,
+                movementType: 'purchase_receipt',
+                quantity: item.quantity,
+                balanceAfter: stock.currentStock,
+                unitCost: item.unitPrice,
+                referenceType: 'purchase_order',
+                referenceId: po.id,
+              }),
+            );
+          }
+        } else if (item.itemId) {
+          // Legacy path -- kept only so an already-in-flight PO created
+          // before this cutover (referencing the old inventory_items
+          // table) still receives correctly. No new PO populates itemId.
+          const inventoryItem = await queryRunner.manager.findOne(InventoryItem, {
+            where: { id: item.itemId },
+          });
           if (inventoryItem) {
             inventoryItem.currentStock += item.quantity;
-            inventoryItem.costPrice = item.unitPrice; // Update cost price with latest PO price
+            inventoryItem.costPrice = item.unitPrice;
             await queryRunner.manager.save(inventoryItem);
-
-            // Phase 24C.1 — ledger the purchase receipt in the same transaction
             await queryRunner.manager.save(
               queryRunner.manager.create(StockMovement, {
                 organisationId: po.organisationId,
@@ -130,7 +186,6 @@ export class PurchaseOrdersService {
           }
         }
 
-        // Update item received quantity
         item.receivedQuantity = item.quantity;
         await queryRunner.manager.save(item);
       }

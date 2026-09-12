@@ -32,7 +32,10 @@ export class PurchaseOrdersController {
     @Body() createDto: CreatePurchaseOrderDto,
     @Request() req,
   ) {
-    return this.poService.create(organisationId, createDto, req.user.id);
+    // Was req.user.id (pre-existing bug -- JwtStrategy sets userId, not
+    // id, so created_by was always saved null). Fixed in passing since
+    // this line needed touching anyway to add role for branch resolution.
+    return this.poService.create(organisationId, createDto, req.user.userId, req.user.role);
   }
 
   @Get()

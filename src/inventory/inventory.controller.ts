@@ -31,42 +31,57 @@ export class InventoryController {
   create(
     @Param('organisationId') organisationId: string,
     @Body() createInventoryItemDto: CreateInventoryItemDto,
+    @Request() req,
   ) {
-    console.log('[Inventory Controller] Creating item:', {
+    return this.inventoryService.create(
       organisationId,
-      dto: createInventoryItemDto,
-      hasProductId: 'productId' in createInventoryItemDto,
-    });
-    return this.inventoryService.create(organisationId, createInventoryItemDto);
+      createInventoryItemDto,
+      req.user.userId,
+      req.user.role,
+    );
   }
 
   @Get()
   findAll(
     @Param('organisationId') organisationId: string,
+    @Request() req,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
     @Query('category') category?: string,
     @Query('isActive') isActive?: string,
+    @Query('branchId') branchId?: string,
   ) {
-    return this.inventoryService.findAll(organisationId, {
-      page: page ? parseInt(page, 10) : undefined,
-      limit: limit ? parseInt(limit, 10) : undefined,
-      category,
-      isActive: isActive !== undefined ? isActive === 'true' : undefined,
-    });
+    return this.inventoryService.findAll(
+      organisationId,
+      {
+        page: page ? parseInt(page, 10) : undefined,
+        limit: limit ? parseInt(limit, 10) : undefined,
+        category,
+        isActive: isActive !== undefined ? isActive === 'true' : undefined,
+        branchId,
+      },
+      req.user?.userId,
+      req.user?.role,
+    );
   }
 
   @Get('low-stock')
-  checkLowStock(@Param('organisationId') organisationId: string) {
-    return this.inventoryService.checkLowStock(organisationId);
+  checkLowStock(
+    @Param('organisationId') organisationId: string,
+    @Request() req,
+    @Query('branchId') branchId?: string,
+  ) {
+    return this.inventoryService.checkLowStock(organisationId, req.user?.userId, req.user?.role, branchId);
   }
 
   @Get(':id')
   findOne(
     @Param('organisationId') organisationId: string,
     @Param('id') id: string,
+    @Request() req,
+    @Query('branchId') branchId?: string,
   ) {
-    return this.inventoryService.findOne(organisationId, id);
+    return this.inventoryService.findOne(organisationId, id, req.user?.userId, req.user?.role, branchId);
   }
 
   // Phase 24C.1 — stock-movement history for one item
@@ -74,8 +89,10 @@ export class InventoryController {
   getMovements(
     @Param('organisationId') organisationId: string,
     @Param('id') id: string,
+    @Request() req,
+    @Query('branchId') branchId?: string,
   ) {
-    return this.inventoryService.getMovements(organisationId, id);
+    return this.inventoryService.getMovements(organisationId, id, req.user?.userId, req.user?.role, branchId);
   }
 
   @Patch(':id')
@@ -84,17 +101,14 @@ export class InventoryController {
     @Param('organisationId') organisationId: string,
     @Param('id') id: string,
     @Body() updateInventoryItemDto: UpdateInventoryItemDto,
+    @Request() req,
   ) {
-    console.log('[Inventory Controller] Updating item:', {
-      organisationId,
-      id,
-      dto: updateInventoryItemDto,
-      hasProductId: 'productId' in updateInventoryItemDto,
-    });
     return this.inventoryService.update(
       organisationId,
       id,
       updateInventoryItemDto,
+      req.user.userId,
+      req.user.role,
     );
   }
 
@@ -103,7 +117,9 @@ export class InventoryController {
   remove(
     @Param('organisationId') organisationId: string,
     @Param('id') id: string,
+    @Request() req,
+    @Query('branchId') branchId?: string,
   ) {
-    return this.inventoryService.remove(organisationId, id);
+    return this.inventoryService.remove(organisationId, id, req.user.userId, req.user.role, branchId);
   }
 }

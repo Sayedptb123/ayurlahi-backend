@@ -56,6 +56,8 @@ import { DutyTemplate } from './duty-templates/entities/duty-template.entity';
 import { Document } from './documents/entities/document.entity';
 import { Supplier } from './suppliers/entities/supplier.entity';
 import { InventoryItem } from './inventory/entities/inventory-item.entity';
+import { InventoryItemMaster } from './inventory/entities/inventory-item-master.entity';
+import { InventoryBranchStock } from './inventory/entities/inventory-branch-stock.entity';
 import { StockMovement } from './inventory/entities/stock-movement.entity';
 import { TreatmentProtocol } from './treatment-protocols/entities/treatment-protocol.entity';
 import { TreatmentProtocolItem } from './treatment-protocols/entities/treatment-protocol-item.entity';
@@ -182,6 +184,8 @@ import { ProductRequest } from './product-requests/entities/product-request.enti
           Document,
           Supplier,
           InventoryItem,
+          InventoryItemMaster,
+          InventoryBranchStock,
           StockMovement,
           TreatmentProtocol,
           TreatmentProtocolItem,
