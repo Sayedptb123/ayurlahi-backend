@@ -83,6 +83,16 @@ export class Order {
     phone?: string;
   } | null;
 
+  // ADR-005 / Branch_Inventory_Implementation_Plan.md — captured going
+  // forward from the branch the order was created for (CreateOrderScreen's
+  // selectedBranch). NULL for every order that predates this column
+  // (2026-09-12) — deliberately not backfilled; see the migration file's
+  // comment for why guessing a historical order's branch would be
+  // dishonest. Not yet consumed by InventoryService.addStock() — that
+  // wiring is a later phase, once the branch-stock schema exists.
+  @Column({ type: 'uuid', nullable: true, name: 'branch_id' })
+  branchId: string | null;
+
   @Column({ type: 'text', nullable: true, name: 'notes' })
   notes: string | null;
 

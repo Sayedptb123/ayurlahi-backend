@@ -230,6 +230,9 @@ export class OrdersService {
         phone: createOrderDto.shippingPhone ?? undefined,
         name: createOrderDto.shippingContactName ?? undefined,
       },
+      // ADR-005 — captured for future inventory-branch wiring; not yet
+      // consumed anywhere (see the entity's own comment).
+      branchId: createOrderDto.branchId ?? null,
       notes: createOrderDto.notes || null,
       items: orderItems as OrderItem[],
     } as any) as unknown as Order;
@@ -639,6 +642,9 @@ export class OrdersService {
         phone: branchAny.phone ?? undefined,
         name: branchAny.name ?? undefined,
       },
+      // ADR-005 — the branch was already validated above (dto.branchId);
+      // no reason for external orders to permanently miss this field too.
+      branchId: dto.branchId,
       notes: dto.notes || null,
       createdBy: userId,
       metadata: { originalChannel: dto.channel },
