@@ -215,6 +215,11 @@ export class MedicalRecordsService {
           'You do not have access to this medical record',
         );
       }
+    } else if (userRole !== 'SUPER_ADMIN' && userRole !== 'SUPPORT') {
+      // SEC-7: unknown/missing organisationType must never read a record.
+      throw new ForbiddenException(
+        'You do not have access to this medical record',
+      );
     }
 
     return medicalRecord;
@@ -245,6 +250,11 @@ export class MedicalRecordsService {
           'You do not have access to this medical record',
         );
       }
+    } else if (userRole !== 'SUPER_ADMIN' && userRole !== 'SUPPORT') {
+      // SEC-7: unknown/missing organisationType must never edit a record.
+      throw new ForbiddenException(
+        'You do not have access to this medical record',
+      );
     }
 
     if (

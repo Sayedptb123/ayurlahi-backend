@@ -459,6 +459,9 @@ export class PatientBillingService {
           throw new ForbiddenException('You do not have access to this bill');
         }
       }
+    } else if (userRole !== 'SUPER_ADMIN' && userRole !== 'SUPPORT') {
+      // SEC-7: unknown/missing organisationType must never read a bill.
+      throw new ForbiddenException('You do not have access to this bill');
     }
 
     return bill;
@@ -482,6 +485,9 @@ export class PatientBillingService {
       if (!organisationId || organisationId !== bill.organisationId) {
         throw new ForbiddenException('You do not have access to this bill');
       }
+    } else if (userRole !== 'SUPER_ADMIN' && userRole !== 'SUPPORT') {
+      // SEC-7: unknown/missing organisationType must never edit a bill.
+      throw new ForbiddenException('You do not have access to this bill');
     }
 
     if (updateDto.billNumber && updateDto.billNumber !== bill.billNumber) {

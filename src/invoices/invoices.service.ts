@@ -66,6 +66,9 @@ export class InvoicesService {
         `EXISTS (SELECT 1 FROM order_items oi WHERE oi.order_id = invoice."orderId" AND oi.manufacturer_id = :mfgId)`,
         { mfgId: organisationId },
       );
+    } else if (organisationType !== 'AYURLAHI_TEAM') {
+      // SEC-7: unknown/missing organisationType must never see all invoices.
+      return { data: [], pagination: { page, limit, total: 0, totalPages: 0 } };
     }
     // AYURLAHI_TEAM: no additional filter — sees all invoices.
 
@@ -125,6 +128,9 @@ export class InvoicesService {
         `EXISTS (SELECT 1 FROM order_items oi WHERE oi.order_id = invoice."orderId" AND oi.manufacturer_id = :mfgId)`,
         { mfgId: organisationId },
       );
+    } else if (organisationType !== 'AYURLAHI_TEAM') {
+      // SEC-7: unknown/missing organisationType must never see the global summary.
+      return zero;
     }
     // AYURLAHI_TEAM: no additional filter — summary across every invoice.
 
@@ -268,6 +274,10 @@ export class InvoicesService {
         throw new ForbiddenException('You do not have access to this invoice');
       }
       return;
+    }
+    if (organisationType !== 'AYURLAHI_TEAM') {
+      // SEC-7: unknown/missing organisationType must never read an invoice.
+      throw new ForbiddenException('You do not have access to this invoice');
     }
     // AYURLAHI_TEAM: no restriction.
   }

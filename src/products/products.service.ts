@@ -148,7 +148,11 @@ export class ProductsService {
       if (product.manufacturerId !== organisationId) {
         throw new ForbiddenException('You can only update your own products');
       }
-    } else if (organisationType && organisationType !== 'SUPER_ADMIN') {
+    } else if (organisationType !== 'AYURLAHI_TEAM') {
+      // SEC-7: 'SUPER_ADMIN' is a userRole, never an organisationType — this
+      // never matched, so unknown/missing organisationType fell through with
+      // no check at all. AYURLAHI_TEAM is the only other org type that may
+      // manage products on a manufacturer's behalf.
       throw new ForbiddenException('Insufficient permissions');
     }
 

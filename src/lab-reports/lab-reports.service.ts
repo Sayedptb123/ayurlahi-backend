@@ -252,6 +252,11 @@ export class LabReportsService {
           'You do not have access to this lab report',
         );
       }
+    } else if (userRole !== 'SUPER_ADMIN' && userRole !== 'SUPPORT') {
+      // SEC-7: unknown/missing organisationType must never read a lab report.
+      throw new ForbiddenException(
+        'You do not have access to this lab report',
+      );
     }
 
     return labReport;
@@ -277,6 +282,11 @@ export class LabReportsService {
           'You do not have access to this lab report',
         );
       }
+    } else if (userRole !== 'SUPER_ADMIN' && userRole !== 'SUPPORT') {
+      // SEC-7: unknown/missing organisationType must never edit a lab report.
+      throw new ForbiddenException(
+        'You do not have access to this lab report',
+      );
     }
 
     if (

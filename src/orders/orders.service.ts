@@ -168,8 +168,12 @@ export class OrdersService {
       } else {
         return { data: [], pagination: { page, limit, total: 0, totalPages: 0 } };
       }
+    } else if (organisationType !== 'AYURLAHI_TEAM') {
+      // Unknown/missing organisationType (e.g. unresolved current-org lookup)
+      // must never fall through to unfiltered visibility. SEC-7.
+      return { data: [], pagination: { page, limit, total: 0, totalPages: 0 } };
     }
-    // Admin and support can see all orders
+    // AYURLAHI_TEAM: admin and support can see all orders
 
     if (status) {
       queryBuilder.andWhere('order.status = :status', { status });
@@ -241,6 +245,9 @@ export class OrdersService {
       if (!hasManufacturerItems) {
         throw new ForbiddenException('You do not have access to this order');
       }
+    } else if (organisationType !== 'AYURLAHI_TEAM') {
+      // SEC-7: unknown/missing organisationType must never read any order.
+      throw new ForbiddenException('You do not have access to this order');
     }
 
     return order;

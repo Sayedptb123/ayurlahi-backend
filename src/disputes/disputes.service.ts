@@ -65,7 +65,16 @@ export class DisputesService {
       .skip(skip)
       .take(limit);
 
-    if (!RoleUtils.isAdminOrSupport(userRole) && organisationId) {
+    if (!RoleUtils.isAdminOrSupport(userRole)) {
+      // SEC-7: a non-admin caller with no resolved organisationId must get
+      // nothing, not an unfiltered query. (Distinct from T16 — that's about
+      // organisationId being present but never matching a manufacturer.)
+      if (!organisationId) {
+        return {
+          data: [],
+          pagination: { page, limit, total: 0, totalPages: 0 },
+        };
+      }
       qb.andWhere('dispute.organisationId = :organisationId', { organisationId });
     }
 

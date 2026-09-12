@@ -246,6 +246,11 @@ export class PrescriptionsService {
           'You do not have access to this prescription',
         );
       }
+    } else if (userRole !== 'SUPER_ADMIN' && userRole !== 'SUPPORT') {
+      // SEC-7: unknown/missing organisationType must never read a prescription.
+      throw new ForbiddenException(
+        'You do not have access to this prescription',
+      );
     }
 
     return prescription;
@@ -276,6 +281,11 @@ export class PrescriptionsService {
           'You do not have access to this prescription',
         );
       }
+    } else if (userRole !== 'SUPER_ADMIN' && userRole !== 'SUPPORT') {
+      // SEC-7: unknown/missing organisationType must never edit a prescription.
+      throw new ForbiddenException(
+        'You do not have access to this prescription',
+      );
     }
 
     if (updateDto.patientId && updateDto.patientId !== prescription.patientId) {

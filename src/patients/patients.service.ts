@@ -292,7 +292,7 @@ export class PatientsService {
     if (!patient) {
       throw new NotFoundException(`Patient with ID ${id} not found`);
     }
-    if (organisationType === 'CLINIC') {
+    if (organisationType !== 'AYURLAHI_TEAM') {
       if (!organisationId || organisationId !== patient.organisationId) {
         throw new ForbiddenException('You do not have access to this patient');
       }

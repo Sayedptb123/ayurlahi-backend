@@ -338,6 +338,11 @@ export class AppointmentsService {
           'You do not have access to this appointment',
         );
       }
+    } else if (userRole !== 'SUPER_ADMIN' && userRole !== 'SUPPORT') {
+      // SEC-7: unknown/missing organisationType must never read an appointment.
+      throw new ForbiddenException(
+        'You do not have access to this appointment',
+      );
     }
 
     return appointment;
@@ -363,6 +368,9 @@ export class AppointmentsService {
       if (!organisationId || organisationId !== appointment.organisationId) {
         throw new ForbiddenException('You do not have access to this appointment');
       }
+    } else if (userRole !== 'SUPER_ADMIN' && userRole !== 'SUPPORT') {
+      // SEC-7: unknown/missing organisationType must never edit an appointment.
+      throw new ForbiddenException('You do not have access to this appointment');
     }
 
     // If updating patient or doctor, verify they belong to the clinic
