@@ -127,29 +127,49 @@ export class InventoryService {
     };
   }
 
-  /** Read-side branch check -- verifies a caller-requested branchId is one
-   * they're actually allowed to see, without the write-side's throwing
-   * "you must specify a branch" requirement (an omitted branchId on a read
-   * legitimately means "sum what I can see"). */
-  private async assertBranchReadable(
+  /**
+   * Read-side branch resolution. Returns:
+   *   null      -- no filter; read/sum across everything the org has. This
+   *                is the correct result both when the caller can see
+   *                everything (org-wide role) AND when the org isn't
+   *                per-branch at all -- for a 'shared' org, a client-sent
+   *                branchId is cosmetic (whatever the global branch
+   *                switcher happens to have selected, e.g. PMS while it's
+   *                still on 'shared' despite having 3 real branches) and
+   *                MUST be ignored, never used to filter, or a UI
+   *                selection could hide an org's real data. Found and
+   *                fixed 2026-09-12, same root cause class as the
+   *                write-side bug in a2fb655 -- "not per-branch" was being
+   *                conflated with "no branchId was requested".
+   *   string[]  -- exactly which branch id(s) to filter to (either the
+   *                caller's one validated request, or their full visible
+   *                set when none was requested). Empty is a valid,
+   *                deliberate fail-closed result.
+   */
+  private async resolveReadBranchIds(
     organisationId: string,
     userId: string | undefined,
     role: string | undefined,
-    branchId: string,
-  ): Promise<void> {
-    const branch = await this.branchesRepository.findOne({
-      where: { id: branchId, organisationId, deletedAt: IsNull() },
-    });
-    if (!branch) throw new NotFoundException('Branch not found for this organisation');
-
+    requestedBranchId?: string,
+  ): Promise<string[] | null> {
     const visible = await this.branchVisibilityService.resolveVisibleBranchIdsForInventory(
       userId,
       organisationId,
       role,
     );
-    if (visible !== null && !visible.includes(branchId)) {
-      throw new ForbiddenException('You do not have access to this branch');
+    if (visible === null) return null;
+
+    if (requestedBranchId) {
+      const branch = await this.branchesRepository.findOne({
+        where: { id: requestedBranchId, organisationId, deletedAt: IsNull() },
+      });
+      if (!branch) throw new NotFoundException('Branch not found for this organisation');
+      if (!visible.includes(requestedBranchId)) {
+        throw new ForbiddenException('You do not have access to this branch');
+      }
+      return [requestedBranchId];
     }
+    return visible;
   }
 
   private async assertProductExists(productId: string): Promise<void> {
@@ -333,30 +353,20 @@ export class InventoryService {
       .where('s.item_master_id IN (:...masterIds)', { masterIds })
       .andWhere('s.deleted_at IS NULL');
 
-    if (query?.branchId) {
-      await this.assertBranchReadable(organisationId, userId, role, query.branchId);
-      stockQb.andWhere('s.branch_id = :branchId', { branchId: query.branchId });
-    } else {
-      const visible = await this.branchVisibilityService.resolveVisibleBranchIdsForInventory(
-        userId,
-        organisationId,
-        role,
-      );
-      if (visible !== null) {
-        // Per-branch org, scoped staff: never "all branches regardless of
-        // visibility" (Invariant 2) -- an empty array here correctly sums
-        // to zero for every item, not everything.
-        if (visible.length === 0) {
-          const data = masters.map((m) => this.toLegacyShape(m, this.aggregateStock([])));
-          return { data, pagination: { page, limit, total, totalPages: Math.ceil(total / limit) } };
-        }
-        stockQb.andWhere('s.branch_id IN (:...visible)', { visible });
+    const branchIds = await this.resolveReadBranchIds(organisationId, userId, role, query?.branchId);
+    if (branchIds !== null) {
+      // Per-branch org: an empty array correctly sums to zero for every
+      // item (Invariant 2), not everything.
+      if (branchIds.length === 0) {
+        const data = masters.map((m) => this.toLegacyShape(m, this.aggregateStock([])));
+        return { data, pagination: { page, limit, total, totalPages: Math.ceil(total / limit) } };
       }
-      // visible === null: not a per-branch org, or an org-wide leadership
-      // role -- sum across every branch the org actually has (or its one
-      // branch-less row). Still not an authorization bypass: for a
-      // non-per-branch org there is only ever the implicit org-wide bucket.
+      stockQb.andWhere('s.branch_id IN (:...branchIds)', { branchIds });
     }
+    // branchIds === null: not a per-branch org (any requested branchId was
+    // cosmetic and is ignored here), or an org-wide leadership role -- sum
+    // across every branch the org actually has (or its one branch-less
+    // row).
 
     const stockRows = await stockQb.getMany();
     const byMaster = new Map<string, InventoryBranchStock[]>();
@@ -385,19 +395,10 @@ export class InventoryService {
       .where('s.item_master_id = :id', { id })
       .andWhere('s.deleted_at IS NULL');
 
-    if (branchId) {
-      await this.assertBranchReadable(organisationId, userId, role, branchId);
-      stockQb.andWhere('s.branch_id = :branchId', { branchId });
-    } else {
-      const visible = await this.branchVisibilityService.resolveVisibleBranchIdsForInventory(
-        userId,
-        organisationId,
-        role,
-      );
-      if (visible !== null) {
-        if (visible.length === 0) return this.toLegacyShape(master, this.aggregateStock([]));
-        stockQb.andWhere('s.branch_id IN (:...visible)', { visible });
-      }
+    const branchIds = await this.resolveReadBranchIds(organisationId, userId, role, branchId);
+    if (branchIds !== null) {
+      if (branchIds.length === 0) return this.toLegacyShape(master, this.aggregateStock([]));
+      stockQb.andWhere('s.branch_id IN (:...branchIds)', { branchIds });
     }
 
     const rows = await stockQb.getMany();
@@ -620,12 +621,12 @@ export class InventoryService {
     const master = await this.masterRepository.findOne({ where: { id, organisationId } });
     if (!master) throw new NotFoundException(`Inventory item with ID ${id} not found`);
 
-    if (branchId) await this.assertBranchReadable(organisationId, userId, role, branchId);
+    const branchIds = await this.resolveReadBranchIds(organisationId, userId, role, branchId);
 
     const stockQb = this.stockRepository
       .createQueryBuilder('s')
       .where('s.item_master_id = :id', { id });
-    if (branchId) stockQb.andWhere('s.branch_id = :branchId', { branchId });
+    if (branchIds !== null) stockQb.andWhere('s.branch_id IN (:...branchIds)', { branchIds: branchIds.length > 0 ? branchIds : ['00000000-0000-0000-0000-000000000000'] });
     const stockRows = await stockQb.getMany();
     const stockIds = stockRows.map((s) => s.id);
 

@@ -169,6 +169,44 @@ async function main() {
   if (poMovement) await movementRepo.softDelete(poMovement.id);
   console.log('(cleaned up TEST 4 synthetic PO/item/stock/movement)');
 
+  console.log('\n=== TEST 5: read-side branchId must be IGNORED for a non-per-branch org (Step 4 pre-flight check) ===');
+  // ADR-005 Step 4 found this: PMS already has 3 real branches (not
+  // branch-less), so the global branch switcher's selectedBranchId is
+  // NEVER null for a PMS user -- it's always some real branch id, even
+  // though PMS stays on inventory_policy='shared'. If a caller sends that
+  // branchId on a read and the service filters strictly by it, switching
+  // to a non-primary branch would make Inventory/Stock Alerts show EMPTY
+  // for a 'shared' org, since PMS's real stock only lives under its
+  // primary branch. The fix: a non-per-branch org must ignore a requested
+  // branchId on reads entirely (same principle as the a2fb655 write-side
+  // fix), returning full data regardless of which branch is cosmetically
+  // selected.
+  const pmsNonPrimaryBranch = await branchRepo.findOne({
+    where: { organisationId: PMS, isPrimary: false, deletedAt: IsNull() },
+  });
+  check('PMS has a non-primary branch to test against', !!pmsNonPrimaryBranch);
+  // PMS's real item currently has 0 stock, which wouldn't distinguish
+  // "correctly ignored the mismatched branchId" from "incorrectly
+  // filtered to zero rows" -- both look like 0. Create a small synthetic
+  // item with real stock (via the normal, already-fixed write path --
+  // branchId omitted, resolves to PMS's primary branch) to make the
+  // check meaningful, then clean it up.
+  const readTestSku = `STEP4-READFIX-${Date.now()}`;
+  const readTestItem = await inventoryService.create(
+    PMS, { name: 'Step4 Read-Fix Test Item (safe to delete)', sku: readTestSku, unit: 'unit', currentStock: 7, minStockLevel: 1 } as any,
+    'test-script', 'OWNER',
+  );
+  const resultWithMismatchedBranch = await inventoryService.findAll(
+    PMS, { limit: 1000, branchId: pmsNonPrimaryBranch!.id }, undefined, 'OWNER',
+  );
+  const readTestItemInResult = resultWithMismatchedBranch.data.find((i) => i.id === readTestItem.id);
+  check(
+    'PMS read with a non-primary branchId still returns the item\'s real stock (7), not 0',
+    !!readTestItemInResult && readTestItemInResult.currentStock === 7,
+  );
+  await inventoryService.remove(PMS, readTestItem.id, 'test-script', 'OWNER');
+  console.log('(cleaned up TEST 5 synthetic item)');
+
   console.log(`\n=== ${failures === 0 ? 'ALL CHECKS PASSED' : failures + ' CHECK(S) FAILED'} ===`);
   await app.close();
   process.exit(failures === 0 ? 0 : 1);
