@@ -146,15 +146,31 @@ export class AppointmentsService {
 
     // Notify the assigned doctor
     if (doctor.userId) {
+      const branchLabel = await this.getBranchLabel(saved.branchId);
       this.notificationsService.sendToUsers({
         userIds: [doctor.userId],
         title: 'New Appointment Scheduled',
-        body: `Patient ${patient.firstName} ${patient.lastName} on ${createDto.appointmentDate} at ${createDto.appointmentTime}`,
+        body: `Patient ${patient.firstName} ${patient.lastName} on ${createDto.appointmentDate} at ${createDto.appointmentTime}${branchLabel}`,
         data: { appointmentId: saved.id, type: 'appointment_created' },
       }).catch(() => {});
     }
 
     return saved;
+  }
+
+  // Branch identity travels with the event that owns it (here, the
+  // appointment's own branchId, set once at creation — see create() above)
+  // — never re-derived from the patient's *current* branch or the
+  // recipient's currently-selected branch, both of which can legitimately
+  // differ from what was true when this appointment was scheduled. NULL is
+  // a valid, meaningful state (organisation-wide / single-branch orgs per
+  // ADR-004 D9), not an error — silently omit the label rather than guess.
+  private async getBranchLabel(branchId: string | null | undefined): Promise<string> {
+    if (!branchId) return '';
+    const branch = await this.appointmentsRepository.manager
+      .getRepository('branches')
+      .findOne({ where: { id: branchId } });
+    return (branch as any)?.name ? ` (${(branch as any).name})` : '';
   }
 
   async findAll(
@@ -448,33 +464,34 @@ export class AppointmentsService {
       // Push notifications per status
       const notifyIds: string[] = [];
       if (doctor?.userId) notifyIds.push(doctor.userId);
+      const branchLabel = await this.getBranchLabel(saved.branchId);
 
       if (updateDto.status === AppointmentStatus.CANCELLED) {
         this.notificationsService.sendToUsers({
           userIds: notifyIds.filter(Boolean),
           title: 'Appointment Cancelled',
-          body: `${patientName}'s appointment on ${dateStr} at ${timeStr} has been cancelled`,
+          body: `${patientName}'s appointment on ${dateStr} at ${timeStr}${branchLabel} has been cancelled`,
           data: { appointmentId: saved.id, type: 'appointment_cancelled' },
         }).catch(() => {});
       } else if (updateDto.status === AppointmentStatus.CONFIRMED) {
         this.notificationsService.sendToUsers({
           userIds: notifyIds.filter(Boolean),
           title: 'Appointment Confirmed',
-          body: `Appointment with ${patientName} on ${dateStr} at ${timeStr} is confirmed`,
+          body: `Appointment with ${patientName} on ${dateStr} at ${timeStr}${branchLabel} is confirmed`,
           data: { appointmentId: saved.id, type: 'appointment_confirmed' },
         }).catch(() => {});
       } else if (updateDto.status === AppointmentStatus.NO_SHOW) {
         this.notificationsService.sendToUsers({
           userIds: notifyIds.filter(Boolean),
           title: 'Patient No-Show',
-          body: `${patientName} did not show up for the ${timeStr} appointment`,
+          body: `${patientName} did not show up for the ${timeStr} appointment${branchLabel}`,
           data: { appointmentId: saved.id, type: 'appointment_no_show' },
         }).catch(() => {});
       } else if (updateDto.status === AppointmentStatus.COMPLETED) {
         this.notificationsService.sendToUsers({
           userIds: notifyIds.filter(Boolean),
           title: 'Appointment Completed',
-          body: `Appointment with ${patientName} completed. Please generate the bill.`,
+          body: `Appointment with ${patientName}${branchLabel} completed. Please generate the bill.`,
           data: { appointmentId: saved.id, type: 'appointment_completed' },
         }).catch(() => {});
       }

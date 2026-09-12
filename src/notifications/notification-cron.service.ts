@@ -56,10 +56,11 @@ export class NotificationCronService {
         for (const appt of appointments) {
             const staff = await this.staffRepo.findOne({ where: { id: appt.doctorId } });
             if (staff?.userId) {
+                const branchLabel = await this.getBranchLabel(appt.branchId);
                 this.notificationsService.sendToUsers({
                     userIds: [staff.userId],
                     title: 'Appointment Tomorrow',
-                    body: `Reminder: appointment scheduled for ${appt.appointmentDate} at ${appt.appointmentTime}`,
+                    body: `Reminder: appointment scheduled for ${appt.appointmentDate} at ${appt.appointmentTime}${branchLabel}`,
                     data: { appointmentId: appt.id, type: 'appointment_reminder_24h' },
                 }).catch(() => {});
             }
@@ -86,10 +87,11 @@ export class NotificationCronService {
         for (const appt of appointments) {
             const staff = await this.staffRepo.findOne({ where: { id: appt.doctorId } });
             if (staff?.userId) {
+                const branchLabel = await this.getBranchLabel(appt.branchId);
                 this.notificationsService.sendToUsers({
                     userIds: [staff.userId],
                     title: 'Appointment in 1 Hour',
-                    body: `Your appointment is at ${appt.appointmentTime} today`,
+                    body: `Your appointment is at ${appt.appointmentTime} today${branchLabel}`,
                     data: { appointmentId: appt.id, type: 'appointment_reminder_1h' },
                 }).catch(() => {});
             }
@@ -118,10 +120,11 @@ export class NotificationCronService {
         for (const duty of duties) {
             const staff = await this.staffRepo.findOne({ where: { id: duty.staffId } });
             if (staff?.userId) {
+                const branchLabel = await this.getBranchLabel(duty.branchId);
                 this.notificationsService.sendToUsers({
                     userIds: [staff.userId],
                     title: 'Shift Starting Soon',
-                    body: `Your shift starts at ${duty.startTime} today`,
+                    body: `Your shift starts at ${duty.startTime} today${branchLabel}`,
                     data: { dutyId: duty.id, type: 'duty_reminder' },
                 }).catch(() => {});
             }
@@ -154,10 +157,11 @@ export class NotificationCronService {
             if (userIds.length > 0) {
                 const staff = await this.staffRepo.findOne({ where: { id: duty.staffId } });
                 const staffName = staff ? `${staff.firstName} ${staff.lastName}` : 'A staff member';
+                const branchLabel = await this.getBranchLabel(duty.branchId);
                 this.notificationsService.sendToUsers({
                     userIds,
                     title: 'Staff Not Checked In',
-                    body: `${staffName} has not checked in for their shift that started at ${duty.startTime}`,
+                    body: `${staffName} has not checked in for their shift that started at ${duty.startTime}${branchLabel}`,
                     data: { dutyId: duty.id, type: 'duty_no_checkin' },
                 }).catch(() => {});
             }
@@ -221,10 +225,11 @@ export class NotificationCronService {
             });
             const userIds = orgUsers.map((ou) => ou.userId).filter(Boolean);
             if (userIds.length > 0) {
+                const branchLabel = await this.getBranchLabel(bill.branchId);
                 this.notificationsService.sendToUsers({
                     userIds,
                     title: 'Invoice Overdue',
-                    body: `Bill ${bill.billNumber} (₹${parseFloat(bill.total as any).toLocaleString('en-IN')}) is overdue`,
+                    body: `Bill ${bill.billNumber}${branchLabel} (₹${parseFloat(bill.total as any).toLocaleString('en-IN')}) is overdue`,
                     data: { billId: bill.id, type: 'invoice_overdue' },
                 }).catch(() => {});
             }
@@ -244,10 +249,11 @@ export class NotificationCronService {
             });
             const userIds = orgUsers.map((ou) => ou.userId).filter(Boolean);
             if (userIds.length > 0) {
+                const branchLabel = await this.getBranchLabel(bill.branchId);
                 this.notificationsService.sendToUsers({
                     userIds,
                     title: 'Invoice Due Soon',
-                    body: `Bill ${bill.billNumber} (₹${parseFloat(bill.total as any).toLocaleString('en-IN')}) is due in 3 days`,
+                    body: `Bill ${bill.billNumber}${branchLabel} (₹${parseFloat(bill.total as any).toLocaleString('en-IN')}) is due in 3 days`,
                     data: { billId: bill.id, type: 'invoice_due_soon' },
                 }).catch(() => {});
             }
@@ -397,5 +403,16 @@ export class NotificationCronService {
                 }).catch(() => {});
             }
         }
+    }
+
+    // Branch identity travels with the event/entity that owns it (the
+    // appointment's, duty's, or bill's own branchId) — never re-derived
+    // from anything else at notification time. NULL is a valid,
+    // organisation-wide state (ADR-004 D9), not an error — omit the label
+    // rather than guess.
+    private async getBranchLabel(branchId: string | null | undefined): Promise<string> {
+        if (!branchId) return '';
+        const branch = await this.appointmentRepo.manager.getRepository('branches').findOne({ where: { id: branchId } });
+        return (branch as any)?.name ? ` (${(branch as any).name})` : '';
     }
 }

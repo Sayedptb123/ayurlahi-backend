@@ -842,13 +842,14 @@ export class RetreatService {
         // A notification failure is swallowed and never affects the committed admission.
         this.orgUserRepo
             .find({ where: { organisationId: clinicId, role: In(['DOCTOR', 'MANAGER', 'OWNER', 'ADMIN']), isActive: true } })
-            .then((orgUsers) => {
+            .then(async (orgUsers) => {
                 const userIds = orgUsers.map((ou) => ou.userId).filter(Boolean);
                 if (userIds.length > 0) {
+                    const branchLabel = await this.getBranchLabel(savedAdmission.branchId);
                     this.notificationsService.sendToUsers({
                         userIds,
                         title: 'Patient Admitted',
-                        body: `Room ${room.roomNumber} — check-in on ${new Date(savedAdmission.checkInDate).toLocaleDateString()}`,
+                        body: `Room ${room.roomNumber}${branchLabel} — check-in on ${new Date(savedAdmission.checkInDate).toLocaleDateString()}`,
                         data: { admissionId: savedAdmission.id, type: 'patient_admitted' },
                     }).catch(() => {});
                 }
@@ -904,14 +905,15 @@ export class RetreatService {
         // Notify OWNER+RECEPTIONIST on discharge
         this.orgUserRepo
             .find({ where: { organisationId: clinicId, role: In(['OWNER', 'RECEPTIONIST']), isActive: true } })
-            .then((orgUsers) => {
+            .then(async (orgUsers) => {
                 const userIds = orgUsers.map((ou) => ou.userId).filter(Boolean);
                 if (userIds.length > 0) {
                     const roomInfo = admission.room ? ` from room ${admission.room.roomNumber}` : '';
+                    const branchLabel = await this.getBranchLabel(saved.branchId);
                     this.notificationsService.sendToUsers({
                         userIds,
                         title: 'Patient Discharged',
-                        body: `Patient discharged${roomInfo}`,
+                        body: `Patient discharged${roomInfo}${branchLabel}`,
                         data: { admissionId: saved.id, type: 'patient_discharged' },
                     }).catch(() => {});
                 }
@@ -2010,5 +2012,16 @@ export class RetreatService {
         if (!def) throw new NotFoundException('Field definition not found');
         def.isActive = false;
         await this.fieldDefinitionRepo.save(def);
+    }
+
+    // Branch identity travels with the event that owns it — an admission's
+    // own branchId (set once at check-in from the booking/room, ADR-004
+    // D9/D14), never re-derived from the room's *current* branch or
+    // whoever is viewing the notification. NULL is a valid, organisation-
+    // wide state, not an error — omit the label rather than guess.
+    private async getBranchLabel(branchId: string | null | undefined): Promise<string> {
+        if (!branchId) return '';
+        const branch = await this.dataSource.getRepository('branches').findOne({ where: { id: branchId } });
+        return (branch as any)?.name ? ` (${(branch as any).name})` : '';
     }
 }

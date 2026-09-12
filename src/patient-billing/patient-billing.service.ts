@@ -683,22 +683,29 @@ export class PatientBillingService {
     if (saved.organisationId) {
       this.orgUserRepository
         .find({ where: { organisationId: saved.organisationId, role: In(['OWNER', 'MANAGER']), isActive: true } })
-        .then((orgUsers) => {
+        .then(async (orgUsers) => {
           const userIds = orgUsers.map((ou) => ou.userId).filter(Boolean);
           if (userIds.length > 0) {
             const amount = `₹${paymentDto.amount.toLocaleString('en-IN')}`;
+            // Branch identity travels with the bill's own branchId, never
+            // re-derived from whoever is recording the payment. NULL is a
+            // valid, organisation-wide state, not an error.
+            const branch = saved.branchId
+              ? await this.branchesRepository.findOne({ where: { id: saved.branchId } })
+              : null;
+            const branchLabel = branch?.name ? ` (${branch.name})` : '';
             if (saved.status === BillStatus.PAID) {
               this.notificationsService.sendToUsers({
                 userIds,
                 title: 'Bill Fully Paid',
-                body: `Bill ${saved.billNumber} fully paid (${amount})`,
+                body: `Bill ${saved.billNumber}${branchLabel} fully paid (${amount})`,
                 data: { billId: saved.id, type: 'bill_paid' },
               }).catch(() => {});
             } else {
               this.notificationsService.sendToUsers({
                 userIds,
                 title: 'Partial Payment Received',
-                body: `Partial payment of ${amount} received for bill ${saved.billNumber}`,
+                body: `Partial payment of ${amount} received for bill ${saved.billNumber}${branchLabel}`,
                 data: { billId: saved.id, type: 'payment_received' },
               }).catch(() => {});
             }

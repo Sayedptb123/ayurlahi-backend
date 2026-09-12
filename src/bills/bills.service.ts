@@ -224,8 +224,10 @@ export class BillsService {
           const savedExpense = await this.expenseRepo.save(expense);
           expenseId = savedExpense.id;
 
-          // Notify OWNER/MANAGER
-          this.notifyOrg(bill.organisationId, 'Recurring Bill Due', `Bill "${bill.billName}" is due. ${isAutoApproved ? 'An approved' : 'A pending'} expense of ₹${expenseAmount.toLocaleString('en-IN')} has been generated.`);
+          // Notify OWNER/MANAGER. Branch identity travels with the bill's
+          // own branchId (NULL is a valid, organisation-wide state).
+          const branchLabel = await this.getBranchLabel(bill.branchId);
+          this.notifyOrg(bill.organisationId, 'Recurring Bill Due', `Bill "${bill.billName}"${branchLabel} is due. ${isAutoApproved ? 'An approved' : 'A pending'} expense of ₹${expenseAmount.toLocaleString('en-IN')} has been generated.`);
 
           // If autoPay is active, immediately log the payment record too
           if (bill.autoPay) {
@@ -243,7 +245,8 @@ export class BillsService {
           }
         } else {
           // If no auto-create, still notify that the bill is due
-          this.notifyOrg(bill.organisationId, 'Recurring Bill Due', `Bill "${bill.billName}" is due on ${bill.nextDueDate}. Record the payment once paid.`);
+          const branchLabel = await this.getBranchLabel(bill.branchId);
+          this.notifyOrg(bill.organisationId, 'Recurring Bill Due', `Bill "${bill.billName}"${branchLabel} is due on ${bill.nextDueDate}. Record the payment once paid.`);
         }
 
         // Advance next due date
@@ -309,6 +312,14 @@ export class BillsService {
     }
     
     return d;
+  }
+
+  // Branch identity travels with the bill's own branchId — never re-derived
+  // from anything else. NULL is a valid, organisation-wide state.
+  private async getBranchLabel(branchId: string | null | undefined): Promise<string> {
+    if (!branchId) return '';
+    const branch = await this.billRepo.manager.getRepository('branches').findOne({ where: { id: branchId } });
+    return (branch as any)?.name ? ` (${(branch as any).name})` : '';
   }
 
   private async notifyOrg(orgId: string, title: string, body: string) {

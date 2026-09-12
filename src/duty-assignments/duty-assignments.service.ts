@@ -86,17 +86,27 @@ export class DutyAssignmentsService {
       const dateStr = new Date(createDto.dutyDate).toLocaleDateString('en-IN', {
         day: 'numeric', month: 'short', year: 'numeric',
       });
+      const branchLabel = await this.getBranchLabel(saved.branchId);
       this.notificationsService
         .sendToUsers({
           userIds: [staff.userId],
           title: 'Shift Assigned',
-          body: `You have been assigned ${dutyType.name} on ${dateStr}`,
+          body: `You have been assigned ${dutyType.name} on ${dateStr}${branchLabel}`,
           data: { dutyId: saved.id, type: 'duty_assigned' },
         })
         .catch(() => {/* non-critical */});
     }
 
     return saved;
+  }
+
+  // Branch identity travels with the event that owns it — the assignment's
+  // own branchId, never re-derived from whoever is viewing the
+  // notification. NULL is a valid, organisation-wide state, not an error.
+  private async getBranchLabel(branchId: string | null | undefined): Promise<string> {
+    if (!branchId) return '';
+    const branch = await this.branchesRepository.findOne({ where: { id: branchId } });
+    return branch?.name ? ` (${branch.name})` : '';
   }
 
   async findAll(
@@ -248,10 +258,11 @@ export class DutyAssignmentsService {
       if (oldStaff?.userId) {
         const dutyType = await this.dutyTypesRepository.findOne({ where: { id: saved.dutyTypeId } });
         const dateStr = (previousDate as Date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+        const branchLabel = await this.getBranchLabel(saved.branchId);
         this.notificationsService.sendToUsers({
           userIds: [oldStaff.userId],
           title: 'Duty Reassigned',
-          body: `Your ${dutyType?.name ?? 'duty'} shift on ${dateStr} has been reassigned`,
+          body: `Your ${dutyType?.name ?? 'duty'} shift on ${dateStr}${branchLabel} has been reassigned`,
           data: { dutyId: saved.id, type: 'duty_reassigned' },
         }).catch(() => {});
       }
@@ -260,10 +271,11 @@ export class DutyAssignmentsService {
       if (newStaff?.userId) {
         const dutyType = await this.dutyTypesRepository.findOne({ where: { id: saved.dutyTypeId } });
         const dateStr = new Date(saved.dutyDate as unknown as string).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+        const branchLabel = await this.getBranchLabel(saved.branchId);
         this.notificationsService.sendToUsers({
           userIds: [newStaff.userId],
           title: 'New Duty Assigned',
-          body: `You have been assigned ${dutyType?.name ?? 'a duty'} on ${dateStr}`,
+          body: `You have been assigned ${dutyType?.name ?? 'a duty'} on ${dateStr}${branchLabel}`,
           data: { dutyId: saved.id, type: 'duty_assigned' },
         }).catch(() => {});
       }
@@ -273,10 +285,11 @@ export class DutyAssignmentsService {
       if (staff?.userId) {
         const dutyType = await this.dutyTypesRepository.findOne({ where: { id: saved.dutyTypeId } });
         const dateStr = new Date(saved.dutyDate as unknown as string).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+        const branchLabel = await this.getBranchLabel(saved.branchId);
         this.notificationsService.sendToUsers({
           userIds: [staff.userId],
           title: 'Duty Updated',
-          body: `Your ${dutyType?.name ?? 'duty'} shift has been rescheduled to ${dateStr} ${saved.startTime ?? ''}–${saved.endTime ?? ''}`,
+          body: `Your ${dutyType?.name ?? 'duty'} shift has been rescheduled to ${dateStr} ${saved.startTime ?? ''}–${saved.endTime ?? ''}${branchLabel}`,
           data: { dutyId: saved.id, type: 'duty_updated' },
         }).catch(() => {});
       }
@@ -295,10 +308,11 @@ export class DutyAssignmentsService {
         const dutyType = await this.dutyTypesRepository.findOne({ where: { id: assignment.dutyTypeId } });
         // dutyDate column is DATE — TypeORM returns it as a string
         const dateStr = new Date(assignment.dutyDate as unknown as string).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+        const branchLabel = await this.getBranchLabel(assignment.branchId);
         this.notificationsService.sendToUsers({
           userIds: [staff.userId],
           title: 'Duty Cancelled',
-          body: `Your ${dutyType?.name ?? 'duty'} shift on ${dateStr} has been cancelled`,
+          body: `Your ${dutyType?.name ?? 'duty'} shift on ${dateStr}${branchLabel} has been cancelled`,
           data: { type: 'duty_cancelled' },
         }).catch(() => {});
       }
