@@ -67,6 +67,20 @@ export class BranchVisibilityService {
     return this.resolveViaAssignments(userId, organisationId, role);
   }
 
+  // ADR-005 Step 4 — a `null` from resolveVisibleBranchIdsForInventory is
+  // ambiguous on its own: it means EITHER "this org isn't per-branch"
+  // (any requested branch filter must be ignored entirely) OR "this org
+  // IS per-branch but the caller holds an org-wide role" (a requested
+  // filter should still be honored -- an OWNER/MANAGER explicitly
+  // switching to one branch must see that branch, not everything, or the
+  // branch switcher becomes a no-op for exactly the roles most likely to
+  // use it). Callers that need to tell these apart (InventoryService's
+  // read paths) call this first.
+  async isInventoryPerBranch(organisationId: string): Promise<boolean> {
+    const settings = await this.organisationSettingsService.getOrCreate(organisationId);
+    return settings.inventoryPolicy === InventoryPolicy.PER_BRANCH;
+  }
+
   // Shared tail of both resolvers above — same staff_branch_assignments
   // lookup and ORG_WIDE_ROLES exemption regardless of which policy field
   // gated entry into it.

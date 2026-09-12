@@ -129,22 +129,28 @@ export class InventoryService {
 
   /**
    * Read-side branch resolution. Returns:
-   *   null      -- no filter; read/sum across everything the org has. This
-   *                is the correct result both when the caller can see
-   *                everything (org-wide role) AND when the org isn't
-   *                per-branch at all -- for a 'shared' org, a client-sent
-   *                branchId is cosmetic (whatever the global branch
-   *                switcher happens to have selected, e.g. PMS while it's
-   *                still on 'shared' despite having 3 real branches) and
-   *                MUST be ignored, never used to filter, or a UI
-   *                selection could hide an org's real data. Found and
-   *                fixed 2026-09-12, same root cause class as the
-   *                write-side bug in a2fb655 -- "not per-branch" was being
-   *                conflated with "no branchId was requested".
-   *   string[]  -- exactly which branch id(s) to filter to (either the
-   *                caller's one validated request, or their full visible
-   *                set when none was requested). Empty is a valid,
-   *                deliberate fail-closed result.
+   *   null      -- no filter; read/sum across everything the org has.
+   *   string[]  -- exactly which branch id(s) to filter to. Empty is a
+   *                valid, deliberate fail-closed result.
+   *
+   * Two bugs were found and fixed here on 2026-09-12, same root cause
+   * both times -- collapsing two genuinely different meanings of "no
+   * filter" into one:
+   *  1. (fixed pre-activation) "not a per-branch org" was being treated
+   *     the same as "caller can see everything" -- a client-sent
+   *     branchId is cosmetic for a 'shared' org (e.g. PMS while it was
+   *     still 'shared' despite having 3 real branches) and MUST be
+   *     ignored entirely, never used to filter, or a UI selection could
+   *     hide an org's real data.
+   *  2. (fixed during §3 activation testing) once an org IS per-branch,
+   *     "caller holds an org-wide role" was ALSO being treated as
+   *     "ignore any requested branchId" -- but an OWNER/MANAGER/ADMIN who
+   *     explicitly switches to one branch must see THAT branch, not
+   *     everything summed together, or the branch switcher becomes a
+   *     no-op for exactly the roles most likely to use it (reintroducing
+   *     the original "every branch shows the same numbers" bug this
+   *     whole project exists to fix). isInventoryPerBranch() is checked
+   *     first specifically so these two cases are never conflated again.
    */
   private async resolveReadBranchIds(
     organisationId: string,
@@ -152,19 +158,23 @@ export class InventoryService {
     role: string | undefined,
     requestedBranchId?: string,
   ): Promise<string[] | null> {
+    const isPerBranch = await this.branchVisibilityService.isInventoryPerBranch(organisationId);
+    if (!isPerBranch) return null; // any requestedBranchId is cosmetic, ignored
+
     const visible = await this.branchVisibilityService.resolveVisibleBranchIdsForInventory(
       userId,
       organisationId,
       role,
     );
-    if (visible === null) return null;
+    // From here on, visible === null unambiguously means "org-wide role,
+    // unrestricted" -- the not-per-branch case was already handled above.
 
     if (requestedBranchId) {
       const branch = await this.branchesRepository.findOne({
         where: { id: requestedBranchId, organisationId, deletedAt: IsNull() },
       });
       if (!branch) throw new NotFoundException('Branch not found for this organisation');
-      if (!visible.includes(requestedBranchId)) {
+      if (visible !== null && !visible.includes(requestedBranchId)) {
         throw new ForbiddenException('You do not have access to this branch');
       }
       return [requestedBranchId];

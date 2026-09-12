@@ -63,22 +63,22 @@ async function main() {
   check('PMS item count = 1 (unchanged)', pmsResult.pagination.total === 1);
   check('PMS summed stock = 0 (unchanged)', pmsResult.data.reduce((s, i) => s + i.currentStock, 0) === 0);
 
-  console.log('\n=== TEST 2: PMS write compatibility while deliberately still on inventory_policy=shared ===');
+  console.log('\n=== TEST 2: shared-org write compatibility (CNS -- PMS is now per_branch as of ADR-005 Step 4 §3, 2026-09-12, so it no longer represents this case; repointed to keep this test meaningful) ===');
   const created = await inventoryService.create(
-    PMS,
+    CNS,
     { name: 'Step3 Verify Item (safe to delete)', unit: 'unit', currentStock: 3, minStockLevel: 1 } as any,
-    'test-script', 'OWNER',
+    CNS_OWNER_USER_ID, 'OWNER',
   );
-  check('PMS create() succeeds with NO branchId sent (matches live InventoryScreen)', created.currentStock === 3);
-  const updated = await inventoryService.update(PMS, created.id, { currentStock: 7 } as any, 'test-script', 'OWNER');
-  check('PMS update() succeeds with NO branchId sent, absolute currentStock applied', updated.currentStock === 7);
+  check('CNS create() succeeds with NO branchId sent (matches a shared org\'s live InventoryScreen)', created.currentStock === 3);
+  const updated = await inventoryService.update(CNS, created.id, { currentStock: 7 } as any, CNS_OWNER_USER_ID, 'OWNER');
+  check('CNS update() succeeds with NO branchId sent, absolute currentStock applied', updated.currentStock === 7);
   const movement = await movementRepo.findOne({
-    where: { organisationId: PMS, movementType: 'manual_adjustment' },
+    where: { organisationId: CNS, movementType: 'manual_adjustment' },
     order: { createdAt: 'DESC' },
   });
   check('manual_adjustment movement recorded with inventoryItemId=NULL, inventoryBranchStockId set',
     !!movement && movement.inventoryItemId === null && !!movement.inventoryBranchStockId);
-  await inventoryService.remove(PMS, created.id, 'test-script', 'OWNER');
+  await inventoryService.remove(CNS, created.id, CNS_OWNER_USER_ID, 'OWNER');
   const afterRemove = await masterRepo.findOne({ where: { id: created.id } });
   check('remove() soft-deleted the test item (findOne excludes soft-deleted by default)', afterRemove === null);
 
@@ -106,28 +106,28 @@ async function main() {
   if (taggedMovement) await movementRepo.softDelete(taggedMovement.id);
   console.log('(cleaned up TEST 3 synthetic item/stock/movement)');
 
-  console.log('\n=== TEST 3b: editing a REAL pre-existing item on a non-per-branch org must NOT create a duplicate branch-stock row ===');
-  // The exact bug found auditing for Step 4: resolveBranchIdForWrite used
-  // to return NULL unconditionally for a non-per-branch org, but
-  // SAIFIS/CNS/PMS's real pre-existing rows carry their real primary
-  // branch's UUID (from the Step 2 backfill), not NULL. Editing a real
-  // item (not a freshly-created synthetic one) is the only way to catch
-  // this -- a synthetic item's first stock row is created fresh under
-  // whatever branchId gets resolved, so it never collides.
-  const pmsRealItem = await masterRepo.findOne({ where: { organisationId: PMS, deletedAt: IsNull() } });
-  check('PMS has a real pre-existing item to test against', !!pmsRealItem);
-  const beforeRowCount = await stockRepo.count({ where: { itemMasterId: pmsRealItem!.id, deletedAt: IsNull() } });
-  const realStockBefore = await stockRepo.findOne({ where: { itemMasterId: pmsRealItem!.id, deletedAt: IsNull() } });
+  console.log('\n=== TEST 3b: editing a REAL pre-existing item on a non-per-branch org must NOT create a duplicate branch-stock row (SAIFIS -- PMS is now per_branch, no longer eligible for this test) ===');
+  // The exact bug found auditing for Step 4 (a2fb655): resolveBranchIdForWrite
+  // used to return NULL unconditionally for a non-per-branch org, but
+  // SAIFIS/CNS's real pre-existing rows carry their real primary branch's
+  // UUID (from the Step 2 backfill), not NULL. Editing a real item (not a
+  // freshly-created synthetic one) is the only way to catch this -- a
+  // synthetic item's first stock row is created fresh under whatever
+  // branchId gets resolved, so it never collides.
+  const saifisRealItem = await masterRepo.findOne({ where: { organisationId: SAIFIS, deletedAt: IsNull() } });
+  check('SAIFIS has a real pre-existing item to test against', !!saifisRealItem);
+  const beforeRowCount = await stockRepo.count({ where: { itemMasterId: saifisRealItem!.id, deletedAt: IsNull() } });
+  const realStockBefore = await stockRepo.findOne({ where: { itemMasterId: saifisRealItem!.id, deletedAt: IsNull() } });
   const originalStock = realStockBefore!.currentStock;
-  await inventoryService.update(PMS, pmsRealItem!.id, { currentStock: originalStock + 1 } as any, 'test-script', 'OWNER');
-  const afterRowCount = await stockRepo.count({ where: { itemMasterId: pmsRealItem!.id, deletedAt: IsNull() } });
+  await inventoryService.update(SAIFIS, saifisRealItem!.id, { currentStock: originalStock + 1 } as any, 'test-script', 'OWNER');
+  const afterRowCount = await stockRepo.count({ where: { itemMasterId: saifisRealItem!.id, deletedAt: IsNull() } });
   check('No duplicate branch-stock row created (row count unchanged)', afterRowCount === beforeRowCount);
-  const realStockAfter = await stockRepo.findOne({ where: { itemMasterId: pmsRealItem!.id, deletedAt: IsNull() } });
+  const realStockAfter = await stockRepo.findOne({ where: { itemMasterId: saifisRealItem!.id, deletedAt: IsNull() } });
   check('The REAL row (with its real branch_id) was the one updated', realStockAfter!.branchId === realStockBefore!.branchId && realStockAfter!.currentStock === originalStock + 1);
   // restore exactly as it was
-  await inventoryService.update(PMS, pmsRealItem!.id, { currentStock: originalStock } as any, 'test-script', 'OWNER');
-  const restored = await stockRepo.findOne({ where: { itemMasterId: pmsRealItem!.id, deletedAt: IsNull() } });
-  check('Restored to original stock value with still no duplicate row', restored!.currentStock === originalStock && (await stockRepo.count({ where: { itemMasterId: pmsRealItem!.id, deletedAt: IsNull() } })) === beforeRowCount);
+  await inventoryService.update(SAIFIS, saifisRealItem!.id, { currentStock: originalStock } as any, 'test-script', 'OWNER');
+  const restored = await stockRepo.findOne({ where: { itemMasterId: saifisRealItem!.id, deletedAt: IsNull() } });
+  check('Restored to original stock value with still no duplicate row', restored!.currentStock === originalStock && (await stockRepo.count({ where: { itemMasterId: saifisRealItem!.id, deletedAt: IsNull() } })) === beforeRowCount);
 
   console.log('\n=== TEST 4: PurchaseOrdersService.receivePurchaseOrder() via item_master_id (CNS, synthetic) ===');
   const testMaster2 = await masterRepo.save(masterRepo.create({
@@ -169,42 +169,37 @@ async function main() {
   if (poMovement) await movementRepo.softDelete(poMovement.id);
   console.log('(cleaned up TEST 4 synthetic PO/item/stock/movement)');
 
-  console.log('\n=== TEST 5: read-side branchId must be IGNORED for a non-per-branch org (Step 4 pre-flight check) ===');
-  // ADR-005 Step 4 found this: PMS already has 3 real branches (not
-  // branch-less), so the global branch switcher's selectedBranchId is
-  // NEVER null for a PMS user -- it's always some real branch id, even
-  // though PMS stays on inventory_policy='shared'. If a caller sends that
+  console.log('\n=== TEST 5: read-side branchId must be IGNORED for a non-per-branch org (CNS -- PMS is now per_branch, no longer usable for this case) ===');
+  // ADR-005 Step 4 found this originally against PMS while it was still
+  // 'shared' with 3 real branches: the global branch switcher's
+  // selectedBranchId is never null for an org with real branches, even
+  // one still on inventory_policy='shared'. If a caller sends that
   // branchId on a read and the service filters strictly by it, switching
-  // to a non-primary branch would make Inventory/Stock Alerts show EMPTY
-  // for a 'shared' org, since PMS's real stock only lives under its
-  // primary branch. The fix: a non-per-branch org must ignore a requested
-  // branchId on reads entirely (same principle as the a2fb655 write-side
-  // fix), returning full data regardless of which branch is cosmetically
-  // selected.
-  const pmsNonPrimaryBranch = await branchRepo.findOne({
-    where: { organisationId: PMS, isPrimary: false, deletedAt: IsNull() },
-  });
-  check('PMS has a non-primary branch to test against', !!pmsNonPrimaryBranch);
-  // PMS's real item currently has 0 stock, which wouldn't distinguish
-  // "correctly ignored the mismatched branchId" from "incorrectly
-  // filtered to zero rows" -- both look like 0. Create a small synthetic
-  // item with real stock (via the normal, already-fixed write path --
-  // branchId omitted, resolves to PMS's primary branch) to make the
-  // check meaningful, then clean it up.
+  // branches would make Inventory/Stock Alerts show EMPTY for a 'shared'
+  // org. Fixed: a non-per-branch org ignores a requested branchId on
+  // reads entirely. PMS flipped to per_branch on 2026-09-12 (Step 4 §3)
+  // and only has 1 branch of its own to test with here, so this repoints
+  // to CNS -- still genuinely 'shared', with its own real branch id --
+  // and checks that querying with vs. without CNS's own branchId returns
+  // identical results (a weaker shape than the original non-primary-branch
+  // check, since CNS has only one branch, but exercises the same
+  // isPerBranch-gated code path).
+  const cnsOwnBranch = await branchRepo.findOne({ where: { organisationId: CNS, isPrimary: true, deletedAt: IsNull() } });
+  check('CNS has a branch to test against', !!cnsOwnBranch);
   const readTestSku = `STEP4-READFIX-${Date.now()}`;
   const readTestItem = await inventoryService.create(
-    PMS, { name: 'Step4 Read-Fix Test Item (safe to delete)', sku: readTestSku, unit: 'unit', currentStock: 7, minStockLevel: 1 } as any,
-    'test-script', 'OWNER',
+    CNS, { name: 'Step4 Read-Fix Test Item (safe to delete)', sku: readTestSku, unit: 'unit', currentStock: 7, minStockLevel: 1 } as any,
+    CNS_OWNER_USER_ID, 'OWNER',
   );
-  const resultWithMismatchedBranch = await inventoryService.findAll(
-    PMS, { limit: 1000, branchId: pmsNonPrimaryBranch!.id }, undefined, 'OWNER',
+  const resultWithBranchId = await inventoryService.findAll(
+    CNS, { limit: 1000, branchId: cnsOwnBranch!.id }, undefined, 'OWNER',
   );
-  const readTestItemInResult = resultWithMismatchedBranch.data.find((i) => i.id === readTestItem.id);
+  const readTestItemInResult = resultWithBranchId.data.find((i) => i.id === readTestItem.id);
   check(
-    'PMS read with a non-primary branchId still returns the item\'s real stock (7), not 0',
+    'CNS (shared) read with a branchId still returns the item\'s real stock (7), not 0 -- branchId is cosmetic for a shared org',
     !!readTestItemInResult && readTestItemInResult.currentStock === 7,
   );
-  await inventoryService.remove(PMS, readTestItem.id, 'test-script', 'OWNER');
+  await inventoryService.remove(CNS, readTestItem.id, CNS_OWNER_USER_ID, 'OWNER');
   console.log('(cleaned up TEST 5 synthetic item)');
 
   console.log(`\n=== ${failures === 0 ? 'ALL CHECKS PASSED' : failures + ' CHECK(S) FAILED'} ===`);
