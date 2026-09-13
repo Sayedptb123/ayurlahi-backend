@@ -602,3 +602,44 @@ describe('OrdersService.correctPackedOrder — Post-PACKED Order Correction Work
     expect(orderRepo.save).toHaveBeenCalled();
   });
 });
+
+// 2026-09-13: human-friendly order numbers (ORD-YYYYMMDD-XXXX), replacing
+// ORD-<epoch ms>-<9 random chars>.
+describe('OrdersService.generateOrderNumber / saveOrderRetryingOnNumberCollision', () => {
+  it('produces ORD-YYYYMMDD-XXXX with today\'s date and a 4-char base36 code', () => {
+    const { service } = makeWriteService(makeOrder());
+    const orderNumber: string = (service as any).generateOrderNumber();
+    const now = new Date();
+    const y = now.getFullYear();
+    const m = String(now.getMonth() + 1).padStart(2, '0');
+    const d = String(now.getDate()).padStart(2, '0');
+    expect(orderNumber).toMatch(new RegExp(`^ORD-${y}${m}${d}-[0-9A-Z]{4}$`));
+  });
+
+  it('retries with a fresh number on a unique-constraint collision, then succeeds', async () => {
+    const { service } = makeWriteService(makeOrder());
+    let attempts = 0;
+    const seenNumbers: string[] = [];
+    const result = await (service as any).saveOrderRetryingOnNumberCollision((orderNumber: string) => {
+      attempts += 1;
+      seenNumbers.push(orderNumber);
+      if (attempts < 2) {
+        const err: any = new Error('duplicate key value violates unique constraint');
+        err.code = '23505';
+        return Promise.reject(err);
+      }
+      return Promise.resolve({ orderNumber });
+    });
+    expect(attempts).toBe(2);
+    expect(result.orderNumber).toBe(seenNumbers[1]);
+    expect(seenNumbers[0]).not.toBe(seenNumbers[1]); // a fresh number was generated for the retry
+  });
+
+  it('does not retry on a non-collision error', async () => {
+    const { service } = makeWriteService(makeOrder());
+    const otherError = new Error('something else entirely');
+    await expect(
+      (service as any).saveOrderRetryingOnNumberCollision(() => Promise.reject(otherError)),
+    ).rejects.toThrow('something else entirely');
+  });
+});

@@ -254,6 +254,43 @@ export class OrdersService {
     return order;
   }
 
+  // Human-friendly order numbers: ORD-YYYYMMDD-XXXX. Replaces the old
+  // ORD-<epoch ms>-<9 random chars> scheme, which was unique by sheer
+  // entropy but unreadable/unreferenceable by a human on a phone call.
+  // Deliberately NOT a running sequence (ORD-00001, ORD-00002, ...) --
+  // that needs a shared counter that's race-prone under concurrent order
+  // creation without a DB sequence or locked counter row, which is more
+  // moving parts than this platform's order volume currently justifies.
+  // 4 base36 chars is ~1.6M combinations per day, comfortably enough here;
+  // saveOrderRetryingOnNumberCollision below is a cheap backstop for the
+  // rare collision, not a sign this is expected to happen often.
+  private generateOrderNumber(): string {
+    const now = new Date();
+    const y = now.getFullYear();
+    const m = String(now.getMonth() + 1).padStart(2, '0');
+    const d = String(now.getDate()).padStart(2, '0');
+    const code = Math.floor(Math.random() * 36 ** 4).toString(36).toUpperCase().padStart(4, '0');
+    return `ORD-${y}${m}${d}-${code}`;
+  }
+
+  // Shared by create()/createExternalOrder()/correctPackedOrder(): builds
+  // and saves an order with a fresh generateOrderNumber(), retrying with a
+  // new number on a unique-constraint collision (Postgres 23505) rather
+  // than surfacing a raw 500 for what should be a near-never event.
+  private async saveOrderRetryingOnNumberCollision<T>(
+    buildAndSave: (orderNumber: string) => Promise<T>,
+  ): Promise<T> {
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        return await buildAndSave(this.generateOrderNumber());
+      } catch (err: any) {
+        if (err?.code === '23505' && attempt < 3) continue;
+        throw err;
+      }
+    }
+    throw new Error('Failed to generate a unique order number after 3 attempts');
+  }
+
   async create(userId: string, createOrderDto: CreateOrderDto, organisationType?: string, organisationId?: string) {
     if (organisationType !== 'CLINIC' || !organisationId) {
       throw new ForbiddenException('Only clinic users can create orders');
@@ -274,35 +311,34 @@ export class OrdersService {
     const platformFee = 0;
     const totalAmount = subtotal + totalGstAmount + shippingCharges + platformFee;
 
-    const orderNumber = `ORD-${Date.now()}-${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
-
-    const order = this.ordersRepository.create({
-      organisationId: clinicId,
-      orderNumber,
-      status: OrderStatus.PENDING,
-      source: createOrderDto.source || OrderSource.WEB,
-      subtotal,
-      gstAmount: totalGstAmount,
-      shippingCharges,
-      platformFee,
-      totalAmount,
-      shippingAddress: {
-        line1: createOrderDto.shippingAddress ?? undefined,
-        city: createOrderDto.shippingCity ?? undefined,
-        district: createOrderDto.shippingDistrict ?? undefined,
-        state: createOrderDto.shippingState ?? undefined,
-        pincode: createOrderDto.shippingPincode ?? undefined,
-        phone: createOrderDto.shippingPhone ?? undefined,
-        name: createOrderDto.shippingContactName ?? undefined,
-      },
-      // ADR-005 — captured for future inventory-branch wiring; not yet
-      // consumed anywhere (see the entity's own comment).
-      branchId: createOrderDto.branchId ?? null,
-      notes: createOrderDto.notes || null,
-      items: orderItems as OrderItem[],
-    } as any) as unknown as Order;
-
-    const savedOrder = (await this.ordersRepository.save(order)) as unknown as Order;
+    const savedOrder = await this.saveOrderRetryingOnNumberCollision((orderNumber) => {
+      const order = this.ordersRepository.create({
+        organisationId: clinicId,
+        orderNumber,
+        status: OrderStatus.PENDING,
+        source: createOrderDto.source || OrderSource.WEB,
+        subtotal,
+        gstAmount: totalGstAmount,
+        shippingCharges,
+        platformFee,
+        totalAmount,
+        shippingAddress: {
+          line1: createOrderDto.shippingAddress ?? undefined,
+          city: createOrderDto.shippingCity ?? undefined,
+          district: createOrderDto.shippingDistrict ?? undefined,
+          state: createOrderDto.shippingState ?? undefined,
+          pincode: createOrderDto.shippingPincode ?? undefined,
+          phone: createOrderDto.shippingPhone ?? undefined,
+          name: createOrderDto.shippingContactName ?? undefined,
+        },
+        // ADR-005 — captured for future inventory-branch wiring; not yet
+        // consumed anywhere (see the entity's own comment).
+        branchId: createOrderDto.branchId ?? null,
+        notes: createOrderDto.notes || null,
+        items: orderItems as OrderItem[],
+      } as any) as unknown as Order;
+      return this.ordersRepository.save(order) as unknown as Promise<Order>;
+    });
 
     // Reload order with relations
     const orderWithRelations = await this.ordersRepository.findOne({
@@ -659,26 +695,26 @@ export class OrdersService {
       const shippingCharges = 0;
       const platformFee = 0;
       const totalAmount = subtotal + totalGstAmount + shippingCharges + platformFee;
-      const newOrderNumber = `ORD-${Date.now()}-${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
 
-      const newOrder = orderRepo.create({
-        organisationId: order.organisationId,
-        orderNumber: newOrderNumber,
-        status: OrderStatus.PENDING,
-        source: order.source,
-        subtotal,
-        gstAmount: totalGstAmount,
-        shippingCharges,
-        platformFee,
-        totalAmount,
-        shippingAddress: order.shippingAddress,
-        branchId: order.branchId,
-        notes: `Correction of order ${order.orderNumber} (${dto.reason})`,
-        metadata: { correctsOrderId: order.id, correctionReason: dto.reason },
-        items: newOrderItems as OrderItem[],
-      } as any) as unknown as Order;
-
-      const savedNewOrder = (await orderRepo.save(newOrder)) as unknown as Order;
+      const savedNewOrder = await this.saveOrderRetryingOnNumberCollision((newOrderNumber) => {
+        const newOrder = orderRepo.create({
+          organisationId: order.organisationId,
+          orderNumber: newOrderNumber,
+          status: OrderStatus.PENDING,
+          source: order.source,
+          subtotal,
+          gstAmount: totalGstAmount,
+          shippingCharges,
+          platformFee,
+          totalAmount,
+          shippingAddress: order.shippingAddress,
+          branchId: order.branchId,
+          notes: `Correction of order ${order.orderNumber} (${dto.reason})`,
+          metadata: { correctsOrderId: order.id, correctionReason: dto.reason },
+          items: newOrderItems as OrderItem[],
+        } as any) as unknown as Order;
+        return orderRepo.save(newOrder) as unknown as Promise<Order>;
+      });
 
       // 5. Link the original to its replacement.
       order.metadata = { ...((order.metadata as Record<string, any>) || {}), correctedByOrderId: savedNewOrder.id };
@@ -883,37 +919,37 @@ export class OrdersService {
     const shippingCharges = 0;
     const platformFee = 0;
     const totalAmount = subtotal + totalGstAmount + shippingCharges + platformFee;
-    const orderNumber = `ORD-${Date.now()}-${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
     const branchAny = branch as any;
 
-    const order = this.ordersRepository.create({
-      organisationId: dto.clinicId,
-      orderNumber,
-      status: OrderStatus.PENDING,
-      source: OrderSource.EXTERNAL,
-      subtotal,
-      gstAmount: totalGstAmount,
-      shippingCharges,
-      platformFee,
-      totalAmount,
-      shippingAddress: {
-        line1: branchAny.address ?? undefined,
-        city: branchAny.city ?? undefined,
-        state: branchAny.state ?? undefined,
-        pincode: branchAny.pincode ?? undefined,
-        phone: branchAny.phone ?? undefined,
-        name: branchAny.name ?? undefined,
-      },
-      // ADR-005 — the branch was already validated above (dto.branchId);
-      // no reason for external orders to permanently miss this field too.
-      branchId: dto.branchId,
-      notes: dto.notes || null,
-      createdBy: userId,
-      metadata: { originalChannel: dto.channel },
-      items: orderItems as OrderItem[],
-    } as any) as unknown as Order;
-
-    const savedOrder = (await this.ordersRepository.save(order)) as unknown as Order;
+    const savedOrder = await this.saveOrderRetryingOnNumberCollision((orderNumber) => {
+      const order = this.ordersRepository.create({
+        organisationId: dto.clinicId,
+        orderNumber,
+        status: OrderStatus.PENDING,
+        source: OrderSource.EXTERNAL,
+        subtotal,
+        gstAmount: totalGstAmount,
+        shippingCharges,
+        platformFee,
+        totalAmount,
+        shippingAddress: {
+          line1: branchAny.address ?? undefined,
+          city: branchAny.city ?? undefined,
+          state: branchAny.state ?? undefined,
+          pincode: branchAny.pincode ?? undefined,
+          phone: branchAny.phone ?? undefined,
+          name: branchAny.name ?? undefined,
+        },
+        // ADR-005 — the branch was already validated above (dto.branchId);
+        // no reason for external orders to permanently miss this field too.
+        branchId: dto.branchId,
+        notes: dto.notes || null,
+        createdBy: userId,
+        metadata: { originalChannel: dto.channel },
+        items: orderItems as OrderItem[],
+      } as any) as unknown as Order;
+      return this.ordersRepository.save(order) as unknown as Promise<Order>;
+    });
 
     const orderWithRelations = await this.ordersRepository.findOne({
       where: { id: savedOrder.id },
