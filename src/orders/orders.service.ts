@@ -5,7 +5,7 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, IsNull, In } from 'typeorm';
+import { Repository, IsNull, In, EntityManager } from 'typeorm';
 import { Order, OrderStatus, OrderSource } from './entities/order.entity';
 import { OrderItem, OrderItemStatus } from './entities/order-item.entity';
 import { ManufacturerExternalOrderAccess } from './entities/manufacturer-external-order-access.entity';
@@ -20,6 +20,7 @@ import { AddOrderItemDto } from './dto/add-order-item.dto';
 import { UpdateOrderItemQuantityDto } from './dto/update-order-item-quantity.dto';
 import { CreateExternalOrderDto } from './dto/create-external-order.dto';
 import { GrantExternalOrderAccessDto } from './dto/grant-external-order-access.dto';
+import { CorrectOrderDto } from './dto/correct-order.dto';
 import { InventoryService } from '../inventory/inventory.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { RoleUtils } from '../common/utils/role.utils';
@@ -390,20 +391,29 @@ export class OrdersService {
    * packed/billed quantity is a separate, later concern (see
    * scope/Order_Fulfillment_Lifecycle_Scope_2026-09-07.md §7, not this step).
    *
-   * priceOverrides (external orders only) maps productId -> manufacturer-
-   * agreed unit price. When present for a product, that price drives
+   * priceOverrides (external orders and corrections) maps productId ->
+   * pinned unit price. When present for a product, that price drives
    * subtotal/GST/total instead of the catalog price, and the real catalog
    * price is preserved separately on catalogPriceAtOrder for audit — the
    * master product price itself is never written to here either way.
+   *
+   * externalManager (correctPackedOrder() only): when provided, the lock/
+   * decrement runs directly against it instead of opening a NEW transaction
+   * via this.productsRepository.manager.transaction(...) -- the caller is
+   * already inside its own outer transaction (cancel original + void
+   * invoice + this reservation + create replacement must all commit or roll
+   * back together), and nesting a second independent transaction here would
+   * silently break that atomicity rather than participate in it.
    */
   private async lockAndSnapshotOrderItems(
     items: { productId: string; quantity: number; notes?: string }[],
     priceOverrides?: Map<string, number>,
+    externalManager?: EntityManager,
   ): Promise<{ orderItems: Partial<OrderItem>[]; subtotal: number; totalGstAmount: number }> {
     type ProductWithItem = { product: Product; itemDto: (typeof items)[0]; reservedQuantity: number };
     const products: ProductWithItem[] = [];
 
-    await this.productsRepository.manager.transaction(async (manager) => {
+    const lockAndDecrement = async (manager: EntityManager) => {
       const productRepo = manager.getRepository(Product);
 
       for (const item of items) {
@@ -449,7 +459,13 @@ export class OrdersService {
         }
         products.push({ product, itemDto: item, reservedQuantity });
       }
-    });
+    };
+
+    if (externalManager) {
+      await lockAndDecrement(externalManager);
+    } else {
+      await this.productsRepository.manager.transaction(lockAndDecrement);
+    }
 
     let subtotal = 0;
     let totalGstAmount = 0;
@@ -513,6 +529,188 @@ export class OrdersService {
     };
 
     return this.create(userId, createOrderDto, 'CLINIC', organisationId);
+  }
+
+  /**
+   * Post-PACKED Order Correction Workflow
+   * (scope/Post_PACKED_Correction_Workflow_Design_2026-09-13.md).
+   *
+   * PACKED + invoice exists + unpaid + not shipped only (Case A of the
+   * design doc). Cancels the original order (same fields/stock-restore as
+   * the normal CANCELLED transition, inlined here so it shares this
+   * method's own transaction), financially cancels its invoice (never
+   * edited — amounts/items stay exactly as originally billed, only
+   * cancelledAt/cancelReason are set), and creates a linked replacement
+   * order pre-filled from the original's items at their ORIGINAL agreed
+   * unit prices via priceOverrides. Deliberately NOT reorder() — reorder()
+   * re-prices from the live catalog, which is correct for "buy this again"
+   * and wrong for "I made a mistake in this transaction" (design doc §3/§4).
+   * The replacement's organisationId/branchId/shippingAddress are copied
+   * from the ORIGINAL order, not the calling manufacturer's own org —
+   * every other order-creation path in this file defaults to the caller's
+   * own org, which would be wrong here (design doc §7).
+   *
+   * Runs as ONE transaction (design doc §5's atomicity requirement): the
+   * original order row is pessimistic-locked first and re-checked for
+   * eligibility after the lock is acquired, so two concurrent correction
+   * attempts on the same order serialize instead of racing — the second
+   * sees the first's already-committed cancellation and correctly fails,
+   * rather than both producing a replacement order (design doc §5's
+   * idempotency requirement).
+   *
+   * GST/e-invoice statutory treatment remains an open question with
+   * Ayurlahi's CA (design doc §10) — deliberately deferred per explicit
+   * product decision (2026-09-13): PMS (the manufacturer) handles GST
+   * compliance for now, so this implements the generic industry-standard
+   * "cancel + linked replacement" pattern without waiting on the statutory
+   * answer.
+   */
+  async correctPackedOrder(
+    orderId: string,
+    userId: string,
+    userRole: string,
+    organisationType: string | undefined,
+    organisationId: string | undefined,
+    dto: CorrectOrderDto,
+  ): Promise<Order> {
+    const normalizedRole = RoleUtils.normalizeRole(userRole, organisationType);
+    const isManufacturer = normalizedRole === 'manufacturer';
+    const isAdmin = ['admin', 'support'].includes(normalizedRole);
+    if (!(isManufacturer || isAdmin)) {
+      throw new ForbiddenException('Only the manufacturer or Ayurlahi Team admin/support can correct an order');
+    }
+
+    const result = await this.ordersRepository.manager.transaction(async (manager) => {
+      const orderRepo = manager.getRepository(Order);
+      const itemRepo = manager.getRepository(OrderItem);
+      const invoiceRepo = manager.getRepository(Invoice);
+      const productRepo = manager.getRepository(Product);
+
+      // Locked first, eligibility checked after — this is the concurrency
+      // guard: a second concurrent request blocks here until the first
+      // commits, then sees status !== 'packed' and fails, rather than both
+      // proceeding to create their own replacement order.
+      const order = await orderRepo.findOne({
+        where: { id: orderId },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!order) {
+        throw new NotFoundException(`Order with ID ${orderId} not found`);
+      }
+      if (order.status !== OrderStatus.PACKED) {
+        throw new BadRequestException(
+          `Order cannot be corrected once status is "${order.status}" — correction is only available for a PACKED order that hasn't shipped.`,
+        );
+      }
+
+      const items = await itemRepo.find({ where: { orderId, deletedAt: IsNull() } });
+      if (!isAdmin) {
+        const ownsOrder = items.some((i) => i.manufacturerId === organisationId);
+        if (!ownsOrder) {
+          throw new ForbiddenException('You do not have access to correct this order');
+        }
+      }
+
+      const invoice = await invoiceRepo.findOne({ where: { orderId } });
+      if (!invoice) {
+        throw new BadRequestException('No invoice exists for this order — nothing to correct');
+      }
+      if (invoice.isPaid) {
+        throw new ForbiddenException(
+          'This order has already been paid — it cannot be corrected through this flow. Contact Ayurlahi Team for a refund/credit adjustment.',
+        );
+      }
+      if (invoice.cancelledAt) {
+        throw new BadRequestException('This order has already been corrected');
+      }
+
+      // 1. Cancel the original order.
+      order.status = OrderStatus.CANCELLED;
+      order.cancelledAt = new Date();
+      order.cancelledBy = userId;
+      order.cancellationReason = `Correction: ${dto.reason}${dto.notes ? ` — ${dto.notes}` : ''}`;
+
+      for (const item of items) {
+        if (item.reservedQuantity > 0) {
+          await productRepo.increment({ id: item.productId }, 'stockQuantity', item.reservedQuantity);
+        }
+      }
+
+      // 2. Financially cancel the invoice — never edited.
+      invoice.cancelledAt = new Date();
+      invoice.cancelReason = dto.reason;
+
+      // 3. Reserve stock for the replacement, in the SAME transaction as
+      // the release above — lockAndSnapshotOrderItems's externalManager
+      // param exists specifically for this.
+      const priceOverrides = new Map(items.map((i) => [i.productId, Number(i.unitPrice)]));
+      const newItemsDto = items.map((i) => ({
+        productId: i.productId,
+        quantity: i.quantity,
+        notes: i.notes || undefined,
+      }));
+      const { orderItems: newOrderItems, subtotal, totalGstAmount } = await this.lockAndSnapshotOrderItems(
+        newItemsDto,
+        priceOverrides,
+        manager,
+      );
+
+      // 4. Create the replacement order.
+      const shippingCharges = 0;
+      const platformFee = 0;
+      const totalAmount = subtotal + totalGstAmount + shippingCharges + platformFee;
+      const newOrderNumber = `ORD-${Date.now()}-${Math.random().toString(36).substr(2, 9).toUpperCase()}`;
+
+      const newOrder = orderRepo.create({
+        organisationId: order.organisationId,
+        orderNumber: newOrderNumber,
+        status: OrderStatus.PENDING,
+        source: order.source,
+        subtotal,
+        gstAmount: totalGstAmount,
+        shippingCharges,
+        platformFee,
+        totalAmount,
+        shippingAddress: order.shippingAddress,
+        branchId: order.branchId,
+        notes: `Correction of order ${order.orderNumber} (${dto.reason})`,
+        metadata: { correctsOrderId: order.id, correctionReason: dto.reason },
+        items: newOrderItems as OrderItem[],
+      } as any) as unknown as Order;
+
+      const savedNewOrder = (await orderRepo.save(newOrder)) as unknown as Order;
+
+      // 5. Link the original to its replacement.
+      order.metadata = { ...((order.metadata as Record<string, any>) || {}), correctedByOrderId: savedNewOrder.id };
+
+      await orderRepo.save(order);
+      await invoiceRepo.save(invoice);
+
+      return { original: order, replacement: savedNewOrder };
+    });
+
+    // Notifications fire after the transaction commits, same pattern as
+    // every other status-change notification in this file.
+    this.orgUserRepository
+      .find({ where: { organisationId: result.original.organisationId, role: In(['OWNER', 'MANAGER', 'ADMIN']), isActive: true } })
+      .then((orgUsers) => {
+        const userIds = orgUsers.map((ou) => ou.userId).filter(Boolean);
+        if (userIds.length > 0) {
+          this.notificationsService.sendToUsers({
+            userIds,
+            title: 'Order Corrected',
+            body: `Order ${result.original.orderNumber} was cancelled and corrected — see Order ${result.replacement.orderNumber} for the updated version.`,
+            data: { orderId: result.replacement.id, type: 'order_corrected', organisationId: result.original.organisationId },
+          }).catch(() => {});
+        }
+      })
+      .catch(() => {});
+
+    const orderWithRelations = await this.ordersRepository.findOne({
+      where: { id: result.replacement.id },
+      relations: ['items'],
+    });
+    return orderWithRelations!;
   }
 
   // ==========================================================================

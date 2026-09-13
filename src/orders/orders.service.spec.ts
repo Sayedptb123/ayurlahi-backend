@@ -1,5 +1,9 @@
-import { ForbiddenException } from '@nestjs/common';
+import { ForbiddenException, BadRequestException } from '@nestjs/common';
 import { OrdersService } from './orders.service';
+import { Order } from './entities/order.entity';
+import { OrderItem } from './entities/order-item.entity';
+import { Invoice } from '../invoices/entities/invoice.entity';
+import { Product } from '../products/entities/product.entity';
 
 // SEC-7 regression: OrdersService.findAll/findOne used to fall through to
 // unfiltered/global visibility whenever organisationType was neither
@@ -376,5 +380,225 @@ describe('OrdersService.updateStatus — PACKED reservation/money sync', () => {
     expect(inventoryService.addStock).toHaveBeenCalledTimes(1); // clinic-side stock credit, keyed off packedQuantity
     expect(order.items[0].packedQuantity).toBe(6);
     expect(order.items[0].reservedQuantity).toBe(6);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────
+// 2026-09-13: Post-PACKED Order Correction Workflow
+// (scope/Post_PACKED_Correction_Workflow_Design_2026-09-13.md)
+// ─────────────────────────────────────────────────────────────────────────
+
+const makeCorrectionFixtures = (overrides: {
+  orderStatus?: string;
+  invoiceIsPaid?: boolean;
+  invoiceCancelled?: boolean;
+  callerRole?: string;
+  callerOrgType?: string;
+  callerOrgId?: string;
+  catalogPrice?: number;
+} = {}) => {
+  const order = {
+    id: 'ord-1',
+    orderNumber: 'ORD-ORIGINAL-1',
+    organisationId: 'org-clinic',
+    status: overrides.orderStatus ?? 'packed',
+    source: 'marketplace',
+    shippingAddress: { line1: '123 St', city: 'Kochi' },
+    branchId: 'branch-1',
+    metadata: null,
+    cancelledAt: null,
+    cancelledBy: null,
+    cancellationReason: null,
+  };
+  const items = [
+    {
+      id: 'item-1',
+      orderId: 'ord-1',
+      productId: 'prod-1',
+      manufacturerId: 'org-mfg',
+      productSku: 'SKU1',
+      productName: 'Widget',
+      quantity: 10,
+      reservedQuantity: 6, // already-shrunk post-P0-fix value (packed 6 of 10)
+      packedQuantity: 6,
+      unitPrice: 100, // ORIGINAL agreed price -- must be preserved
+      gstRate: 5,
+      mrp: 110,
+      hsnCode: '1234',
+      discountAmount: 0,
+      notes: null,
+      deletedAt: null,
+    },
+  ];
+  const invoice = {
+    id: 'inv-1',
+    orderId: 'ord-1',
+    isPaid: overrides.invoiceIsPaid ?? false,
+    cancelledAt: overrides.invoiceCancelled ? new Date() : null,
+    cancelReason: null,
+  };
+  const product = {
+    id: 'prod-1',
+    status: 'active',
+    minOrderQuantity: 1,
+    stockQuantity: 50,
+    price: overrides.catalogPrice ?? 150, // TODAY's catalog price -- must NOT leak into the correction
+    gstRate: 5,
+    mrp: 110,
+    hsnCode: '1234',
+    manufacturerId: 'org-mfg',
+    sku: 'SKU1',
+    name: 'Widget',
+    deletedAt: null,
+  };
+  return { order, items, invoice, product };
+};
+
+const makeCorrectionService = (fixtures: ReturnType<typeof makeCorrectionFixtures>) => {
+  const { order, items, invoice, product } = fixtures;
+
+  const orderRepo = {
+    findOne: jest.fn(() => Promise.resolve({ ...order })),
+    create: jest.fn((x: any) => x),
+    save: jest.fn((x: any) => Promise.resolve({ ...x, id: x.id ?? 'new-order-id' })),
+  };
+  const itemRepo = { find: jest.fn(() => Promise.resolve(items.map((i) => ({ ...i })))) };
+  const invoiceRepo = {
+    findOne: jest.fn(() => Promise.resolve({ ...invoice })),
+    save: jest.fn((x: any) => Promise.resolve(x)),
+  };
+  const productRepo = {
+    findOne: jest.fn(() => Promise.resolve({ ...product })),
+    increment: jest.fn(() => Promise.resolve()),
+    decrement: jest.fn(() => Promise.resolve()),
+  };
+
+  const manager: any = {
+    getRepository: jest.fn((entityClass: any) => {
+      if (entityClass === Order) return orderRepo;
+      if (entityClass === OrderItem) return itemRepo;
+      if (entityClass === Invoice) return invoiceRepo;
+      if (entityClass === Product) return productRepo;
+      throw new Error(`Unexpected entity class in test: ${entityClass}`);
+    }),
+  };
+
+  const ordersRepository: any = {
+    manager: {
+      transaction: jest.fn((cb: any) => cb(manager)),
+      getRepository: jest.fn(() => genericSubRepo()),
+    },
+    findOne: jest.fn(() => Promise.resolve({ ...order, id: 'new-order-id', items })),
+  };
+  const orgUserRepository = { find: jest.fn(() => Promise.resolve([])) };
+  const notificationsService = { sendToUsers: jest.fn(() => Promise.resolve()) };
+  const productsRepository = { manager: { transaction: jest.fn((cb: any) => cb(manager)) } };
+
+  const service = new OrdersService(
+    ordersRepository,
+    {} as any, // orderItemsRepository
+    productsRepository as any,
+    {} as any, // usersRepository
+    orgUserRepository as any,
+    invoiceRepo as any, // invoicesRepository (top-level injected repo, unused directly by correctPackedOrder)
+    {} as any, // externalOrderAccessRepository
+    {} as any, // orderReplacementsRepository
+    {} as any, // disputesRepository
+    {} as any, // branchesRepository
+    {} as any, // inventoryService
+    notificationsService as any,
+  );
+
+  return { service, orderRepo, itemRepo, invoiceRepo, productRepo };
+};
+
+const CORRECT_DTO = { reason: 'wrong_quantity' as const, notes: 'packed 6 instead of 10' };
+
+describe('OrdersService.correctPackedOrder — Post-PACKED Order Correction Workflow', () => {
+  it('happy path: cancels original, restores stock, voids invoice, creates a linked replacement at the ORIGINAL price (not catalog)', async () => {
+    const fixtures = makeCorrectionFixtures({ catalogPrice: 150 }); // catalog has since moved to 150; original was 100
+    const { service, orderRepo, invoiceRepo, productRepo } = makeCorrectionService(fixtures);
+
+    await service.correctPackedOrder('ord-1', 'u1', 'OWNER', 'MANUFACTURER', 'org-mfg', CORRECT_DTO);
+
+    // Original order cancelled with reservedQuantity (6), not the full requested quantity (10).
+    expect(productRepo.increment).toHaveBeenCalledWith({ id: 'prod-1' }, 'stockQuantity', 6);
+
+    // Invoice financially cancelled, never had its amounts/items touched.
+    expect(invoiceRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({ cancelledAt: expect.any(Date), cancelReason: 'wrong_quantity' }),
+    );
+
+    // The original order was saved cancelled, with a link to the replacement.
+    const originalSaveCall = orderRepo.save.mock.calls.find((c: any) => c[0].status === 'cancelled');
+    expect(originalSaveCall).toBeDefined();
+    expect(originalSaveCall![0].cancelledBy).toBe('u1');
+    expect(originalSaveCall![0].metadata.correctedByOrderId).toBe('new-order-id');
+
+    // The replacement order was created with the ORIGINAL price (100), not today's catalog price (150).
+    const newOrderSaveCall = orderRepo.save.mock.calls.find((c: any) => c[0].status === 'pending');
+    expect(newOrderSaveCall).toBeDefined();
+    const newItems = newOrderSaveCall![0].items;
+    expect(newItems[0].unitPrice).toBe(100);
+    expect(newItems[0].quantity).toBe(10); // original REQUESTED quantity, not packedQuantity
+    expect(newOrderSaveCall![0].metadata.correctsOrderId).toBe('ord-1');
+
+    // Ownership copied from the ORIGINAL order, not the calling manufacturer's own org.
+    expect(newOrderSaveCall![0].organisationId).toBe('org-clinic');
+    expect(newOrderSaveCall![0].branchId).toBe('branch-1');
+  });
+
+  it('rejects a paid invoice — Case B is explicitly not self-service', async () => {
+    const fixtures = makeCorrectionFixtures({ invoiceIsPaid: true });
+    const { service } = makeCorrectionService(fixtures);
+
+    await expect(
+      service.correctPackedOrder('ord-1', 'u1', 'OWNER', 'MANUFACTURER', 'org-mfg', CORRECT_DTO),
+    ).rejects.toThrow(ForbiddenException);
+  });
+
+  it('rejects an order that is not PACKED', async () => {
+    const fixtures = makeCorrectionFixtures({ orderStatus: 'shipped' });
+    const { service } = makeCorrectionService(fixtures);
+
+    await expect(
+      service.correctPackedOrder('ord-1', 'u1', 'OWNER', 'MANUFACTURER', 'org-mfg', CORRECT_DTO),
+    ).rejects.toThrow(BadRequestException);
+  });
+
+  it('rejects an order whose invoice was already corrected (idempotency)', async () => {
+    const fixtures = makeCorrectionFixtures({ invoiceCancelled: true });
+    const { service } = makeCorrectionService(fixtures);
+
+    await expect(
+      service.correctPackedOrder('ord-1', 'u1', 'OWNER', 'MANUFACTURER', 'org-mfg', CORRECT_DTO),
+    ).rejects.toThrow(BadRequestException);
+  });
+
+  it('rejects the clinic that placed the order — only manufacturer/admin may correct', async () => {
+    const fixtures = makeCorrectionFixtures();
+    const { service } = makeCorrectionService(fixtures);
+
+    await expect(
+      service.correctPackedOrder('ord-1', 'u1', 'OWNER', 'CLINIC', 'org-clinic', CORRECT_DTO),
+    ).rejects.toThrow(ForbiddenException);
+  });
+
+  it('rejects a manufacturer with no items on this order', async () => {
+    const fixtures = makeCorrectionFixtures();
+    const { service } = makeCorrectionService(fixtures);
+
+    await expect(
+      service.correctPackedOrder('ord-1', 'u1', 'OWNER', 'MANUFACTURER', 'org-some-other-mfg', CORRECT_DTO),
+    ).rejects.toThrow(ForbiddenException);
+  });
+
+  it('AYURLAHI_TEAM admin/support can correct any order', async () => {
+    const fixtures = makeCorrectionFixtures();
+    const { service, orderRepo } = makeCorrectionService(fixtures);
+
+    await service.correctPackedOrder('ord-1', 'u1', 'SUPER_ADMIN', 'AYURLAHI_TEAM', undefined, CORRECT_DTO);
+
+    expect(orderRepo.save).toHaveBeenCalled();
   });
 });

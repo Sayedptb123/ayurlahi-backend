@@ -22,6 +22,7 @@ import { UpdateOrderItemQuantityDto } from './dto/update-order-item-quantity.dto
 import { CreateReplacementDto } from './dto/create-replacement.dto';
 import { CreateExternalOrderDto } from './dto/create-external-order.dto';
 import { GrantExternalOrderAccessDto } from './dto/grant-external-order-access.dto';
+import { CorrectOrderDto } from './dto/correct-order.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 
 function requireTeam(req: any) {
@@ -116,6 +117,24 @@ export class OrdersController {
       req.user.organisationType,
       updateDto,
       req.user.organisationId,
+    );
+  }
+
+  // Post-PACKED Order Correction Workflow — manufacturer/admin only, PACKED
+  // + invoice exists + unpaid + not shipped (enforced in the service).
+  @Patch(':id/correct')
+  async correctOrder(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Request() req,
+    @Body() dto: CorrectOrderDto,
+  ) {
+    return this.ordersService.correctPackedOrder(
+      id,
+      req.user.userId,
+      req.user.role,
+      req.user.organisationType,
+      req.user.organisationId,
+      dto,
     );
   }
 

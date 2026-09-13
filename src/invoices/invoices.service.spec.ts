@@ -112,3 +112,30 @@ describe('InvoicesService.findOne — SEC-7 org-scoping', () => {
     ).rejects.toThrow(ForbiddenException);
   });
 });
+
+// Caught in the 2026-09-13 LIVE acceptance pass for the Post-PACKED Order
+// Correction Workflow (not by a unit test): a cancelled invoice
+// (isPaid=false, dueDate in the future) still matched the PENDING/OVERDUE
+// filter conditions, which checked isPaid/dueDate but not cancelledAt --
+// so GET /invoices?status=pending kept returning an invoice whose own
+// status field correctly said "cancelled". getSummary already excluded it;
+// applyStatusFilter's PENDING/OVERDUE branches didn't.
+describe('InvoicesService.findAll — cancelled invoices excluded from PENDING/OVERDUE', () => {
+  const query = { status: 'pending' } as any;
+
+  it('PENDING filter excludes a cancelled invoice (isPaid=false, cancelledAt set)', async () => {
+    const { service, qb } = makeService([]);
+    await service.findAll('u1', 'SUPER_ADMIN', query, undefined, 'AYURLAHI_TEAM');
+    expect(qb.andWhere).toHaveBeenCalledWith(
+      'invoice."isPaid" = false AND invoice."cancelledAt" IS NULL AND (invoice."dueDate" IS NULL OR invoice."dueDate" >= NOW())',
+    );
+  });
+
+  it('OVERDUE filter excludes a cancelled invoice the same way', async () => {
+    const { service, qb } = makeService([]);
+    await service.findAll('u1', 'SUPER_ADMIN', { status: 'overdue' } as any, undefined, 'AYURLAHI_TEAM');
+    expect(qb.andWhere).toHaveBeenCalledWith(
+      'invoice."isPaid" = false AND invoice."cancelledAt" IS NULL AND invoice."dueDate" < NOW()',
+    );
+  });
+});

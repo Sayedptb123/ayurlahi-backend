@@ -98,4 +98,16 @@ export class Invoice {
 
   @Column({ type: 'timestamp', nullable: true, name: 'deletedAt' })
   deletedAt: Date | null;
+
+  // Post-PACKED Order Correction Workflow (2026-09-13). Distinct from
+  // deletedAt -- a cancelled invoice stays visible/listable (filterable by
+  // status), it's just no longer counted as outstanding/pending. Set only
+  // by OrdersService.correctPackedOrder(); the original amounts/items above
+  // are never modified alongside it -- the record of what was originally
+  // billed stays intact, only its financial standing changes.
+  @Column({ type: 'timestamp', nullable: true, name: 'cancelledAt' })
+  cancelledAt: Date | null;
+
+  @Column({ type: 'varchar', length: 255, nullable: true, name: 'cancelReason' })
+  cancelReason: string | null;
 }

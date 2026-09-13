@@ -134,13 +134,19 @@ export class InvoicesService {
     }
     // AYURLAHI_TEAM: no additional filter — summary across every invoice.
 
+    // A cancelled invoice (correctPackedOrder()) is never paid by
+    // construction, so it would otherwise land in "outstanding"/"pending" --
+    // excluded from every non-paid bucket here, same as applyStatusFilter's
+    // own PENDING/OVERDUE branches should be read alongside a CANCELLED
+    // filter that already excludes them by construction (cancelledAt IS NOT
+    // NULL there, IS NULL here — mutually exclusive, not overlapping).
     const raw = await queryBuilder
       .select(`COALESCE(SUM(CASE WHEN invoice."isPaid" = true THEN invoice."totalAmount" ELSE 0 END), 0)`, 'totalPaid')
-      .addSelect(`COALESCE(SUM(CASE WHEN invoice."isPaid" = false THEN invoice."totalAmount" ELSE 0 END), 0)`, 'totalOutstanding')
-      .addSelect(`COALESCE(SUM(CASE WHEN invoice."isPaid" = false AND invoice."dueDate" < NOW() THEN invoice."totalAmount" ELSE 0 END), 0)`, 'overdueAmount')
+      .addSelect(`COALESCE(SUM(CASE WHEN invoice."isPaid" = false AND invoice."cancelledAt" IS NULL THEN invoice."totalAmount" ELSE 0 END), 0)`, 'totalOutstanding')
+      .addSelect(`COALESCE(SUM(CASE WHEN invoice."isPaid" = false AND invoice."cancelledAt" IS NULL AND invoice."dueDate" < NOW() THEN invoice."totalAmount" ELSE 0 END), 0)`, 'overdueAmount')
       .addSelect(`COUNT(*) FILTER (WHERE invoice."isPaid" = true)`, 'paidCount')
-      .addSelect(`COUNT(*) FILTER (WHERE invoice."isPaid" = false AND (invoice."dueDate" IS NULL OR invoice."dueDate" >= NOW()))`, 'pendingCount')
-      .addSelect(`COUNT(*) FILTER (WHERE invoice."isPaid" = false AND invoice."dueDate" < NOW())`, 'overdueCount')
+      .addSelect(`COUNT(*) FILTER (WHERE invoice."isPaid" = false AND invoice."cancelledAt" IS NULL AND (invoice."dueDate" IS NULL OR invoice."dueDate" >= NOW()))`, 'pendingCount')
+      .addSelect(`COUNT(*) FILTER (WHERE invoice."isPaid" = false AND invoice."cancelledAt" IS NULL AND invoice."dueDate" < NOW())`, 'overdueCount')
       .getRawOne();
 
     return {
@@ -157,17 +163,25 @@ export class InvoicesService {
     queryBuilder: SelectQueryBuilder<Invoice>,
     status: InvoiceStatus,
   ) {
+    // Found in the 2026-09-13 live acceptance pass for the Post-PACKED
+    // Order Correction Workflow: PENDING/OVERDUE didn't exclude a cancelled
+    // invoice (isPaid=false, dueDate in the future -- matches PENDING's own
+    // condition with no awareness cancelledAt exists), so a cancelled
+    // invoice kept showing up under the "Pending" filter/tab. getSummary's
+    // aggregates already had this guard; applyStatusFilter's PAID branch
+    // needs none (correctPackedOrder only ever cancels an unpaid invoice,
+    // so isPaid=true and cancelledAt set are mutually exclusive by
+    // construction) -- only PENDING/OVERDUE needed the fix.
     if (status === InvoiceStatus.PAID) {
       queryBuilder.andWhere('invoice."isPaid" = true');
     } else if (status === InvoiceStatus.OVERDUE) {
-      queryBuilder.andWhere('invoice."isPaid" = false AND invoice."dueDate" < NOW()');
+      queryBuilder.andWhere('invoice."isPaid" = false AND invoice."cancelledAt" IS NULL AND invoice."dueDate" < NOW()');
     } else if (status === InvoiceStatus.PENDING) {
       queryBuilder.andWhere(
-        'invoice."isPaid" = false AND (invoice."dueDate" IS NULL OR invoice."dueDate" >= NOW())',
+        'invoice."isPaid" = false AND invoice."cancelledAt" IS NULL AND (invoice."dueDate" IS NULL OR invoice."dueDate" >= NOW())',
       );
     } else if (status === InvoiceStatus.CANCELLED) {
-      // No invoice can currently be cancelled — nothing to match.
-      queryBuilder.andWhere('1 = 0');
+      queryBuilder.andWhere('invoice."cancelledAt" IS NOT NULL');
     }
   }
 
@@ -313,6 +327,13 @@ export class InvoicesService {
   }
 
   private getInvoiceStatus(invoice: Invoice): string {
+    // Checked first -- correctPackedOrder() only ever cancels an unpaid
+    // invoice (isPaid === true is a hard precondition it enforces), so this
+    // ordering doesn't matter in practice, but "cancelled" is the more
+    // specific fact once it's true and should win regardless.
+    if (invoice.cancelledAt) {
+      return 'cancelled';
+    }
     if (invoice.isPaid) {
       return 'paid';
     }
