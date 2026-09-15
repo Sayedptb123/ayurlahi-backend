@@ -16,7 +16,7 @@ import { Branch } from '../branches/entities/branch.entity';
 import { ClinicCapabilities } from '../clinic-capabilities/entities/clinic-capabilities.entity';
 import { PatientBillingService } from '../patient-billing/patient-billing.service';
 import { PatientsService } from '../patients/patients.service';
-import { CreateBookingDto, UpdateBookingDto, CheckAvailabilityDto } from './dto/booking.dto';
+import { CreateBookingDto, UpdateBookingDto, CheckAvailabilityDto, RecordRefundDto } from './dto/booking.dto';
 import { CreateEnquiryDto, UpdateEnquiryDto, ConvertEnquiryDto } from './dto/enquiry.dto';
 import { BookingFieldDefinition } from './entities/booking-field-definition.entity';
 import { CreateFieldDefinitionDto, UpdateFieldDefinitionDto } from './dto/field-definition.dto';
@@ -1164,6 +1164,63 @@ export class RetreatService {
         return { ...booking, status: BookingStatus.CANCELLED };
     }
 
+    /**
+     * Records the refund resolution for a CANCELLED booking's advance_paid.
+     * See scope/Handoff_Blocker_Fixes_2026-09-16.md #1 -- previously there was
+     * no refund feature at all, so a cancelled booking with any advance paid
+     * was a permanent dead end (removeBooking() unconditionally blocked it).
+     *
+     * advance_paid is deliberately never mutated here -- it's a historical
+     * snapshot of what the customer actually paid; refund_amount separately
+     * records what was subsequently returned, which can be partial or full.
+     * Exactly one refund record per booking (product decision) -- amount is
+     * whatever the staff enters in a single action, not a ledger.
+     *
+     * Concurrency: pessimistic-write locks the booking row before re-checking
+     * refundedAt, so two simultaneous requests for the same booking serialize
+     * instead of racing -- the second sees the first's already-committed
+     * refundedAt and correctly fails, rather than both recording a refund.
+     */
+    async recordRefund(clinicId: string, bookingId: string, userId: string, dto: RecordRefundDto) {
+        return this.dataSource.manager.transaction(async (manager) => {
+            const bookingRepo = manager.getRepository(RoomBooking);
+            const booking = await bookingRepo.findOne({
+                where: { id: bookingId, organisationId: clinicId },
+                lock: { mode: 'pessimistic_write' },
+            });
+            if (!booking) throw new NotFoundException('Booking not found');
+            if (booking.status !== BookingStatus.CANCELLED) {
+                throw new BadRequestException('Only a cancelled booking can have a refund recorded');
+            }
+            if (booking.refundedAt) {
+                throw new BadRequestException('A refund has already been recorded for this booking');
+            }
+
+            // The DTO's @Min(0) already rejects a negative amount at the HTTP
+            // boundary -- re-checked here too so the invariant holds for any
+            // caller of this service method, not only ones that went through
+            // the ValidationPipe.
+            if (dto.amount < 0) {
+                throw new BadRequestException('Refund amount cannot be negative');
+            }
+
+            const advancePaid = parseFloat(String(booking.advancePaid)) || 0;
+            if (dto.amount > advancePaid) {
+                throw new BadRequestException(
+                    `Refund amount (₹${dto.amount}) cannot exceed the advance paid (₹${advancePaid})`,
+                );
+            }
+
+            booking.refundAmount = dto.amount;
+            booking.refundMethod = dto.method;
+            booking.refundNote = dto.note?.trim() || null;
+            booking.refundedBy = userId;
+            booking.refundedAt = new Date();
+
+            return bookingRepo.save(booking);
+        });
+    }
+
     async removeBooking(clinicId: string, bookingId: string) {
         const booking = await this.bookingRepo.findOne({
             where: { id: bookingId, organisationId: clinicId },
@@ -1172,7 +1229,10 @@ export class RetreatService {
         if (booking.status !== BookingStatus.CANCELLED) {
             throw new BadRequestException('Only cancelled bookings can be removed');
         }
-        if (booking.advancePaid && parseFloat(String(booking.advancePaid)) > 0) {
+        // A refund record (even for ₹0 or a partial amount) is what resolves
+        // the advance -- advance_paid itself is never cleared, so checking it
+        // alone would stay permanently blocked. See recordRefund() above.
+        if (booking.advancePaid && parseFloat(String(booking.advancePaid)) > 0 && !booking.refundedAt) {
             throw new BadRequestException('Refund the advance payment before removing this booking');
         }
         await this.bookingRepo.softDelete({ id: bookingId });

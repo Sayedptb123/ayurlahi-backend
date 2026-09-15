@@ -1,5 +1,5 @@
 import { IsUUID, IsDateString, IsOptional, IsNumber, IsString, IsEnum, IsBoolean, Min } from 'class-validator';
-import { BookingStatus } from '../entities/room-booking.entity';
+import { BookingStatus, RefundMethod } from '../entities/room-booking.entity';
 
 export class CreateBookingDto {
     @IsOptional()
@@ -99,6 +99,22 @@ export class UpdateBookingDto {
     @IsOptional()
     @IsUUID()
     branchId?: string;
+}
+
+export class RecordRefundDto {
+    // Lower bound enforced here (>= 0); the upper bound (<= advancePaid) can
+    // only be checked in the service, against the specific booking's stored
+    // advance_paid.
+    @IsNumber()
+    @Min(0)
+    amount: number;
+
+    @IsEnum(RefundMethod)
+    method: RefundMethod;
+
+    @IsOptional()
+    @IsString()
+    note?: string;
 }
 
 export class CheckAvailabilityDto {

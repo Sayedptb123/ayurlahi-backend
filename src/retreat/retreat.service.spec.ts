@@ -1,8 +1,8 @@
-import { ForbiddenException, BadRequestException } from '@nestjs/common';
+import { ForbiddenException, BadRequestException, NotFoundException } from '@nestjs/common';
 import { RetreatService, rangesOverlap } from './retreat.service';
 import { RoomStatus } from './entities/room.entity';
 import { AdmissionStatus } from './entities/admission.entity';
-import { BookingStatus } from './entities/room-booking.entity';
+import { BookingStatus, RefundMethod } from './entities/room-booking.entity';
 
 // Day helper — epoch ms for 2026-06-DD (UTC), so overlap math reads like the docs.
 const day = (d: number) => Date.UTC(2026, 5, d);
@@ -204,5 +204,196 @@ describe('RetreatService W1-A.1 — resolveCareProgram', () => {
         const svc = makeService(null);
         await expect(resolve(svc, 'postnatal')).rejects.toBeInstanceOf(BadRequestException);
         await expect(resolve(makeService(null))).resolves.toBeNull();
+    });
+});
+
+// Booking cancellation/refund dead-end fix (scope/Handoff_Blocker_Fixes_2026-09-16.md #1).
+// advancePaid is never mutated by recordRefund -- refundedAt is the single
+// source of truth for "has a refund been recorded," which is what unblocks
+// removeBooking(). Exactly one refund record per booking (product decision):
+// a repeat call on an already-refunded booking is rejected, not accumulated.
+describe('RetreatService — recordRefund', () => {
+    const makeBookingRow = (overrides: Partial<any> = {}) => ({
+        id: 'bk-1',
+        organisationId: 'org-1',
+        status: BookingStatus.CANCELLED,
+        advancePaid: 10000,
+        refundedAt: null,
+        ...overrides,
+    });
+
+    // Stands in for the pessimistic-write transaction in recordRefund():
+    // dataSource.manager.transaction's callback receives a fake EntityManager
+    // whose getRepository(RoomBooking) returns a repo backed by the same
+    // `booking` object every time findOne() is called -- so mutating and
+    // saving it inside the service is visible to a second call on the same
+    // mocked service, the same way a second real transaction would see the
+    // first one's already-committed row.
+    const makeService = (booking: any) => {
+        const saved: any[] = [];
+        const txBookingRepo = {
+            findOne: jest.fn(() => Promise.resolve(booking)),
+            save: jest.fn((b: any) => {
+                saved.push(b);
+                return Promise.resolve(b);
+            }),
+        };
+        const dataSource = {
+            manager: {
+                transaction: jest.fn((cb: any) => cb({ getRepository: jest.fn(() => txBookingRepo) })),
+            },
+        };
+        const service = new RetreatService(
+            {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any,
+            {} as any, {} as any, {} as any, {} as any,
+            dataSource as any, // dataSource
+            {} as any, {} as any, {} as any, {} as any,
+        );
+        return { service, txBookingRepo, saved };
+    };
+
+    it('records a full refund', async () => {
+        const booking = makeBookingRow({ advancePaid: 10000 });
+        const { service, saved } = makeService(booking);
+        const result = await service.recordRefund('org-1', 'bk-1', 'user-1', {
+            amount: 10000,
+            method: RefundMethod.UPI,
+        });
+        expect(saved[0]).toMatchObject({ refundAmount: 10000, refundMethod: RefundMethod.UPI, refundedBy: 'user-1' });
+        expect(saved[0].refundedAt).toBeInstanceOf(Date);
+        expect(result.advancePaid).toBe(10000); // untouched historical snapshot
+    });
+
+    it('records a partial refund without touching advancePaid', async () => {
+        const booking = makeBookingRow({ advancePaid: 10000 });
+        const { service, saved } = makeService(booking);
+        await service.recordRefund('org-1', 'bk-1', 'user-1', { amount: 4000, method: RefundMethod.CASH });
+        expect(saved[0].refundAmount).toBe(4000);
+        expect(saved[0].advancePaid).toBe(10000);
+    });
+
+    it('records a ₹0 refund (deposit forfeited, resolution still recorded)', async () => {
+        const booking = makeBookingRow({ advancePaid: 10000 });
+        const { service, saved } = makeService(booking);
+        await service.recordRefund('org-1', 'bk-1', 'user-1', { amount: 0, method: RefundMethod.OTHER });
+        expect(saved[0].refundAmount).toBe(0);
+        expect(saved[0].refundedAt).toBeInstanceOf(Date);
+    });
+
+    it('rejects an amount greater than advancePaid', async () => {
+        const booking = makeBookingRow({ advancePaid: 5000 });
+        const { service, txBookingRepo } = makeService(booking);
+        await expect(
+            service.recordRefund('org-1', 'bk-1', 'user-1', { amount: 5001, method: RefundMethod.CASH }),
+        ).rejects.toBeInstanceOf(BadRequestException);
+        expect(txBookingRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('rejects a negative amount', async () => {
+        const booking = makeBookingRow({ advancePaid: 5000 });
+        const { service, txBookingRepo } = makeService(booking);
+        await expect(
+            service.recordRefund('org-1', 'bk-1', 'user-1', { amount: -100, method: RefundMethod.CASH }),
+        ).rejects.toBeInstanceOf(BadRequestException);
+        expect(txBookingRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('rejects recording a refund on a non-cancelled booking', async () => {
+        const booking = makeBookingRow({ status: BookingStatus.CONFIRMED });
+        const { service, txBookingRepo } = makeService(booking);
+        await expect(
+            service.recordRefund('org-1', 'bk-1', 'user-1', { amount: 100, method: RefundMethod.CASH }),
+        ).rejects.toBeInstanceOf(BadRequestException);
+        expect(txBookingRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('rejects a duplicate refund attempt on a booking that already has one recorded', async () => {
+        const booking = makeBookingRow({ refundedAt: new Date('2026-09-16') });
+        const { service, txBookingRepo } = makeService(booking);
+        await expect(
+            service.recordRefund('org-1', 'bk-1', 'user-1', { amount: 100, method: RefundMethod.CASH }),
+        ).rejects.toBeInstanceOf(BadRequestException);
+        expect(txBookingRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('throws NotFoundException when the booking does not exist in this organisation', async () => {
+        const { service, txBookingRepo } = makeService(null);
+        await expect(
+            service.recordRefund('org-1', 'missing', 'user-1', { amount: 0, method: RefundMethod.CASH }),
+        ).rejects.toBeInstanceOf(NotFoundException);
+        expect(txBookingRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('locks the booking row pessimistic-write before checking refundedAt (concurrency guard)', async () => {
+        const booking = makeBookingRow();
+        const { service, txBookingRepo } = makeService(booking);
+        await service.recordRefund('org-1', 'bk-1', 'user-1', { amount: 100, method: RefundMethod.CASH });
+        expect(txBookingRepo.findOne).toHaveBeenCalledWith(
+            expect.objectContaining({ lock: { mode: 'pessimistic_write' } }),
+        );
+    });
+
+    it('a second attempt on the same row after the first committed is rejected (simulated concurrent/double refund)', async () => {
+        const booking = makeBookingRow();
+        const { service } = makeService(booking);
+        // First call wins and mutates `booking` in place -- the mocked findOne
+        // keeps returning that same object, standing in for a second
+        // transaction reading the row after the first one committed under the
+        // pessimistic lock.
+        await service.recordRefund('org-1', 'bk-1', 'user-1', { amount: 100, method: RefundMethod.CASH });
+        await expect(
+            service.recordRefund('org-1', 'bk-1', 'user-2', { amount: 200, method: RefundMethod.CASH }),
+        ).rejects.toBeInstanceOf(BadRequestException);
+    });
+});
+
+describe('RetreatService — removeBooking (refund gate)', () => {
+    const makeService = (booking: any) => {
+        const bookingRepo = {
+            findOne: jest.fn(() => Promise.resolve(booking)),
+            softDelete: jest.fn(() => Promise.resolve({ affected: 1 })),
+        };
+        const service = new RetreatService(
+            {} as any, {} as any, {} as any,
+            bookingRepo as any, // bookingRepo
+            {} as any, {} as any, {} as any, {} as any,
+            {} as any, {} as any, {} as any, {} as any,
+            {} as any, // dataSource
+            {} as any, {} as any, {} as any, {} as any,
+        );
+        return { service, bookingRepo };
+    };
+
+    it('cancellation with no advance paid can be removed immediately, no refund needed', async () => {
+        const { service, bookingRepo } = makeService({
+            id: 'bk-1',
+            status: BookingStatus.CANCELLED,
+            advancePaid: 0,
+            refundedAt: null,
+        });
+        await expect(service.removeBooking('org-1', 'bk-1')).resolves.toBeUndefined();
+        expect(bookingRepo.softDelete).toHaveBeenCalledWith({ id: 'bk-1' });
+    });
+
+    it('blocks removal before a refund is recorded', async () => {
+        const { service, bookingRepo } = makeService({
+            id: 'bk-1',
+            status: BookingStatus.CANCELLED,
+            advancePaid: 5000,
+            refundedAt: null,
+        });
+        await expect(service.removeBooking('org-1', 'bk-1')).rejects.toBeInstanceOf(BadRequestException);
+        expect(bookingRepo.softDelete).not.toHaveBeenCalled();
+    });
+
+    it('allows removal after a refund is recorded, even though advancePaid itself is untouched', async () => {
+        const { service, bookingRepo } = makeService({
+            id: 'bk-1',
+            status: BookingStatus.CANCELLED,
+            advancePaid: 5000,
+            refundedAt: new Date('2026-09-16'),
+        });
+        await expect(service.removeBooking('org-1', 'bk-1')).resolves.toBeUndefined();
+        expect(bookingRepo.softDelete).toHaveBeenCalledWith({ id: 'bk-1' });
     });
 });

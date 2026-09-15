@@ -3,6 +3,7 @@ import {
   NotFoundException,
   BadRequestException,
   ForbiddenException,
+  InternalServerErrorException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, IsNull, In, EntityManager } from 'typeorm';
@@ -1068,6 +1069,12 @@ export class OrdersService {
       order.notes = order.notes ? `${order.notes}\n\n---\n${transitionNote}` : transitionNote;
     }
 
+    // Set only by the PACKED branch below, whose stock/item/invoice writes
+    // run inside their own transaction (see that branch) -- when set, this
+    // supersedes the generic save at the bottom of this method instead of
+    // saving `order` a second time outside that transaction.
+    let packedSavedOrder: Order | undefined;
+
     // Update timestamps based on status
     if (updateDto.status === OrderStatus.CONFIRMED && !order.confirmedAt) {
       order.confirmedAt = new Date();
@@ -1077,87 +1084,124 @@ export class OrdersService {
     ) {
       order.packedAt = new Date();
 
-      // Record what was actually packed per item (defaults to
-      // reservedQuantity -- the common case, everything reserved got
-      // packed) and any per-item discount. This is not the packing UI and
-      // not an amendment -- it only records the outcome of packing for
-      // items that already exist on the order. See
-      // scope/Order_Fulfillment_Lifecycle_Scope_2026-09-07.md §7.
-      if (order.items && order.items.length > 0) {
-        const providedIds = new Set((updateDto.items || []).map((i) => i.orderItemId));
-        const realIds = new Set(order.items.map((i) => i.id));
-        for (const providedId of providedIds) {
-          if (!realIds.has(providedId)) {
-            throw new BadRequestException(`Order item ${providedId} does not belong to this order`);
+      // Packing must be atomic: stock release, per-item/order field updates,
+      // and invoice creation all commit together or none do (audit finding,
+      // 2026-09-16 -- see scope/Handoff_Blocker_Fixes_2026-09-16.md). Previously
+      // the invoice save's error was caught and only logged, so an order
+      // could reach PACKED with stock already released and item fields
+      // already mutated, but no invoice and no way to tell from the API
+      // response. createInvoiceForPackedOrder no longer swallows its own
+      // save error -- it propagates here and rolls back everything below.
+      let createdInvoice: Invoice | null = null;
+      try {
+        packedSavedOrder = await this.ordersRepository.manager.transaction(async (manager) => {
+          const productRepo = manager.getRepository(Product);
+          const orderRepo = manager.getRepository(Order);
+
+          // Record what was actually packed per item (defaults to
+          // reservedQuantity -- the common case, everything reserved got
+          // packed) and any per-item discount. This is not the packing UI
+          // and not an amendment -- it only records the outcome of packing
+          // for items that already exist on the order. See
+          // scope/Order_Fulfillment_Lifecycle_Scope_2026-09-07.md §7.
+          if (order.items && order.items.length > 0) {
+            const providedIds = new Set((updateDto.items || []).map((i) => i.orderItemId));
+            const realIds = new Set(order.items.map((i) => i.id));
+            for (const providedId of providedIds) {
+              if (!realIds.has(providedId)) {
+                throw new BadRequestException(`Order item ${providedId} does not belong to this order`);
+              }
+            }
+            const packedInputById = new Map((updateDto.items || []).map((i) => [i.orderItemId, i]));
+
+            for (const item of order.items) {
+              const input = packedInputById.get(item.id);
+
+              // packedQuantity can never exceed reservedQuantity -- packing
+              // can't physically produce more than was reserved. Omitting it
+              // defaults to "everything reserved got packed"; an explicit
+              // lower value is the only way it lands below reservedQuantity
+              // (e.g. a reserved unit failed a quality check during
+              // packing).
+              const requestedPacked = input?.packedQuantity ?? item.reservedQuantity;
+              const packedQuantity = Math.min(requestedPacked, item.reservedQuantity);
+
+              // Reserved-but-never-packed: release back to stock now, same
+              // mechanism already used for cancellation restoration (§5/§6
+              // of the scope doc) -- this is the reconciliation that section
+              // explicitly deferred until PACKED existed.
+              const toRelease = item.reservedQuantity - packedQuantity;
+              if (toRelease > 0) {
+                await productRepo.increment({ id: item.productId }, 'stockQuantity', toRelease);
+              }
+
+              // reservedQuantity is a LIVE figure -- "how much is currently
+              // held in reservation for this item" -- kept in sync by every
+              // other stock-release path in this file (removeOrderItem,
+              // updateOrderItemQuantity's delta-release branch). This was
+              // the one place that released stock without updating it to
+              // match, which meant a later PACKED -> CANCELLED (a legal
+              // transition) restored the item's ORIGINAL reservation on top
+              // of what packing had already released here --
+              // double-crediting the shortfall back to stock. Fixed
+              // 2026-09-12 (audit finding, HIGH severity): shrink
+              // reservedQuantity by exactly what was just released, so
+              // whatever restores it later (cancellation) restores only
+              // what's still actually outstanding.
+              item.reservedQuantity = packedQuantity;
+
+              item.packedQuantity = packedQuantity;
+              item.discountAmount = input?.discountAmount ?? Number(item.discountAmount) ?? 0;
+
+              // Per-item subtotal/gstAmount/totalAmount/commissionAmount
+              // were previously left at their order-creation values
+              // (computed from the originally REQUESTED quantity) and never
+              // resynced here -- unlike the order-level aggregates (fixed
+              // earlier the same day), this per-item drift silently
+              // corrupted analytics.service.ts's "Top Selling Medicines"
+              // query, which sums these fields directly. Recomputed from
+              // packedQuantity, same formula shape as
+              // createInvoiceForPackedOrder's own per-line math just below,
+              // so these numbers can never disagree with what actually gets
+              // invoiced. Deliberately NOT discount-inclusive, matching the
+              // existing convention for this field everywhere else in the
+              // file (order.discountAmount stays a separate aggregate line,
+              // not folded into totalAmount).
+              const packedSubtotal = Number(item.unitPrice) * packedQuantity;
+              const packedGstAmount = (packedSubtotal * Number(item.gstRate)) / 100;
+              item.subtotal = packedSubtotal;
+              item.gstAmount = packedGstAmount;
+              item.totalAmount = packedSubtotal + packedGstAmount;
+              item.commissionAmount = (item.totalAmount * 0.05) / 100;
+            }
+
+            order.discountAmount = order.items.reduce((sum, i) => sum + (Number(i.discountAmount) || 0), 0);
           }
+
+          // Billing now happens here, not on DELIVERED -- packing is the
+          // checkpoint quantities and money are frozen at (§7). Renamed from
+          // createInvoiceForDeliveredOrder to reflect the new trigger.
+          createdInvoice = await this.createInvoiceForPackedOrder(order, manager);
+
+          return orderRepo.save(order);
+        });
+      } catch (err: any) {
+        if (err instanceof BadRequestException || err instanceof ForbiddenException) {
+          throw err;
         }
-        const packedInputById = new Map((updateDto.items || []).map((i) => [i.orderItemId, i]));
-
-        for (const item of order.items) {
-          const input = packedInputById.get(item.id);
-
-          // packedQuantity can never exceed reservedQuantity -- packing
-          // can't physically produce more than was reserved. Omitting it
-          // defaults to "everything reserved got packed"; an explicit lower
-          // value is the only way it lands below reservedQuantity (e.g. a
-          // reserved unit failed a quality check during packing).
-          const requestedPacked = input?.packedQuantity ?? item.reservedQuantity;
-          const packedQuantity = Math.min(requestedPacked, item.reservedQuantity);
-
-          // Reserved-but-never-packed: release back to stock now, same
-          // mechanism already used for cancellation restoration (§5/§6 of
-          // the scope doc) -- this is the reconciliation that section
-          // explicitly deferred until PACKED existed.
-          const toRelease = item.reservedQuantity - packedQuantity;
-          if (toRelease > 0) {
-            await this.productsRepository.increment({ id: item.productId }, 'stockQuantity', toRelease);
-          }
-
-          // reservedQuantity is a LIVE figure -- "how much is currently held
-          // in reservation for this item" -- kept in sync by every other
-          // stock-release path in this file (removeOrderItem,
-          // updateOrderItemQuantity's delta-release branch). This was the
-          // one place that released stock without updating it to match,
-          // which meant a later PACKED -> CANCELLED (a legal transition)
-          // restored the item's ORIGINAL reservation on top of what packing
-          // had already released here -- double-crediting the shortfall
-          // back to stock. Fixed 2026-09-12 (audit finding, HIGH severity):
-          // shrink reservedQuantity by exactly what was just released, so
-          // whatever restores it later (cancellation) restores only what's
-          // still actually outstanding.
-          item.reservedQuantity = packedQuantity;
-
-          item.packedQuantity = packedQuantity;
-          item.discountAmount = input?.discountAmount ?? Number(item.discountAmount) ?? 0;
-
-          // Per-item subtotal/gstAmount/totalAmount/commissionAmount were
-          // previously left at their order-creation values (computed from
-          // the originally REQUESTED quantity) and never resynced here --
-          // unlike the order-level aggregates (fixed earlier the same day),
-          // this per-item drift silently corrupted analytics.service.ts's
-          // "Top Selling Medicines" query, which sums these fields directly.
-          // Recomputed from packedQuantity, same formula shape as
-          // createInvoiceForPackedOrder's own per-line math just below, so
-          // these numbers can never disagree with what actually gets
-          // invoiced. Deliberately NOT discount-inclusive, matching the
-          // existing convention for this field everywhere else in the file
-          // (order.discountAmount stays a separate aggregate line, not
-          // folded into totalAmount).
-          const packedSubtotal = Number(item.unitPrice) * packedQuantity;
-          const packedGstAmount = (packedSubtotal * Number(item.gstRate)) / 100;
-          item.subtotal = packedSubtotal;
-          item.gstAmount = packedGstAmount;
-          item.totalAmount = packedSubtotal + packedGstAmount;
-          item.commissionAmount = (item.totalAmount * 0.05) / 100;
-        }
-
-        order.discountAmount = order.items.reduce((sum, i) => sum + (Number(i.discountAmount) || 0), 0);
+        console.error('[OrdersService] Packing failed, rolled back', order.id, err?.message);
+        throw new InternalServerErrorException(
+          'Unable to pack this order — invoice creation failed, so nothing was changed. Please try again or contact support.',
+        );
       }
 
-      // Billing now happens here, not on DELIVERED -- packing is the
-      // checkpoint quantities and money are frozen at (§7). Renamed from
-      // createInvoiceForDeliveredOrder to reflect the new trigger.
-      await this.createInvoiceForPackedOrder(order);
+      // Fires only after the transaction above has actually committed --
+      // never speculatively, and never for a run that hit the existing-invoice
+      // short-circuit (createdInvoice stays null there, same as a genuine
+      // no-op re-pack of an already-packed order).
+      if (createdInvoice) {
+        this.notifyInvoiceReady(order, createdInvoice);
+      }
     } else if (updateDto.status === OrderStatus.SHIPPED && !order.shippedAt) {
       order.shippedAt = new Date();
     } else if (
@@ -1236,7 +1280,10 @@ export class OrdersService {
       }
     }
 
-    const savedOrder = await this.ordersRepository.save(order);
+    // PACKED already saved `order` (with its stock/item/invoice writes) inside
+    // its own transaction above -- saving it again here would be redundant
+    // and, worse, would run outside that transaction's guarantees.
+    const savedOrder = packedSavedOrder ?? (await this.ordersRepository.save(order));
 
     // Notify the *other side* of the marketplace about status changes:
     //   - manufacturer → clinic for confirmed/shipped/delivered
@@ -1953,16 +2000,26 @@ export class OrdersService {
    * fields can be populated by a separate worker that picks up invoices
    * with empty s3Key.
    */
-  private async createInvoiceForPackedOrder(order: Order): Promise<void> {
+  // Runs inside the PACKED-transition transaction (see updateStatus) --
+  // `manager` is that transaction's EntityManager, not the injected
+  // repositories, so a failed save here rolls back the stock/item changes
+  // made alongside it instead of leaving them committed with no invoice
+  // (audit finding, 2026-09-16). Deliberately does NOT catch/swallow the
+  // save error itself -- the caller's try/catch around the whole transaction
+  // is what turns a failure into a clean "packing failed" response instead
+  // of a silently-swallowed one.
+  private async createInvoiceForPackedOrder(order: Order, manager: EntityManager): Promise<Invoice | null> {
+    const invoiceRepo = manager.getRepository(Invoice);
+
     // Don't duplicate if already exists
-    const existing = await this.invoicesRepository.findOne({ where: { orderId: order.id } });
-    if (existing) return;
+    const existing = await invoiceRepo.findOne({ where: { orderId: order.id } });
+    if (existing) return null;
 
     const packedItems = (order.items || []).filter((i) => i.packedQuantity > 0);
     // Nothing was actually packed (e.g. zero stock was ever reserved for
     // every item) -- there is nothing to bill. A zero-item, zero-total
     // invoice would be a real row with no real meaning.
-    if (packedItems.length === 0) return;
+    if (packedItems.length === 0) return null;
 
     // Per-item subtotal/GST are recomputed from packedQuantity here, not
     // read from the item's stored subtotal/gstAmount snapshot -- those were
@@ -2055,7 +2112,7 @@ export class OrdersService {
         }
       : await this.getClinicPrimaryBranchAddress(order.organisationId);
 
-    const invoice = this.invoicesRepository.create({
+    const invoice = invoiceRepo.create({
       orderId: order.id,
       invoiceNumber,
       s3Key: '', // populated when S3 worker generates PDF
@@ -2080,34 +2137,37 @@ export class OrdersService {
       isGstInvoice: true,
       hsnCode: null,
     });
-    try {
-      await this.invoicesRepository.save(invoice);
 
-      // Invoice creation was previously silent — the clinic only found out
-      // a bill existed by opening the Invoices screen themselves. Reuses
-      // the invoice_paid route's screen ('Invoices') with its own type so
-      // tapping lands on the list; the clinic's own bill sits at the top.
-      this.orgUserRepository
-        .find({ where: { organisationId: order.organisationId, role: In(['OWNER', 'MANAGER', 'ADMIN']), isActive: true } })
-        .then((orgUsers) => {
-          const userIds = orgUsers.map((ou) => ou.userId).filter(Boolean);
-          if (userIds.length > 0) {
-            const branchName = (order.shippingAddress as any)?.name as string | undefined;
-            const branchLabel = branchName ? ` (${branchName})` : '';
-            this.notificationsService.sendToUsers({
-              userIds,
-              title: 'Invoice Ready',
-              body: `Invoice ${invoiceNumber} for Order ${order.orderNumber}${branchLabel} is ready — ₹${totalAmount.toFixed(2)}`,
-              data: { orderId: order.id, invoiceId: invoice.id, type: 'invoice_ready', organisationId: order.organisationId },
-            }).catch(() => {});
-          }
-        })
-        .catch(() => {});
-    } catch (err: any) {
-      // Don't fail the order delivery if invoice creation hits a constraint;
-      // log and continue. Accountants can regenerate via separate flow.
-      console.error('[OrdersService] Failed to create invoice for order', order.id, err?.message);
-    }
+    // No try/catch here by design -- a save failure must propagate up
+    // through the transaction in updateStatus's PACKED branch and roll
+    // everything back, not be logged and ignored.
+    await invoiceRepo.save(invoice);
+    return invoice;
+  }
+
+  // Fire only after the PACKED transaction has committed -- see the call
+  // site in updateStatus. Invoice creation was previously silent -- the
+  // clinic only found out a bill existed by opening the Invoices screen
+  // themselves. Reuses the invoice_paid route's screen ('Invoices') with its
+  // own type so tapping lands on the list; the clinic's own bill sits at the
+  // top.
+  private notifyInvoiceReady(order: Order, invoice: Invoice): void {
+    this.orgUserRepository
+      .find({ where: { organisationId: order.organisationId, role: In(['OWNER', 'MANAGER', 'ADMIN']), isActive: true } })
+      .then((orgUsers) => {
+        const userIds = orgUsers.map((ou) => ou.userId).filter(Boolean);
+        if (userIds.length > 0) {
+          const branchName = (order.shippingAddress as any)?.name as string | undefined;
+          const branchLabel = branchName ? ` (${branchName})` : '';
+          this.notificationsService.sendToUsers({
+            userIds,
+            title: 'Invoice Ready',
+            body: `Invoice ${invoice.invoiceNumber} for Order ${order.orderNumber}${branchLabel} is ready — ₹${Number(invoice.totalAmount).toFixed(2)}`,
+            data: { orderId: order.id, invoiceId: invoice.id, type: 'invoice_ready', organisationId: order.organisationId },
+          }).catch(() => {});
+        }
+      })
+      .catch(() => {});
   }
 
   // organisations has no gstin column — that lives on clinic_profiles. Looked

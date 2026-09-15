@@ -23,6 +23,14 @@ export enum BookingStatus {
     NO_SHOW = 'NO_SHOW',
 }
 
+export enum RefundMethod {
+    CASH = 'CASH',
+    UPI = 'UPI',
+    BANK_TRANSFER = 'BANK_TRANSFER',
+    CARD = 'CARD',
+    OTHER = 'OTHER',
+}
+
 @Entity('room_bookings')
 export class RoomBooking {
     @PrimaryGeneratedColumn('uuid')
@@ -105,6 +113,30 @@ export class RoomBooking {
 
     @Column({ type: 'timestamp', nullable: true, name: 'booking_date' })
     bookingDate: Date | null;
+
+    // Refund resolution for a CANCELLED booking's advance_paid -- advance_paid
+    // itself is never mutated (historical snapshot of what was actually
+    // collected); refundedAt IS NOT NULL is the single source of truth for
+    // "has a refund been recorded" (see removeBooking() in retreat.service.ts).
+    // Exactly one refund record per booking by product decision -- amount can
+    // be a partial or full return of advance_paid, but is captured once, not
+    // as a ledger of installments. See scope/Handoff_Blocker_Fixes_2026-09-16.md.
+    @Column({ type: 'decimal', precision: 10, scale: 2, nullable: true, name: 'refund_amount' })
+    refundAmount: number | null;
+
+    @Column({ type: 'enum', enum: RefundMethod, nullable: true, name: 'refund_method' })
+    refundMethod: RefundMethod | null;
+
+    @Column({ type: 'text', nullable: true, name: 'refund_note' })
+    refundNote: string | null;
+
+    // Plain uuid, no FK relation -- same convention as organisation_id/
+    // cancelled_by elsewhere in this codebase.
+    @Column({ type: 'uuid', nullable: true, name: 'refunded_by' })
+    refundedBy: string | null;
+
+    @Column({ type: 'timestamp', nullable: true, name: 'refunded_at' })
+    refundedAt: Date | null;
 
     @DeleteDateColumn({ type: 'timestamp', nullable: true, name: 'deleted_at' })
     deletedAt: Date | null;

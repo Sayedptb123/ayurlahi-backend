@@ -18,7 +18,7 @@ import type { Response } from 'express';
 import { RetreatService } from './retreat.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { ModuleGuard, RequireModule } from '../auth/guards/module.guard';
-import { CreateBookingDto, UpdateBookingDto, CheckAvailabilityDto } from './dto/booking.dto';
+import { CreateBookingDto, UpdateBookingDto, CheckAvailabilityDto, RecordRefundDto } from './dto/booking.dto';
 import { CreateEnquiryDto, UpdateEnquiryDto, ConvertEnquiryDto } from './dto/enquiry.dto';
 import { CreateFieldDefinitionDto, UpdateFieldDefinitionDto } from './dto/field-definition.dto';
 import { CreateRoomCategoryDto, UpdateRoomCategoryDto, GetRoomCategoriesDto } from './dto/room-category.dto';
@@ -290,6 +290,12 @@ export class RetreatController {
     @Delete('bookings/:id/remove')
     removeBooking(@Request() req, @Param('id') id: string) {
         return this.retreatService.removeBooking(req.user.organisationId, id);
+    }
+
+    @Patch('bookings/:id/refund')
+    recordRefund(@Request() req, @Param('id') id: string, @Body() dto: RecordRefundDto) {
+        const clinicId = req.user.organisationId;
+        return this.retreatService.recordRefund(clinicId, id, req.user.userId, dto);
     }
 
     @Post('bookings/check-availability')
