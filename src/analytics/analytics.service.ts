@@ -1208,15 +1208,26 @@ export class AnalyticsService {
     }));
 
     // 2. Top Selling Medicines
+    // T19 fix (2026-09-16, scope/Handoff_Blocker_Fixes_2026-09-16.md): units
+    // sold must be item.packedQuantity (actual-supplied), not item.quantity
+    // (immutable originally-requested amount) -- a packing shortfall
+    // otherwise overstates units sold. Also restrict to orders that have
+    // actually reached PACKED/SHIPPED/DELIVERED -- the old
+    // NOT IN ('cancelled','returned') filter let pending/confirmed/
+    // processing orders (nothing packed yet) contribute fake units and
+    // revenue. The revenue side (item.totalAmount) is unaffected by this
+    // change -- it was already correctly resynced from packedQuantity at
+    // the PACKED transition (orders.service.ts), this fix is purely the
+    // units-sold field and the status filter.
     const topMedicinesRaw = await this.ordersRepository.createQueryBuilder('o')
       .innerJoin('o.items', 'item')
       .select('item.productName', 'name')
-      .addSelect('SUM(item.quantity)', 'totalQuantity')
+      .addSelect('SUM(item.packedQuantity)', 'totalQuantity')
       .addSelect('SUM(item.totalAmount)', 'totalRevenue')
       .where(`o.createdAt >= CURRENT_DATE - INTERVAL '${days} days'`)
-      .andWhere("o.status NOT IN ('cancelled', 'returned')")
+      .andWhere("o.status IN ('packed', 'shipped', 'delivered')")
       .groupBy('item.productName')
-      .orderBy('SUM(item.quantity)', 'DESC')
+      .orderBy('SUM(item.packedQuantity)', 'DESC')
       .limit(10)
       .getRawMany();
 

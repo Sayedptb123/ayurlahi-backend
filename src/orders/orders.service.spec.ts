@@ -250,6 +250,24 @@ const makeWriteService = (order: any, inventoryService: any = {}) => {
     save: jest.fn((x: any) => Promise.resolve(x)),
     manager: { getRepository: jest.fn(() => genericSubRepo()) },
   };
+
+  // PACKED now runs inside its own transaction (2026-09-16 fix, see
+  // scope/Handoff_Blocker_Fixes_2026-09-16.md #3) -- the transaction
+  // callback's manager.getRepository(Product/Order/Invoice) must resolve to
+  // these SAME mocks, not fresh copies, so every existing assertion below
+  // (productsRepository.increment, ordersRepository.save,
+  // invoicesRepository.findOne/save) keeps working whether the real code
+  // reaches them directly or via the transactional manager.
+  const txManager: any = {
+    getRepository: jest.fn((entityClass: any) => {
+      if (entityClass === Product) return productsRepository;
+      if (entityClass === Order) return ordersRepository;
+      if (entityClass === Invoice) return invoicesRepository;
+      return genericSubRepo();
+    }),
+  };
+  ordersRepository.manager.transaction = jest.fn((cb: any) => cb(txManager));
+
   const service = new OrdersService(
     ordersRepository,
     {} as any, // orderItemsRepository
