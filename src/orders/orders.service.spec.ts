@@ -248,14 +248,30 @@ const makeWriteService = (order: any, inventoryService: any = {}) => {
   const notificationsService = { sendToUsers: jest.fn(() => Promise.resolve()) };
   const ordersRepository: any = {
     save: jest.fn((x: any) => Promise.resolve(x)),
+    // T25 (2026-09-16): the PACKED branch's transaction now re-fetches the
+    // order WITH a pessimistic lock and re-checks packedAt before doing
+    // anything else. In production that's a genuinely fresh DB read -- the
+    // outer `order.packedAt = new Date()` a few lines up in updateStatus()
+    // is only an in-memory mutation until this transaction commits, so the
+    // real locked read still sees packedAt as null. Echoing the same
+    // (already-mutated) `order` object back here would trip the new
+    // already-packed guard on every call, so this returns a shallow clone
+    // with packedAt forced back to null instead.
+    findOne: jest.fn(() => Promise.resolve({ ...order, packedAt: null })),
     manager: { getRepository: jest.fn(() => genericSubRepo()) },
   };
+  // T25: items are fetched separately inside the transaction (a pessimistic
+  // lock can't be combined with an eager relations join -- see the
+  // production comment). Returning `order.items` itself, not a copy, keeps
+  // every existing item-level assertion below (`order.items[0].xxx`)
+  // working, since the transaction mutates these same object references.
+  const orderItemsRepositoryForTx = { find: jest.fn(() => Promise.resolve(order.items || [])) };
 
   // PACKED now runs inside its own transaction (2026-09-16 fix, see
   // scope/Handoff_Blocker_Fixes_2026-09-16.md #3) -- the transaction
-  // callback's manager.getRepository(Product/Order/Invoice) must resolve to
-  // these SAME mocks, not fresh copies, so every existing assertion below
-  // (productsRepository.increment, ordersRepository.save,
+  // callback's manager.getRepository(Product/Order/Invoice/OrderItem) must
+  // resolve to these SAME mocks, not fresh copies, so every existing
+  // assertion below (productsRepository.increment, ordersRepository.save,
   // invoicesRepository.findOne/save) keeps working whether the real code
   // reaches them directly or via the transactional manager.
   const txManager: any = {
@@ -263,6 +279,7 @@ const makeWriteService = (order: any, inventoryService: any = {}) => {
       if (entityClass === Product) return productsRepository;
       if (entityClass === Order) return ordersRepository;
       if (entityClass === Invoice) return invoicesRepository;
+      if (entityClass === OrderItem) return orderItemsRepositoryForTx;
       return genericSubRepo();
     }),
   };
@@ -334,17 +351,22 @@ describe('OrdersService.updateStatus — PACKED reservation/money sync', () => {
     const order = makeOrder({ status: 'processing' });
     const { service, ordersRepository } = makeWriteService(order);
 
-    await service.updateStatus(
+    // T25 (2026-09-16): order-level aggregates are now set on the locked,
+    // freshly-re-fetched order inside the transaction, not the stale outer
+    // `order` object updateStatus() was originally called with -- assert
+    // against the RETURNED (and persisted) order, which is what's
+    // authoritative in production too.
+    const result = await service.updateStatus(
       'ord-1', 'u1', 'OWNER', 'MANUFACTURER',
       { status: 'packed', items: [{ orderItemId: 'item-1', packedQuantity: 6, discountAmount: 5 }] } as any,
       'org-mfg',
     );
 
     expect(ordersRepository.save).toHaveBeenCalled();
-    expect(order.subtotal).toBe(60);
-    expect(order.gstAmount).toBe(3);
-    expect(order.discountAmount).toBe(5);
-    expect(order.totalAmount).toBe(58); // 60 + 3 - 5
+    expect(result.subtotal).toBe(60);
+    expect(result.gstAmount).toBe(3);
+    expect(result.discountAmount).toBe(5);
+    expect(result.totalAmount).toBe(58); // 60 + 3 - 5
   });
 
   it('THE REGRESSION: PACKED-with-shortfall then CANCELLED restores only what is still reserved, not the original reservation (no double-restore)', async () => {
@@ -402,6 +424,52 @@ describe('OrdersService.updateStatus — PACKED reservation/money sync', () => {
     expect(inventoryService.addStock).toHaveBeenCalledTimes(1); // clinic-side stock credit, keyed off packedQuantity
     expect(order.items[0].packedQuantity).toBe(6);
     expect(order.items[0].reservedQuantity).toBe(6);
+  });
+
+  // T25 (2026-09-16, scope/TRACKER.md): two simultaneous PACK requests for
+  // the same order must not both succeed. Each request independently
+  // fetches its own `order` snapshot via updateStatus()'s top-level
+  // findOne() before either commits -- both would see packedAt as null and
+  // pass the outer `!order.packedAt` guard. The pessimistic-lock re-check
+  // inside the transaction is what's supposed to catch this: whichever
+  // request's transaction commits first sets packedAt; the second request's
+  // LOCKED re-fetch (which blocks until the first transaction releases the
+  // lock) must see that and reject cleanly instead of double-processing.
+  //
+  // Simulated here by controlling the mocked locked-findOne's return value
+  // per call (first call: not yet packed -> succeeds; second call: already
+  // packed -> rejected) and resetting the outer `order.packedAt` between
+  // calls to stand in for "a second request's own independent fetch,
+  // unaffected by the first request's in-memory mutation" -- exactly what a
+  // real second HTTP request would look like, just without a second JS
+  // object instance to express it with.
+  it('T25 — a second concurrent PACK request on the same order is rejected once the first has committed, not double-processed', async () => {
+    const order = makeOrder({ status: 'processing' });
+    const { service, ordersRepository, productsRepository } = makeWriteService(order);
+
+    ordersRepository.findOne
+      .mockResolvedValueOnce({ ...order, packedAt: null }) // 1st request's locked read: not yet packed
+      .mockResolvedValueOnce({ ...order, packedAt: new Date() }); // 2nd request's locked read: 1st already committed
+
+    const packDto = { status: 'packed', items: [{ orderItemId: 'item-1', packedQuantity: 10, discountAmount: 0 }] } as any;
+
+    // First request: succeeds, exactly as every other PACKED test in this
+    // file.
+    await service.updateStatus('ord-1', 'u1', 'OWNER', 'MANUFACTURER', packDto, 'org-mfg');
+    expect(productsRepository.increment).not.toHaveBeenCalled(); // full pack, no shortfall to release
+
+    // Second request: simulate its own independent pre-transaction fetch by
+    // resetting the shared fixture's packedAt (a real second request would
+    // never have seen the first's in-memory mutation at all).
+    order.packedAt = null;
+    await expect(
+      service.updateStatus('ord-1', 'u1', 'OWNER', 'MANUFACTURER', packDto, 'org-mfg'),
+    ).rejects.toBeInstanceOf(BadRequestException);
+
+    // Rejected before any further stock mutation -- still exactly the one
+    // call (there was none, since this was a full pack) from the first
+    // request's transaction.
+    expect(productsRepository.increment).not.toHaveBeenCalled();
   });
 });
 

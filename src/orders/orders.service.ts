@@ -1102,15 +1102,47 @@ export class OrdersService {
           const productRepo = manager.getRepository(Product);
           const orderRepo = manager.getRepository(Order);
 
+          // T25 (2026-09-16, scope/TRACKER.md): re-fetch and lock the order
+          // row before touching anything, and re-check packedAt against
+          // this LOCKED read. Closes a narrow race where two simultaneous
+          // PACK requests for the same order could both pass the
+          // `!order.packedAt` guard above (each reading its own
+          // pre-transaction snapshot, taken before either committed) and
+          // both proceed to release stock / create an invoice. A second
+          // request now blocks on the lock until the first commits, then
+          // sees packedAt already set here and is rejected cleanly instead
+          // of double-processing. Mirrors correctPackedOrder()'s existing
+          // lock-then-recheck pattern in this same file.
+          const lockedOrder = await orderRepo.findOne({
+            where: { id: order.id },
+            lock: { mode: 'pessimistic_write' },
+          });
+          if (!lockedOrder) {
+            throw new NotFoundException(`Order with ID ${order.id} not found`);
+          }
+          if (lockedOrder.packedAt) {
+            throw new BadRequestException('This order has already been packed.');
+          }
+          lockedOrder.packedAt = order.packedAt;
+
+          // A pessimistic lock can't be combined with an eager relations
+          // join (same constraint correctPackedOrder works around) --
+          // fetch items separately, scoped to this order, and operate on
+          // THIS array from here on instead of the pre-transaction
+          // `order.items` snapshot, which may be stale relative to the
+          // just-acquired lock.
+          const itemRepo = manager.getRepository(OrderItem);
+          lockedOrder.items = await itemRepo.find({ where: { orderId: lockedOrder.id, deletedAt: IsNull() } });
+
           // Record what was actually packed per item (defaults to
           // reservedQuantity -- the common case, everything reserved got
           // packed) and any per-item discount. This is not the packing UI
           // and not an amendment -- it only records the outcome of packing
           // for items that already exist on the order. See
           // scope/Order_Fulfillment_Lifecycle_Scope_2026-09-07.md §7.
-          if (order.items && order.items.length > 0) {
+          if (lockedOrder.items && lockedOrder.items.length > 0) {
             const providedIds = new Set((updateDto.items || []).map((i) => i.orderItemId));
-            const realIds = new Set(order.items.map((i) => i.id));
+            const realIds = new Set(lockedOrder.items.map((i) => i.id));
             for (const providedId of providedIds) {
               if (!realIds.has(providedId)) {
                 throw new BadRequestException(`Order item ${providedId} does not belong to this order`);
@@ -1118,7 +1150,7 @@ export class OrdersService {
             }
             const packedInputById = new Map((updateDto.items || []).map((i) => [i.orderItemId, i]));
 
-            for (const item of order.items) {
+            for (const item of lockedOrder.items) {
               const input = packedInputById.get(item.id);
 
               // packedQuantity can never exceed reservedQuantity -- packing
@@ -1181,18 +1213,18 @@ export class OrdersService {
               item.commissionAmount = item.totalAmount * 0.05;
             }
 
-            order.discountAmount = order.items.reduce((sum, i) => sum + (Number(i.discountAmount) || 0), 0);
+            lockedOrder.discountAmount = lockedOrder.items.reduce((sum, i) => sum + (Number(i.discountAmount) || 0), 0);
           }
 
           // Billing now happens here, not on DELIVERED -- packing is the
           // checkpoint quantities and money are frozen at (§7). Renamed from
           // createInvoiceForDeliveredOrder to reflect the new trigger.
-          createdInvoice = await this.createInvoiceForPackedOrder(order, manager);
+          createdInvoice = await this.createInvoiceForPackedOrder(lockedOrder, manager);
 
-          return orderRepo.save(order);
+          return orderRepo.save(lockedOrder);
         });
       } catch (err: any) {
-        if (err instanceof BadRequestException || err instanceof ForbiddenException) {
+        if (err instanceof BadRequestException || err instanceof ForbiddenException || err instanceof NotFoundException) {
           throw err;
         }
         console.error('[OrdersService] Packing failed, rolled back', order.id, err?.message);
