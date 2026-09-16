@@ -38,6 +38,7 @@ export class DisputesController {
         req.user.userId,
         req.user.role,
         query,
+        req.user.organisationType,
         req.user.organisationId,
       );
     } catch (error) {

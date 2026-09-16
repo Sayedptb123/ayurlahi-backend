@@ -54,7 +54,7 @@ export class DisputesService {
     return saved;
   }
 
-  async findAll(userId: string, userRole: string, query: GetDisputesDto, organisationId?: string) {
+  async findAll(userId: string, userRole: string, query: GetDisputesDto, organisationType?: string, organisationId?: string) {
     const { page = 1, limit = 20 } = query;
     const skip = (page - 1) * limit;
 
@@ -75,7 +75,25 @@ export class DisputesService {
           pagination: { page, limit, total: 0, totalPages: 0 },
         };
       }
-      qb.andWhere('dispute.organisationId = :organisationId', { organisationId });
+      // T16: dispute.organisationId is always the RAISING CLINIC's org id
+      // (mapped from the disputes table's own clinicId column, see
+      // dispute.entity.ts) — it can never match a manufacturer's own
+      // organisationId, so a manufacturer caller got zero rows here, always,
+      // even for disputes on their own orders. Scope by organisationType
+      // instead: a clinic keeps the existing exact-match filter (still
+      // correct — dispute.organisationId IS their id); a manufacturer is
+      // scoped via their order items' manufacturerId, the identical
+      // join+filter pattern OrdersService.findAll() already uses for the
+      // same "manufacturer visibility" problem on orders themselves. Same
+      // shape as findOne()'s existing CLINIC/MANUFACTURER branches just
+      // below in this file — findOne() got this right in 2026-09-07;
+      // findAll() never did.
+      if (organisationType === 'MANUFACTURER') {
+        qb.leftJoin('order.items', 'items')
+          .andWhere('items.manufacturerId = :organisationId', { organisationId });
+      } else {
+        qb.andWhere('dispute.organisationId = :organisationId', { organisationId });
+      }
     }
 
     const [data, total] = await qb.getManyAndCount();
