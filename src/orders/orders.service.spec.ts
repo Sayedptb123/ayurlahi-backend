@@ -323,7 +323,11 @@ describe('OrdersService.updateStatus — PACKED reservation/money sync', () => {
     expect(item.subtotal).toBe(60);        // 10 unitPrice * 6 packed, not 10 requested
     expect(item.gstAmount).toBe(3);        // 60 * 5%
     expect(item.totalAmount).toBe(63);
-    expect(item.commissionAmount).toBeCloseTo((63 * 0.05) / 100, 6);
+    // T24 fix (2026-09-16): commission is 5% of totalAmount, not 0.05% --
+    // this assertion previously encoded the pre-fix (itemTotal * 0.05) / 100
+    // bug's own answer as if it were correct. See the dedicated "T24
+    // commission rate" describe block below for the full regression suite.
+    expect(item.commissionAmount).toBeCloseTo(63 * 0.05, 6);
   });
 
   it('order-level totals resync to the invoice at PACKED (pre-existing fix, re-verified alongside this one)', async () => {
@@ -531,6 +535,153 @@ const makeCorrectionService = (fixtures: ReturnType<typeof makeCorrectionFixture
 };
 
 const CORRECT_DTO = { reason: 'wrong_quantity' as const, notes: 'packed 6 instead of 10' };
+
+// T24 (2026-09-16): commissionAmount was computed as (itemTotal * 0.05) / 100
+// at all 4 sites that set it -- 0.05 is already the decimal form of the 5%
+// rate, so dividing by 100 again silently produced 0.05% instead of 5%.
+// Fixed to itemTotal * 0.05 everywhere. Canonical example used throughout:
+// itemTotal = Rs 10,000 (achieved via a 0% GST product so subtotal ==
+// itemTotal, keeping the arithmetic unambiguous) -> expected commission =
+// Rs 500, never Rs 5.
+describe('OrdersService — T24 commission rate (5%, not 0.05%)', () => {
+    const RATE_PRODUCT = {
+        id: 'prod-1',
+        name: 'Widget',
+        sku: 'SKU1',
+        price: 10000,
+        gstRate: 0, // 0% GST keeps itemTotal === itemSubtotal === 10,000, so the
+        // commission math is unambiguous -- no GST component to account for.
+        minOrderQuantity: 1,
+        status: 'active',
+        stockQuantity: 10,
+        manufacturerId: 'org-mfg',
+        mrp: null,
+        hsnCode: null,
+    };
+
+    // Site #1: order creation / correctPackedOrder's replacement order, via
+    // the shared private lockAndSnapshotOrderItems(). Supplying an
+    // externalManager bypasses the need to mock productsRepository.manager
+    // at all -- this method's only DB dependency when given one.
+    it('site #1 — lockAndSnapshotOrderItems (order creation): Rs 10,000 item -> Rs 500 commission', async () => {
+        const service = new OrdersService(
+            {} as any, {} as any, {} as any, {} as any, {} as any, {} as any,
+            {} as any, {} as any, {} as any, {} as any, {} as any, {} as any,
+        );
+        const fakeManager: any = {
+            getRepository: jest.fn(() => ({
+                findOne: jest.fn(() => Promise.resolve({ ...RATE_PRODUCT })),
+                decrement: jest.fn(() => Promise.resolve()),
+            })),
+        };
+        const { orderItems } = await (service as any).lockAndSnapshotOrderItems(
+            [{ productId: 'prod-1', quantity: 1 }],
+            undefined,
+            fakeManager,
+        );
+        expect(orderItems[0].totalAmount).toBe(10000);
+        expect(orderItems[0].commissionAmount).toBe(500);
+        expect(orderItems[0].commissionAmount).not.toBeCloseTo(5, 5); // the old (÷100 twice) bug's answer
+    });
+
+    // Site #2: PACKED-transition resync, via the real updateStatus() entry
+    // point and the existing makeWriteService harness.
+    it('site #2 — PACKED-transition resync: Rs 10,000 packed item -> Rs 500 commission', async () => {
+        const order = makeOrder({
+            status: 'processing',
+            items: [makeOrderItem({ quantity: 1, reservedQuantity: 1, unitPrice: 10000, gstRate: 0, subtotal: 10000, gstAmount: 0, totalAmount: 10000 })],
+        });
+        const { service } = makeWriteService(order);
+
+        await service.updateStatus(
+            'ord-1', 'u1', 'OWNER', 'MANUFACTURER',
+            { status: 'packed', items: [{ orderItemId: 'item-1', packedQuantity: 1, discountAmount: 0 }] } as any,
+            'org-mfg',
+        );
+
+        expect(order.items[0].totalAmount).toBe(10000);
+        expect(order.items[0].commissionAmount).toBe(500);
+        expect(order.items[0].commissionAmount).not.toBeCloseTo(5, 5);
+    });
+
+    // Site #3: addOrderItem (amendment). isAdmin bypasses the
+    // product.manufacturerId ownership check so the fixture doesn't need to
+    // thread organisationId through -- irrelevant to the commission math
+    // being tested here.
+    it('site #3 — addOrderItem (amendment): Rs 10,000 item -> Rs 500 commission', async () => {
+        const order = makeOrder({ status: 'processing', items: [] });
+        const productRepo = {
+            findOne: jest.fn(() => Promise.resolve({ ...RATE_PRODUCT })),
+            decrement: jest.fn(() => Promise.resolve()),
+        };
+        const productsRepository: any = {
+            manager: { transaction: jest.fn((cb: any) => cb({ getRepository: jest.fn(() => productRepo) })) },
+        };
+        const ordersRepository: any = { save: jest.fn((x: any) => Promise.resolve(x)) };
+        const service = new OrdersService(
+            ordersRepository,
+            {} as any, // orderItemsRepository
+            productsRepository,
+            {} as any, // usersRepository
+            {} as any, // orgUserRepository
+            {} as any, // invoicesRepository
+            {} as any, // externalOrderAccessRepository
+            {} as any, // orderReplacementsRepository
+            {} as any, // disputesRepository
+            {} as any, // branchesRepository
+            {} as any, // inventoryService
+            {} as any, // notificationsService
+        );
+        jest.spyOn(service, 'findOne').mockResolvedValue(order);
+
+        await service.addOrderItem('ord-1', 'u1', 'SUPER_ADMIN', 'AYURLAHI_TEAM', undefined, { productId: 'prod-1', quantity: 1 } as any);
+
+        const added = order.items.find((i: any) => i.productId === 'prod-1');
+        expect(added.totalAmount).toBe(10000);
+        expect(added.commissionAmount).toBe(500);
+        expect(added.commissionAmount).not.toBeCloseTo(5, 5);
+    });
+
+    // Site #4: updateOrderItemQuantity (amendment). Quantity held at 1 so
+    // the stock-delta branch is a no-op -- irrelevant to the commission math.
+    it('site #4 — updateOrderItemQuantity (amendment): Rs 10,000 item -> Rs 500 commission', async () => {
+        const item = makeOrderItem({
+            id: 'item-1', productId: 'prod-1', quantity: 1, reservedQuantity: 1,
+            unitPrice: 10000, gstRate: 0, commissionAmount: 0,
+        });
+        const order = makeOrder({ status: 'processing', items: [item] });
+        const productRepo = {
+            findOne: jest.fn(() => Promise.resolve({ ...RATE_PRODUCT, stockQuantity: 0 })),
+            increment: jest.fn(() => Promise.resolve()),
+            decrement: jest.fn(() => Promise.resolve()),
+        };
+        const productsRepository: any = {
+            manager: { transaction: jest.fn((cb: any) => cb({ getRepository: jest.fn(() => productRepo) })) },
+        };
+        const ordersRepository: any = { save: jest.fn((x: any) => Promise.resolve(x)) };
+        const service = new OrdersService(
+            ordersRepository,
+            {} as any, // orderItemsRepository
+            productsRepository,
+            {} as any, // usersRepository
+            {} as any, // orgUserRepository
+            {} as any, // invoicesRepository
+            {} as any, // externalOrderAccessRepository
+            {} as any, // orderReplacementsRepository
+            {} as any, // disputesRepository
+            {} as any, // branchesRepository
+            {} as any, // inventoryService
+            {} as any, // notificationsService
+        );
+        jest.spyOn(service, 'findOne').mockResolvedValue(order);
+
+        await service.updateOrderItemQuantity('ord-1', 'item-1', 'u1', 'SUPER_ADMIN', 'AYURLAHI_TEAM', undefined, { quantity: 1 } as any);
+
+        expect(item.totalAmount).toBe(10000);
+        expect(item.commissionAmount).toBe(500);
+        expect(item.commissionAmount).not.toBeCloseTo(5, 5);
+    });
+});
 
 describe('OrdersService.correctPackedOrder — Post-PACKED Order Correction Workflow', () => {
   it('happy path: cancels original, restores stock, voids invoice, creates a linked replacement at the ORIGINAL price (not catalog)', async () => {

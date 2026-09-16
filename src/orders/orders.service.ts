@@ -516,7 +516,11 @@ export class OrdersService {
       const itemSubtotal = unitPrice * itemDto.quantity;
       const itemGstAmount = (itemSubtotal * Number(product.gstRate)) / 100;
       const itemTotal = itemSubtotal + itemGstAmount;
-      const commissionAmount = (itemTotal * 0.05) / 100;
+      // T24 fix (2026-09-16): 0.05 IS the 5% commission rate as a decimal --
+      // dividing by 100 again silently computed 0.05% instead of 5% at all
+      // 4 sites in this file. See orders.service.spec.ts's "T24 — commission
+      // rate" tests for the regression guard.
+      const commissionAmount = itemTotal * 0.05;
 
       subtotal += itemSubtotal;
       totalGstAmount += itemGstAmount;
@@ -1172,7 +1176,9 @@ export class OrdersService {
               item.subtotal = packedSubtotal;
               item.gstAmount = packedGstAmount;
               item.totalAmount = packedSubtotal + packedGstAmount;
-              item.commissionAmount = (item.totalAmount * 0.05) / 100;
+              // T24 fix (2026-09-16): see the comment on the identical fix
+              // in lockAndSnapshotOrderItems above.
+              item.commissionAmount = item.totalAmount * 0.05;
             }
 
             order.discountAmount = order.items.reduce((sum, i) => sum + (Number(i.discountAmount) || 0), 0);
@@ -1604,7 +1610,9 @@ export class OrdersService {
       const itemSubtotal = unitPrice * dto.quantity;
       const itemGstAmount = (itemSubtotal * Number(product.gstRate)) / 100;
       const itemTotal = itemSubtotal + itemGstAmount;
-      const commissionAmount = (itemTotal * 0.05) / 100;
+      // T24 fix (2026-09-16): see the comment on the identical fix in
+      // lockAndSnapshotOrderItems.
+      const commissionAmount = itemTotal * 0.05;
 
       newItem = {
         orderId: order.id,
@@ -1766,7 +1774,9 @@ export class OrdersService {
     const itemSubtotal = Number(item.unitPrice) * dto.quantity;
     const itemGstAmount = (itemSubtotal * Number(item.gstRate)) / 100;
     const itemTotal = itemSubtotal + itemGstAmount;
-    const commissionAmount = (itemTotal * 0.05) / 100;
+    // T24 fix (2026-09-16): see the comment on the identical fix in
+    // lockAndSnapshotOrderItems.
+    const commissionAmount = itemTotal * 0.05;
 
     item.quantity = dto.quantity;
     item.reservedQuantity = newReserved;
