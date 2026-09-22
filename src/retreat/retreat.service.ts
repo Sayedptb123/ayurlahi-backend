@@ -1642,6 +1642,12 @@ export class RetreatService {
                     gender: 'other' as any,
                     dateOfBirth: null,
                     createdBy: performedBy ?? null,
+                    // Inherit the booking's own branch — without this the new patient
+                    // saved branch_id = NULL, which the Patients list's strict
+                    // `patient.branchId = :selectedBranchId` filter can never match,
+                    // so promoted patients silently vanished from Patients the moment
+                    // a specific branch (not "All Locations") was selected.
+                    branchId: booking.branchId,
                 });
                 const saved = await manager.save(newPatient);
                 booking.patientId = saved.id;
