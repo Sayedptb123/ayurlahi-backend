@@ -126,6 +126,8 @@ import { CustomNotificationLog } from './notifications/entities/custom-notificat
 import { NotificationCronModule } from './notifications/notification-cron.module';
 import { Payout } from './payouts/entities/payout.entity';
 import { OtpVerification } from './otp/entities/otp-verification.entity';
+import { AuditModule } from './audit/audit.module';
+import { AuditLog } from './audit/entities/audit-log.entity';
 import { CrmModule } from './crm/crm.module';
 import { CrmLead } from './crm/entities/crm-lead.entity';
 import { CrmPipelineStage } from './crm/entities/crm-pipeline-stage.entity';
@@ -255,6 +257,7 @@ import { ProductRequest } from './product-requests/entities/product-request.enti
           CrmVisit,
           CrmAuditLog,
           CrmStaffScope,
+          AuditLog,
           Promotion,
           PromotionEvent,
           UsageEvent,
@@ -326,6 +329,7 @@ import { ProductRequest } from './product-requests/entities/product-request.enti
     NotificationCronModule,
     EmailModule,
     ScraperModule,
+    AuditModule,
     CrmModule,
     PromotionsModule,
     LeaveModule,

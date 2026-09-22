@@ -31,6 +31,17 @@ import { OrganisationSettingsService } from '../organisation-settings/organisati
 import { EmailService } from '../email/email.service';
 import { IsNull } from 'typeorm';
 import { normalizePhone } from '../common/utils/phone.util';
+import { AuditService } from '../audit/audit.service';
+import type { OrgType } from '../audit/audit.types';
+
+// Passed from AuthController's @Request() req -- ip/user-agent for audit
+// events. Explicit param for Phase 1 rather than AsyncLocalStorage; see
+// scope/Audit_Trail_Phase1_Auth_Implementation_Plan.md "IP/user-agent".
+export interface AuthAuditContext {
+  ipAddress: string | null;
+  userAgent: string | null;
+}
+const NO_CONTEXT: AuthAuditContext = { ipAddress: null, userAgent: null };
 
 // Default modules enabled for a newly-registered clinic. Without this a new clinic
 // gets enabled_modules=[] and the API-gated booking module (@RequireModule('booking'))
@@ -79,6 +90,7 @@ export class AuthService {
     private smsService: SmsService,
     private emailService: EmailService,
     private organisationSettingsService: OrganisationSettingsService,
+    private auditService: AuditService,
   ) { }
 
   private async fetchCapabilities(orgType: string, orgId: string) {
@@ -135,17 +147,51 @@ export class AuthService {
     }
   }
 
-  async login(loginDto: LoginDto) {
+  async login(loginDto: LoginDto, ctx: AuthAuditContext = NO_CONTEXT) {
     try {
       const byPhone = !!loginDto.phone && !loginDto.email;
       const identifier = byPhone ? loginDto.phone! : loginDto.email!;
       const user = await this.validateUser(identifier, loginDto.password, byPhone);
 
       if (!user) {
+        // validateUser() doesn't distinguish "no account" from "wrong
+        // password" by design (avoids letting a caller enumerate valid
+        // accounts via response differences) -- this audit event is
+        // deliberately org-unscoped/actor-unknown for the same reason.
+        await this.auditService.record({
+          organisationId: null,
+          orgType: null,
+          entityType: 'auth_session',
+          entityId: null,
+          action: 'login_failed',
+          severity: 'sensitive',
+          actorUserId: null,
+          source: 'api',
+          ipAddress: ctx.ipAddress,
+          userAgent: ctx.userAgent,
+          metadata: { reason: 'invalid_credentials', identifier },
+        });
         throw new UnauthorizedException('Invalid credentials');
       }
 
       if (!user.isActive) {
+        // Actor is known (the account exists), but organisation
+        // membership isn't looked up on this path -- User isn't itself
+        // organisation-scoped, and fetching it here purely for audit
+        // purposes isn't worth a new query on an already-decided failure.
+        await this.auditService.record({
+          organisationId: null,
+          orgType: null,
+          entityType: 'auth_session',
+          entityId: user.id,
+          action: 'login_failed',
+          severity: 'sensitive',
+          actorUserId: user.id,
+          source: 'api',
+          ipAddress: ctx.ipAddress,
+          userAgent: ctx.userAgent,
+          metadata: { reason: 'account_inactive' },
+        });
         throw new UnauthorizedException('Account is inactive');
       }
 
@@ -173,6 +219,20 @@ export class AuthService {
         (currentOrg.organisation.type === 'CLINIC' || currentOrg.organisation.type === 'MANUFACTURER') &&
         currentOrg.organisation.isActive === false
       ) {
+        await this.auditService.record({
+          organisationId: currentOrg.organisation.id,
+          orgType: currentOrg.organisation.type as OrgType,
+          entityType: 'auth_session',
+          entityId: user.id,
+          action: 'login_blocked',
+          severity: 'sensitive',
+          actorUserId: user.id,
+          actorRole: currentOrg.role,
+          source: 'api',
+          ipAddress: ctx.ipAddress,
+          userAgent: ctx.userAgent,
+          metadata: { reason: 'org_deactivated' },
+        });
         throw new ForbiddenException('Your organisation account has been deactivated. Contact support@ayurlahi.com');
       }
 
@@ -210,6 +270,24 @@ export class AuthService {
         organisationsCount: organisations.length,
       });
 
+      // currentOrg can be undefined if the user has zero organisation
+      // memberships (e.g. mid-registration) -- organisationId/orgType are
+      // legitimately null in that case, same as the failure paths above.
+      await this.auditService.record({
+        organisationId: currentOrg?.organisation.id ?? null,
+        orgType: (currentOrg?.organisation.type as OrgType) ?? null,
+        entityType: 'auth_session',
+        entityId: user.id,
+        action: 'login',
+        severity: 'normal',
+        actorUserId: user.id,
+        actorRole: currentOrg?.role ?? null,
+        source: 'api',
+        ipAddress: ctx.ipAddress,
+        userAgent: ctx.userAgent,
+        metadata: { via: 'password' },
+      });
+
       return {
         accessToken,
         user: {
@@ -240,6 +318,35 @@ export class AuthService {
       console.error('Login error:', error);
       throw error;
     }
+  }
+
+  /**
+   * Log-only logout -- no active JWT revocation (locked decision, see
+   * scope/Audit_Trail_Accountability_Scope_v4.md). The token used in this
+   * request remains valid until it expires; this only records that a
+   * logout was requested.
+   */
+  async logout(
+    userId: string,
+    organisationId: string | null,
+    organisationType: string | null,
+    role: string | null,
+    ctx: AuthAuditContext = NO_CONTEXT,
+  ): Promise<{ message: string }> {
+    await this.auditService.record({
+      organisationId,
+      orgType: organisationType as OrgType | null,
+      entityType: 'auth_session',
+      entityId: userId,
+      action: 'logout',
+      severity: 'normal',
+      actorUserId: userId,
+      actorRole: role,
+      source: 'api',
+      ipAddress: ctx.ipAddress,
+      userAgent: ctx.userAgent,
+    });
+    return { message: 'Logged out successfully' };
   }
 
   async register(registerDto: RegisterDto) {
@@ -523,7 +630,7 @@ export class AuthService {
     };
   }
 
-  async refreshToken(refreshToken: string) {
+  async refreshToken(refreshToken: string, ctx: AuthAuditContext = NO_CONTEXT) {
     try {
       // Verify the refresh token
       const payload = this.jwtService.verify(refreshToken);
@@ -576,6 +683,20 @@ export class AuthService {
       const refreshStaffPosition = currentOrg
         ? await this.fetchStaffPosition(user.id, currentOrg.organisation.id)
         : null;
+
+      await this.auditService.record({
+        organisationId: currentOrg?.organisation.id ?? null,
+        orgType: (currentOrg?.organisation.type as OrgType) ?? null,
+        entityType: 'auth_session',
+        entityId: user.id,
+        action: 'token_refresh',
+        severity: 'normal',
+        actorUserId: user.id,
+        actorRole: currentOrg?.role ?? null,
+        source: 'api',
+        ipAddress: ctx.ipAddress,
+        userAgent: ctx.userAgent,
+      });
 
       return {
         accessToken,
@@ -695,7 +816,10 @@ export class AuthService {
 
   // ── OTP ──────────────────────────────────────────────────────────────────────
 
-  async requestOtp(dto: RequestOtpDto): Promise<{ message: string }> {
+  async requestOtp(
+    dto: RequestOtpDto,
+    ctx: AuthAuditContext = NO_CONTEXT,
+  ): Promise<{ message: string }> {
     const identifier = dto.channel === 'sms' ? dto.phone! : dto.email!;
     const where = dto.channel === 'sms'
       ? { phone: identifier }
@@ -704,6 +828,19 @@ export class AuthService {
     const user = await this.usersRepository.findOne({ where });
 
     if (!user) {
+      await this.auditService.record({
+        organisationId: null,
+        orgType: null,
+        entityType: 'otp_verification',
+        entityId: null,
+        action: 'otp_request_failed',
+        severity: 'sensitive',
+        actorUserId: null,
+        source: 'api',
+        ipAddress: ctx.ipAddress,
+        userAgent: ctx.userAgent,
+        metadata: { identifier, channel: dto.channel, purpose: dto.purpose },
+      });
       const msg = dto.channel === 'sms'
         ? 'No account found with this mobile number.'
         : 'No account found with this email address.';
@@ -746,17 +883,74 @@ export class AuthService {
       await this.emailService.sendOtp(identifier, otp);
     }
 
+    await this.auditService.record({
+      organisationId: null,
+      orgType: null,
+      entityType: 'otp_verification',
+      entityId: null,
+      action: 'otp_requested',
+      severity: 'normal',
+      actorUserId: user.id,
+      source: 'api',
+      ipAddress: ctx.ipAddress,
+      userAgent: ctx.userAgent,
+      metadata: { channel: dto.channel, purpose: dto.purpose },
+    });
+
     return { message: 'OTP sent successfully.' };
   }
 
-  async verifyOtpLogin(dto: VerifyOtpDto): Promise<any> {
+  async verifyOtpLogin(
+    dto: VerifyOtpDto,
+    ctx: AuthAuditContext = NO_CONTEXT,
+  ): Promise<any> {
     const record = await this._findValidOtp(dto.identifier, dto.purpose);
     const valid =
       this._isMagicOtp(dto.otp) || (await bcrypt.compare(dto.otp, record.otpHash));
-    if (!valid) throw new UnauthorizedException('Invalid OTP');
+    if (!valid) {
+      // Best-effort actor resolution on the failure path, per the Phase 1
+      // plan -- a single indexed lookup, acceptable cost on a failure.
+      const maybeUser = await this.usersRepository.findOne({
+        where: record.channel === 'email'
+          ? { email: dto.identifier }
+          : { phone: dto.identifier },
+      });
+      await this.auditService.record({
+        organisationId: null,
+        orgType: null,
+        entityType: 'otp_verification',
+        entityId: null,
+        action: 'otp_verify_failed',
+        severity: 'sensitive',
+        actorUserId: maybeUser?.id ?? null,
+        source: 'api',
+        ipAddress: ctx.ipAddress,
+        userAgent: ctx.userAgent,
+        metadata: { identifier: dto.identifier, purpose: dto.purpose },
+      });
+      throw new UnauthorizedException('Invalid OTP');
+    }
 
     // For password_reset: don't consume the OTP yet — resetPassword will consume it
     if (dto.purpose !== 'login') {
+      const maybeUser = await this.usersRepository.findOne({
+        where: record.channel === 'email'
+          ? { email: dto.identifier }
+          : { phone: dto.identifier },
+      });
+      await this.auditService.record({
+        organisationId: null,
+        orgType: null,
+        entityType: 'otp_verification',
+        entityId: null,
+        action: 'otp_verified',
+        severity: 'normal',
+        actorUserId: maybeUser?.id ?? null,
+        source: 'api',
+        ipAddress: ctx.ipAddress,
+        userAgent: ctx.userAgent,
+        metadata: { purpose: dto.purpose },
+      });
       return { message: 'OTP verified', identifier: dto.identifier };
     }
 
@@ -793,6 +987,21 @@ export class AuthService {
       ? await this.fetchStaffPosition(user.id, currentOrg.organisation.id)
       : null;
 
+    await this.auditService.record({
+      organisationId: currentOrg?.organisation.id ?? null,
+      orgType: (currentOrg?.organisation.type as OrgType) ?? null,
+      entityType: 'auth_session',
+      entityId: user.id,
+      action: 'login',
+      severity: 'normal',
+      actorUserId: user.id,
+      actorRole: currentOrg?.role ?? null,
+      source: 'api',
+      ipAddress: ctx.ipAddress,
+      userAgent: ctx.userAgent,
+      metadata: { via: 'otp' },
+    });
+
     return {
       accessToken,
       user: {
@@ -827,7 +1036,10 @@ export class AuthService {
     };
   }
 
-  async resetPassword(dto: ResetPasswordDto): Promise<{ message: string }> {
+  async resetPassword(
+    dto: ResetPasswordDto,
+    ctx: AuthAuditContext = NO_CONTEXT,
+  ): Promise<{ message: string }> {
     const record = await this._findValidOtp(dto.identifier, 'password_reset');
     const valid =
       this._isMagicOtp(dto.otp) || (await bcrypt.compare(dto.otp, record.otpHash));
@@ -839,9 +1051,35 @@ export class AuthService {
     });
     if (!user) throw new NotFoundException('User not found');
 
-    await this.otpRepository.update(record.id, { usedAt: new Date() });
-    user.passwordHash = await bcrypt.hash(dto.newPassword, 10);
-    await this.usersRepository.save(user);
+    // Critical severity: audit insert must commit atomically with the
+    // password change, per scope/Audit_Trail_Accountability_Scope_v4.md's
+    // durability policy -- reuses the same manager.transaction() pattern
+    // already live in orders.service.ts (e.g. line 624), not new
+    // infrastructure. organisationId is null here by design, not by
+    // omission: password reset is a user-level action, not scoped to any
+    // one of the user's organisation memberships (User itself has no
+    // organisation_id -- that lives on the separate OrganisationUser
+    // join table).
+    await this.usersRepository.manager.transaction(async (manager) => {
+      await manager.update(OtpVerification, record.id, { usedAt: new Date() });
+      const newPasswordHash = await bcrypt.hash(dto.newPassword, 10);
+      await manager.update(User, user.id, { passwordHash: newPasswordHash });
+      await this.auditService.record(
+        {
+          organisationId: null,
+          orgType: null,
+          entityType: 'user',
+          entityId: user.id,
+          action: 'password_reset_completed',
+          severity: 'critical',
+          actorUserId: user.id,
+          source: 'api',
+          ipAddress: ctx.ipAddress,
+          userAgent: ctx.userAgent,
+        },
+        manager,
+      );
+    });
 
     return { message: 'Password reset successfully' };
   }

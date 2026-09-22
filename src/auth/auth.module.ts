@@ -18,6 +18,7 @@ import { OtpVerification } from '../otp/entities/otp-verification.entity';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { SmsModule } from '../sms/sms.module';
 import { OrganisationSettingsModule } from '../organisation-settings/organisation-settings.module';
+import { AuditModule } from '../audit/audit.module';
 
 @Module({
   imports: [
@@ -25,6 +26,7 @@ import { OrganisationSettingsModule } from '../organisation-settings/organisatio
     NotificationsModule,
     SmsModule,
     OrganisationSettingsModule,
+    AuditModule,
     PassportModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],

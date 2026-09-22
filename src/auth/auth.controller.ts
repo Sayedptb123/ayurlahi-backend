@@ -20,15 +20,26 @@ import { VerifyRegistrationOtpDto } from './dto/verify-registration-otp.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
 import { Throttle } from '@nestjs/throttler';
+import type { AuthAuditContext } from './auth.service';
 
 @Controller('auth')
 export class AuthController {
   constructor(private readonly authService: AuthService) { }
 
+  // req.ip/user-agent for audit events -- explicit per-request extraction
+  // for Phase 1 rather than AsyncLocalStorage, see
+  // scope/Audit_Trail_Phase1_Auth_Implementation_Plan.md "IP/user-agent".
+  private auditContext(req: any): AuthAuditContext {
+    return {
+      ipAddress: req.ip ?? null,
+      userAgent: req.headers?.['user-agent'] ?? null,
+    };
+  }
+
   @Post('login')
-  async login(@Body() loginDto: LoginDto) {
+  async login(@Body() loginDto: LoginDto, @Request() req) {
     try {
-      return await this.authService.login(loginDto);
+      return await this.authService.login(loginDto, this.auditContext(req));
     } catch (error) {
       console.error('[Auth Controller] Login error:', {
         error: error.message,
@@ -81,7 +92,7 @@ export class AuthController {
   }
 
   @Post('refresh')
-  async refresh(@Body() refreshTokenDto: RefreshTokenDto) {
+  async refresh(@Body() refreshTokenDto: RefreshTokenDto, @Request() req) {
     console.log('[Auth Controller] POST /refresh - Request received:', {
       hasRefreshToken: !!refreshTokenDto.refreshToken,
       refreshTokenLength: refreshTokenDto.refreshToken?.length,
@@ -89,26 +100,39 @@ export class AuthController {
         ? refreshTokenDto.refreshToken.substring(0, 30) + '...'
         : 'missing',
     });
-    return this.authService.refreshToken(refreshTokenDto.refreshToken);
+    return this.authService.refreshToken(refreshTokenDto.refreshToken, this.auditContext(req));
   }
+
+  // Was previously a complete no-op (didn't call authService at all) --
+  // wired to a real, guarded logout() call so there's both an actor to
+  // audit and an actual audit record. Still log-only: no active JWT
+  // revocation, matches the locked decision in
+  // scope/Audit_Trail_Accountability_Scope_v4.md.
   @Post('logout')
+  @UseGuards(JwtAuthGuard)
   async logout(@Request() req) {
-    return { message: 'Logged out successfully' };
+    return this.authService.logout(
+      req.user.userId,
+      req.user.organisationId ?? null,
+      req.user.organisationType ?? null,
+      req.user.role ?? null,
+      this.auditContext(req),
+    );
   }
 
   @Post('request-otp')
-  async requestOtp(@Body() dto: RequestOtpDto) {
-    return this.authService.requestOtp(dto);
+  async requestOtp(@Body() dto: RequestOtpDto, @Request() req) {
+    return this.authService.requestOtp(dto, this.auditContext(req));
   }
 
   @Post('verify-otp')
-  async verifyOtp(@Body() dto: VerifyOtpDto) {
-    return this.authService.verifyOtpLogin(dto);
+  async verifyOtp(@Body() dto: VerifyOtpDto, @Request() req) {
+    return this.authService.verifyOtpLogin(dto, this.auditContext(req));
   }
 
   @Post('reset-password')
-  async resetPassword(@Body() dto: ResetPasswordDto) {
-    return this.authService.resetPassword(dto);
+  async resetPassword(@Body() dto: ResetPasswordDto, @Request() req) {
+    return this.authService.resetPassword(dto, this.auditContext(req));
   }
 
   // Phone-first registration: step 1 — send OTP to the phone number the user
