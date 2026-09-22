@@ -7,6 +7,7 @@ import { PrescriptionItem } from './entities/prescription-item.entity';
 import { Patient } from '../patients/entities/patient.entity';
 import { Staff } from '../staff/entities/staff.entity';
 import { Appointment } from '../appointments/entities/appointment.entity';
+import { AuditModule } from '../audit/audit.module';
 
 @Module({
   imports: [
@@ -17,6 +18,7 @@ import { Appointment } from '../appointments/entities/appointment.entity';
       Staff,
       Appointment,
     ]),
+    AuditModule,
   ],
   controllers: [PrescriptionsController],
   providers: [PrescriptionsService],

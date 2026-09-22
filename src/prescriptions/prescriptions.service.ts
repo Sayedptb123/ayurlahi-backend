@@ -17,6 +17,14 @@ import { Appointment } from '../appointments/entities/appointment.entity';
 import { CreatePrescriptionDto } from './dto/create-prescription.dto';
 import { UpdatePrescriptionDto } from './dto/update-prescription.dto';
 import { GetPrescriptionsDto } from './dto/get-prescriptions.dto';
+import { AuditService } from '../audit/audit.service';
+import type { OrgType } from '../audit/audit.types';
+import type { AuthAuditContext } from '../auth/auth.service';
+
+// Same shape as AuthAuditContext -- see patients.service.ts for why this
+// is a local const rather than importing one from auth.service.ts (only
+// the interface is exported there).
+const NO_CONTEXT: AuthAuditContext = { ipAddress: null, userAgent: null };
 
 @Injectable()
 export class PrescriptionsService {
@@ -31,6 +39,7 @@ export class PrescriptionsService {
     private staffRepository: Repository<Staff>,
     @InjectRepository(Appointment)
     private appointmentsRepository: Repository<Appointment>,
+    private auditService: AuditService,
   ) {}
 
   async create(
@@ -39,6 +48,7 @@ export class PrescriptionsService {
     organisationId: string | undefined,
     organisationType: string | undefined,
     createDto: CreatePrescriptionDto,
+    ctx: AuthAuditContext = NO_CONTEXT,
   ) {
     if (
       organisationType !== 'CLINIC' &&
@@ -125,7 +135,22 @@ export class PrescriptionsService {
       ),
     });
 
-    return this.prescriptionsRepository.save(prescription);
+    const saved = await this.prescriptionsRepository.save(prescription);
+    await this.auditService.record({
+      organisationId: clinicId as string,
+      branchId: null, // Prescription has no branch column
+      orgType: organisationType as OrgType,
+      entityType: 'prescription',
+      entityId: saved.id,
+      action: 'create',
+      severity: 'sensitive',
+      actorUserId: userId,
+      actorRole: userRole,
+      source: 'api',
+      ipAddress: ctx.ipAddress,
+      userAgent: ctx.userAgent,
+    });
+    return saved;
   }
 
   async findAll(
@@ -230,6 +255,7 @@ export class PrescriptionsService {
     userRole: string,
     organisationId: string | undefined,
     organisationType: string | undefined,
+    ctx: AuthAuditContext = NO_CONTEXT,
   ) {
     const prescription = await this.prescriptionsRepository.findOne({
       where: { id },
@@ -253,6 +279,21 @@ export class PrescriptionsService {
       );
     }
 
+    await this.auditService.record({
+      organisationId: prescription.organisationId,
+      branchId: null,
+      orgType: organisationType as OrgType,
+      entityType: 'prescription',
+      entityId: prescription.id,
+      action: 'view',
+      severity: 'sensitive',
+      actorUserId: userId,
+      actorRole: userRole,
+      source: 'api',
+      ipAddress: ctx.ipAddress,
+      userAgent: ctx.userAgent,
+    });
+
     return prescription;
   }
 
@@ -263,6 +304,7 @@ export class PrescriptionsService {
     organisationId: string | undefined,
     organisationType: string | undefined,
     updateDto: UpdatePrescriptionDto,
+    ctx: AuthAuditContext = NO_CONTEXT,
   ) {
     const prescription = await this.prescriptionsRepository.findOne({
       where: { id },
@@ -323,38 +365,148 @@ export class PrescriptionsService {
       }
     }
 
-    if (updateDto.patientId !== undefined)
-      prescription.patientId = updateDto.patientId;
-    if (updateDto.appointmentId !== undefined)
-      prescription.appointmentId = updateDto.appointmentId;
-    if (updateDto.doctorId !== undefined)
-      prescription.doctorId = updateDto.doctorId;
-    if (updateDto.prescriptionDate !== undefined)
-      prescription.prescriptionDate = new Date(updateDto.prescriptionDate);
-    if (updateDto.diagnosis !== undefined)
-      prescription.diagnosis = updateDto.diagnosis;
-    if (updateDto.notes !== undefined) prescription.notes = updateDto.notes;
-    if (updateDto.status !== undefined) prescription.status = updateDto.status;
+    // Before/after diff for the parent scalar fields -- same discipline
+    // as PatientsService.update(): entity's own property names, actual
+    // normalized value where the code normalizes one (prescriptionDate),
+    // only recorded when it actually changes.
+    const before: Record<string, any> = {};
+    const after: Record<string, any> = {};
+    const track = (key: string, oldValue: unknown, newValue: unknown) => {
+      if (oldValue !== newValue) {
+        before[key] = oldValue;
+        after[key] = newValue;
+      }
+    };
 
-    if (updateDto.items !== undefined) {
-      await this.prescriptionItemsRepository.softDelete({
-        prescriptionId: prescription.id,
-      });
-      prescription.items = updateDto.items.map((item, index) =>
-        this.prescriptionItemsRepository.create({
-          prescriptionId: prescription.id,
-          medicineName: item.medicineName,
-          dosage: item.dosage || null,
-          frequency: item.frequency || null,
-          duration: item.duration || null,
-          quantity: item.quantity || 1,
-          instructions: item.instructions || null,
-          order: item.order ?? index,
-        }),
-      );
+    if (updateDto.patientId !== undefined) {
+      track('patientId', prescription.patientId, updateDto.patientId);
+      prescription.patientId = updateDto.patientId;
+    }
+    if (updateDto.appointmentId !== undefined) {
+      track('appointmentId', prescription.appointmentId, updateDto.appointmentId);
+      prescription.appointmentId = updateDto.appointmentId;
+    }
+    if (updateDto.doctorId !== undefined) {
+      track('doctorId', prescription.doctorId, updateDto.doctorId);
+      prescription.doctorId = updateDto.doctorId;
+    }
+    if (updateDto.prescriptionDate !== undefined) {
+      const newDate = new Date(updateDto.prescriptionDate);
+      const oldIso = prescription.prescriptionDate
+        ? new Date(prescription.prescriptionDate).toISOString().slice(0, 10)
+        : null;
+      track('prescriptionDate', oldIso, newDate.toISOString().slice(0, 10));
+      prescription.prescriptionDate = newDate;
+    }
+    if (updateDto.diagnosis !== undefined) {
+      track('diagnosis', prescription.diagnosis, updateDto.diagnosis);
+      prescription.diagnosis = updateDto.diagnosis;
+    }
+    if (updateDto.notes !== undefined) {
+      track('notes', prescription.notes, updateDto.notes);
+      prescription.notes = updateDto.notes;
+    }
+    if (updateDto.status !== undefined) {
+      track('status', prescription.status, updateDto.status);
+      prescription.status = updateDto.status;
     }
 
-    return this.prescriptionsRepository.save(prescription);
+    // Items snapshot (decision B) -- read before any deletion, outside
+    // the transaction (same reasoning as the parent before/after values:
+    // the write+audit pairing is what needs atomicity, not this read).
+    // Exactly these six fields, mapped explicitly, never the whole
+    // entity spread -- a future PrescriptionItem column shouldn't
+    // silently start appearing in audit metadata unreviewed.
+    //
+    // normalizedItems is built ONCE and used for both the audit
+    // itemsAfter snapshot and the actual persisted entities below --
+    // review caught that an earlier draft normalized these independently
+    // (`??` in the audit snapshot vs `||` in the persistence path), which
+    // could theoretically disagree for a falsy-but-not-nullish value
+    // (e.g. quantity: 0). Sharing one array makes that discrepancy
+    // structurally impossible rather than relying on DTO validation to
+    // rule it out.
+    let itemsMetadata: Record<string, unknown> | null = null;
+    let normalizedItems: Array<{
+      prescriptionId: string; medicineName: string; dosage: string | null;
+      frequency: string | null; duration: string | null; quantity: number;
+      instructions: string | null; order: number;
+    }> = [];
+    if (updateDto.items !== undefined) {
+      const existingItems = await this.prescriptionItemsRepository.find({
+        where: { prescriptionId: prescription.id },
+      });
+      normalizedItems = updateDto.items.map((item, index) => ({
+        prescriptionId: prescription.id,
+        medicineName: item.medicineName,
+        dosage: item.dosage || null,
+        frequency: item.frequency || null,
+        duration: item.duration || null,
+        quantity: item.quantity || 1,
+        instructions: item.instructions || null,
+        order: item.order ?? index,
+      }));
+      itemsMetadata = {
+        itemsBefore: existingItems.map((i) => ({
+          medicineName: i.medicineName, dosage: i.dosage, frequency: i.frequency,
+          duration: i.duration, quantity: i.quantity, instructions: i.instructions,
+        })),
+        itemsAfter: normalizedItems.map((i) => ({
+          medicineName: i.medicineName, dosage: i.dosage, frequency: i.frequency,
+          duration: i.duration, quantity: i.quantity, instructions: i.instructions,
+        })),
+      };
+    }
+
+    const hasChanges = Object.keys(after).length > 0 || itemsMetadata !== null;
+
+    // Critical severity: the items soft-delete, the cascade-inserted
+    // replacements, the parent save, and the audit record all commit
+    // together or not at all -- v4's durability policy for critical
+    // events. The items softDelete() specifically MUST run on the
+    // transactional manager, not the injected repository, or this
+    // guarantee doesn't actually hold for it (see
+    // scope/Audit_Trail_Phase4_Prescriptions_Implementation_Plan.md).
+    const saved = await this.prescriptionsRepository.manager.transaction(async (manager) => {
+      if (updateDto.items !== undefined) {
+        await manager.getRepository(PrescriptionItem).softDelete({
+          prescriptionId: prescription.id,
+        });
+        prescription.items = normalizedItems.map((item) =>
+          this.prescriptionItemsRepository.create(item),
+        );
+      }
+
+      const savedPrescription = await manager.save(Prescription, prescription);
+
+      if (hasChanges) {
+        await this.auditService.record(
+          {
+            organisationId: prescription.organisationId,
+            branchId: null,
+            orgType: organisationType as OrgType,
+            entityType: 'prescription',
+            entityId: savedPrescription.id,
+            action: 'update',
+            severity: 'critical',
+            actorUserId: userId,
+            actorRole: userRole,
+            source: 'api',
+            changes: Object.keys(after).length > 0
+              ? Object.fromEntries(Object.keys(after).map((k) => [k, { from: before[k], to: after[k] }]))
+              : null,
+            metadata: itemsMetadata,
+            ipAddress: ctx.ipAddress,
+            userAgent: ctx.userAgent,
+          },
+          manager,
+        );
+      }
+
+      return savedPrescription;
+    });
+
+    return saved;
   }
 
   async remove(
@@ -363,15 +515,40 @@ export class PrescriptionsService {
     userRole: string,
     organisationId: string | undefined,
     organisationType: string | undefined,
+    ctx: AuthAuditContext = NO_CONTEXT,
   ) {
+    // findOne() below already emits its own `view` event -- accepted per
+    // decision F, matching Patients.
     const prescription = await this.findOne(
       id,
       userId,
       userRole,
       organisationId,
       organisationType,
+      ctx,
     );
-    await this.prescriptionsRepository.softDelete(prescription.id);
+
+    await this.prescriptionsRepository.manager.transaction(async (manager) => {
+      await manager.getRepository(Prescription).softDelete(prescription.id);
+      await this.auditService.record(
+        {
+          organisationId: prescription.organisationId,
+          branchId: null,
+          orgType: organisationType as OrgType,
+          entityType: 'prescription',
+          entityId: prescription.id,
+          action: 'soft_delete',
+          severity: 'critical',
+          actorUserId: userId,
+          actorRole: userRole,
+          source: 'api',
+          ipAddress: ctx.ipAddress,
+          userAgent: ctx.userAgent,
+        },
+        manager,
+      );
+    });
+
     return { message: 'Prescription deleted successfully' };
   }
 }

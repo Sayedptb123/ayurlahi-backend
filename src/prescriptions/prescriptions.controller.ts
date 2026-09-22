@@ -16,11 +16,19 @@ import { CreatePrescriptionDto } from './dto/create-prescription.dto';
 import { UpdatePrescriptionDto } from './dto/update-prescription.dto';
 import { GetPrescriptionsDto } from './dto/get-prescriptions.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import type { AuthAuditContext } from '../auth/auth.service';
 
 @Controller('prescriptions')
 @UseGuards(JwtAuthGuard)
 export class PrescriptionsController {
   constructor(private readonly prescriptionsService: PrescriptionsService) {}
+
+  private auditContext(req: any): AuthAuditContext {
+    return {
+      ipAddress: req.ip ?? null,
+      userAgent: req.headers?.['user-agent'] ?? null,
+    };
+  }
 
   @Post()
   create(@Request() req, @Body() createDto: CreatePrescriptionDto) {
@@ -30,6 +38,7 @@ export class PrescriptionsController {
       req.user.organisationId,
       req.user.organisationType,
       createDto,
+      this.auditContext(req),
     );
   }
 
@@ -52,6 +61,7 @@ export class PrescriptionsController {
       req.user.role,
       req.user.organisationId,
       req.user.organisationType,
+      this.auditContext(req),
     );
   }
 
@@ -68,6 +78,7 @@ export class PrescriptionsController {
       req.user.organisationId,
       req.user.organisationType,
       updateDto,
+      this.auditContext(req),
     );
   }
 
@@ -79,6 +90,7 @@ export class PrescriptionsController {
       req.user.role,
       req.user.organisationId,
       req.user.organisationType,
+      this.auditContext(req),
     );
   }
 }

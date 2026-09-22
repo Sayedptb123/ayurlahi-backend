@@ -164,6 +164,22 @@ describe('AuditService.record — field policy (fail closed)', () => {
     });
     expect(saved[0].changes).toEqual({ medicalHistory: { from: 'None', to: 'Diabetes' } });
   });
+
+  // Phase 4 (Prescriptions): the real entry, keyed 'prescription' not
+  // 'Prescription' -- same discipline as the patient/lead/requirement
+  // entries above.
+  it('prescription (entityType "prescription"): a real field survives, an unknown field does not', async () => {
+    const { service, saved } = makeService();
+    await service.record({
+      ...baseParams,
+      entityType: 'prescription',
+      changes: {
+        status: { from: 'active', to: 'dispensed' },
+        medicineName: { from: 'Paracetamol', to: 'Ibuprofen' }, // item-level, must be dropped
+      },
+    });
+    expect(saved[0].changes).toEqual({ status: { from: 'active', to: 'dispensed' } });
+  });
 });
 
 describe('AuditService.record — critical severity without a transaction', () => {

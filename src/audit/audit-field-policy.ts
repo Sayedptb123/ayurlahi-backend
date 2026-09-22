@@ -82,6 +82,25 @@ export const AUDIT_FIELD_POLICY: Record<
       'medicalHistory', 'branchId', 'fileNumber', 'patientCode',
     ],
   },
+  // Phase 4 (Prescriptions) -- keyed 'prescription', matching the literal
+  // entityType every PrescriptionsService audit call passes. Only the
+  // parent scalar fields (UpdatePrescriptionDto minus `items`) -- the
+  // items list is deliberately never in `changes` at all (decision B:
+  // destroy-and-recreate has no old/new correspondence to diff, so it
+  // goes into `metadata` as full before/after snapshots instead), so
+  // there's nothing item-level for this allowlist to filter. Decision D
+  // locked 2026-09-23: the read gate for this content must mirror
+  // PrescriptionsService.findOne()'s actual authorization predicate
+  // (organisationType === 'CLINIC' org-match, or SUPER_ADMIN/SUPPORT
+  // role for any other org type) whenever a read API is built -- not a
+  // static claim that those roles are intrinsically AYURLAHI_TEAM. See
+  // scope/Audit_Trail_Phase4_Prescriptions_Reconnaissance.md.
+  prescription: {
+    allowed: [
+      'patientId', 'appointmentId', 'doctorId', 'prescriptionDate',
+      'diagnosis', 'notes', 'status',
+    ],
+  },
 };
 
 /**
