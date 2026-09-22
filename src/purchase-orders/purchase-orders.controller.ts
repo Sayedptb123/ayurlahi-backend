@@ -57,8 +57,12 @@ export class PurchaseOrdersController {
     @Param('organisationId') organisationId: string,
     @Param('id') id: string,
     @Body() updateDto: UpdatePurchaseOrderDto,
+    @Request() req,
   ) {
-    return this.poService.update(organisationId, id, updateDto);
+    // T26: userId/role are needed so a transition to 'received' can apply
+    // the stricter receive-only authorization + branch check inside the
+    // service, on top of this decorator's org-membership-level gate.
+    return this.poService.update(organisationId, id, updateDto, req.user.userId, req.user.role);
   }
 
   @Delete(':id')

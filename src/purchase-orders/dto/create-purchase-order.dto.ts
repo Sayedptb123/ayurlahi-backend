@@ -7,9 +7,11 @@ import {
   IsArray,
   ValidateNested,
   IsNumber,
+  IsIn,
   Min,
 } from 'class-validator';
 import { Type } from 'class-transformer';
+import { PO_STATUSES } from '../purchase-order-transitions';
 
 export class CreatePurchaseOrderItemDto {
   // Legacy -- resolves against inventory_items. Left for backward
@@ -79,7 +81,12 @@ export class UpdatePurchaseOrderDto {
   @IsOptional()
   expectedDeliveryDate?: string;
 
-  @IsString()
+  // T26 (2026-09-16): was an unvalidated free string -- any caller could
+  // PATCH status to any value, including cycling an already-`received` PO
+  // back through `sent` to `received` again to double-credit stock. Legal
+  // transitions are enforced separately in the service via PO_TRANSITIONS;
+  // this only rejects nonsense values before they reach it.
+  @IsIn(PO_STATUSES)
   @IsOptional()
   status?: string;
 
