@@ -10,15 +10,59 @@
  * an allowlist is ever misconfigured to include them.
  *
  * Phase 1 (Auth) doesn't generically diff any entity -- every Auth event
- * is an explicit security event, not a row diff -- so this map has no
- * entries yet. Phase 3 (Patients) populates it from real entity columns,
- * the same way this file's shape was decided: grep the actual entity,
- * don't guess.
+ * is an explicit security event, not a row diff -- so it had no entries.
+ * Phase 2 (CRM) adds the first two: only entityType 'lead' and
+ * 'requirement' ever produce a real before/after diff (verified against
+ * all 14 CRM audit call sites -- see
+ * scope/Audit_Trail_Phase2_CRM_Migration_Implementation_Plan.md's "The
+ * regression this phase must not introduce"). 'activity'/'task'/'visit'
+ * never send a `changes` diff at all (their audit data routes to
+ * `metadata` instead via `normalizeCrmChanges()`), so they need no entry
+ * here -- Phase 3 (Patients) populates further entries the same way:
+ * grep the actual entity/DTO, don't guess.
+ *
+ * IMPORTANT: keys here must match the literal runtime `entityType`
+ * string each caller passes into `AuditService.record()` -- e.g. CRM's
+ * CrmAuditEntity value ('lead'), not the TypeScript class name
+ * ('CrmLead'). A mismatched key silently drops `changes` to null exactly
+ * like having no entry at all, since `filterAuditChanges()` does a plain
+ * string lookup with no awareness of class names.
  */
 export const AUDIT_FIELD_POLICY: Record<
   string,
   { allowed: string[]; neverInclude?: string[] }
-> = {};
+> = {
+  // Keyed by the actual runtime `entityType` string CRM passes (the
+  // CrmAuditEntity value, e.g. 'lead' -- NOT the TypeScript class name
+  // 'CrmLead'). Every field UpdateLeadDto
+  // (src/crm/dto/update-lead.dto.ts, itself CreateLeadDto minus
+  // assignedTelecallerId/assignedFieldStaffId/force/googlePlaceId, plus
+  // lostReason) can carry, plus assignment()'s hardcoded before/after
+  // keys (telecaller, field). No exclusions: all of these were already
+  // captured unfiltered by the old before/after object, so this
+  // preserves that, not narrows it. No secret-shaped field exists on a
+  // CRM lead.
+  lead: {
+    allowed: [
+      'name', 'centreType', 'bedCount', 'address', 'area', 'city', 'district',
+      'state', 'latitude', 'longitude', 'primaryContactName',
+      'primaryContactDesignation', 'phone', 'phoneSecondary', 'whatsapp',
+      'email', 'leadSource', 'ownerDoctorName', 'ownerDoctorIsBams',
+      'currentSoftware', 'priority', 'tags', 'googleMapsUrl', 'website',
+      'lostReason', 'telecaller', 'field',
+    ],
+  },
+  // Every field UpdateRequirementDto (src/crm/dto/requirement.dto.ts) can
+  // carry.
+  requirement: {
+    allowed: [
+      'activityId', 'interestLevel', 'modulesWanted', 'painPoints',
+      'objections', 'bedCount', 'patientsPerMonth', 'decisionMakerName',
+      'spokeToDecisionMaker', 'decisionTimeline', 'competitor',
+      'pricingDiscussed', 'pricingReaction', 'verbatimFeedback',
+    ],
+  },
+};
 
 /**
  * Filters a raw before/after diff down to the entity's allowlist. An

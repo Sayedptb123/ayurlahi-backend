@@ -98,6 +98,8 @@ export class CrmTasksService {
       entityId: saved.id,
       action: 'create',
       actorUserId: actor.userId,
+      actorRole: actor.role,
+      organisationType: actor.organisationType,
     });
     return saved;
   }
@@ -133,6 +135,8 @@ export class CrmTasksService {
       entityId: id,
       action: 'update',
       actorUserId: actor.userId,
+      actorRole: actor.role,
+      organisationType: actor.organisationType,
       changes: { status: saved.status },
     });
     return saved;

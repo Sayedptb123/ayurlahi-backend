@@ -10,6 +10,8 @@ import { CrmAuditLog } from './entities/crm-audit-log.entity';
 import { CrmStaffScope } from './entities/crm-staff-scope.entity';
 import { OrganisationUser } from '../organisation-users/entities/organisation-user.entity';
 import { User } from '../users/entities/user.entity';
+import { AuditLog } from '../audit/entities/audit-log.entity';
+import { AuditModule } from '../audit/audit.module';
 import { CrmRolesGuard } from './guards/crm-roles.guard';
 import { CrmLeadsService } from './services/crm-leads.service';
 import { CrmPipelineService } from './services/crm-pipeline.service';
@@ -53,8 +55,10 @@ import { NotificationsModule } from '../notifications/notifications.module';
       CrmStaffScope,
       OrganisationUser,
       User,
+      AuditLog,
     ]),
     NotificationsModule,
+    AuditModule,
   ],
   controllers: [
     CrmLeadsController,

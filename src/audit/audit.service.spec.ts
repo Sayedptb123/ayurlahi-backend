@@ -108,6 +108,44 @@ describe('AuditService.record — field policy (fail closed)', () => {
       delete AUDIT_FIELD_POLICY['__test_fixture__'];
     }
   });
+
+  // Phase 2 (CRM): the real, non-fixture entries. See
+  // scope/Audit_Trail_Phase2_CRM_Migration_Implementation_Plan.md "The
+  // regression this phase must not introduce" -- this is the test that
+  // would have caught it if CrmLead/CrmRequirement had shipped without
+  // policy entries (everything silently dropping to null), or with an
+  // incomplete one (a real UpdateLeadDto field silently dropped).
+  it('CrmLead (entityType "lead"): an UpdateLeadDto field survives, an unknown field does not', async () => {
+    const { service, saved } = makeService();
+    await service.record({
+      ...baseParams,
+      entityType: 'lead',
+      changes: {
+        name: { from: 'Old', to: 'New' },
+        lostReason: { from: null, to: 'Chose a competitor' },
+        telecaller: { from: 'u-1', to: 'u-2' },
+        notAFieldOnTheDto: { from: 1, to: 2 },
+      },
+    });
+    expect(saved[0].changes).toEqual({
+      name: { from: 'Old', to: 'New' },
+      lostReason: { from: null, to: 'Chose a competitor' },
+      telecaller: { from: 'u-1', to: 'u-2' },
+    });
+  });
+
+  it('CrmRequirement (entityType "requirement"): an UpdateRequirementDto field survives, an unknown field does not', async () => {
+    const { service, saved } = makeService();
+    await service.record({
+      ...baseParams,
+      entityType: 'requirement',
+      changes: {
+        bedCount: { from: 10, to: 20 },
+        notAFieldOnTheDto: { from: 1, to: 2 },
+      },
+    });
+    expect(saved[0].changes).toEqual({ bedCount: { from: 10, to: 20 } });
+  });
 });
 
 describe('AuditService.record — critical severity without a transaction', () => {

@@ -73,6 +73,8 @@ export class CrmVisitsService {
       entityId: saved.id,
       action: 'create',
       actorUserId: actor.userId,
+      actorRole: actor.role,
+      organisationType: actor.organisationType,
     });
     return saved;
   }
@@ -122,6 +124,8 @@ export class CrmVisitsService {
       entityId: visitId,
       action: 'update',
       actorUserId: actor.userId,
+      actorRole: actor.role,
+      organisationType: actor.organisationType,
       changes: { event: 'check_in', distanceM: distance, locationMismatch: mismatch },
     });
     // NOTE: location mismatch notifies Manager/Owner — wired in the notification step (B6).
@@ -157,6 +161,8 @@ export class CrmVisitsService {
       entityId: visitId,
       action: 'update',
       actorUserId: actor.userId,
+      actorRole: actor.role,
+      organisationType: actor.organisationType,
       changes: { event: 'check_out', demoGiven: saved.demoGiven },
     });
     return saved;

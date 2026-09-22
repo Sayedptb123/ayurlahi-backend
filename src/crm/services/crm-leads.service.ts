@@ -309,6 +309,8 @@ export class CrmLeadsService {
       entityId: saved.id,
       action: 'create',
       actorUserId: actor.userId,
+      actorRole: actor.role,
+      organisationType: actor.organisationType,
       changes: { name: saved.name, source: saved.leadSource },
     });
     return saved;
@@ -341,6 +343,8 @@ export class CrmLeadsService {
         entityId: id,
         action: 'update',
         actorUserId: actor.userId,
+        actorRole: actor.role,
+        organisationType: actor.organisationType,
         changes: { before, after },
       });
     }
@@ -392,6 +396,8 @@ export class CrmLeadsService {
       entityId: id,
       action: 'assignment',
       actorUserId: actor.userId,
+      actorRole: actor.role,
+      organisationType: actor.organisationType,
       changes: {
         before,
         after: { telecaller: saved.assignedTelecallerId, field: saved.assignedFieldStaffId },
@@ -474,6 +480,8 @@ export class CrmLeadsService {
       entityId: id,
       action: 'stage_change',
       actorUserId: actor.userId,
+      actorRole: actor.role,
+      organisationType: actor.organisationType,
       fromStage,
       toStage: stageKey,
       changes: target.isLost ? { lostReason } : null,
@@ -497,6 +505,8 @@ export class CrmLeadsService {
       entityId: id,
       action: 'delete',
       actorUserId: actor.userId,
+      actorRole: actor.role,
+      organisationType: actor.organisationType,
     });
   }
 
@@ -534,6 +544,8 @@ export class CrmLeadsService {
       entityId: id,
       action: 'update', // We'll log it as update since 'anonymise' might not be in the enum, or we can just pass 'update'
       actorUserId: actor.userId,
+      actorRole: actor.role,
+      organisationType: actor.organisationType,
       changes: { info: 'PII removed for DPDP compliance' },
     });
 

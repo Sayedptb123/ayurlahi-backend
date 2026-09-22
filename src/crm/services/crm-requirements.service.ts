@@ -44,6 +44,8 @@ export class CrmRequirementsService {
       entityId: saved.id,
       action: 'create',
       actorUserId: actor.userId,
+      actorRole: actor.role,
+      organisationType: actor.organisationType,
     });
     return saved;
   }
@@ -77,6 +79,8 @@ export class CrmRequirementsService {
         entityId: id,
         action: 'update',
         actorUserId: actor.userId,
+        actorRole: actor.role,
+        organisationType: actor.organisationType,
         changes: { before, after },
       });
     }

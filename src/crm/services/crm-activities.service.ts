@@ -104,6 +104,8 @@ export class CrmActivitiesService {
       entityId: saved.id,
       action: 'create',
       actorUserId: actor.userId,
+      actorRole: actor.role,
+      organisationType: actor.organisationType,
       changes: { type: saved.type, disposition: saved.disposition },
     });
 
