@@ -25,50 +25,61 @@ export class AuditLog {
   // (unknown-account login/OTP attempt) has no user row and therefore no
   // organisation membership to attach -- see
   // 2026-09-23-audit-logs-nullable-org.sql.
-  @Column({ name: 'organisation_id', nullable: true })
+  //
+  // Every column below has an explicit `type:` even though most look like
+  // they wouldn't need one. TypeScript's emitted design:type metadata for
+  // a union property (string | null, or a custom string-literal-union
+  // alias like AuditAction) degrades to `Object` at runtime -- TypeORM
+  // can't map that to a Postgres type and DataSource.initialize() throws
+  // DataTypeNotSupportedError. This was never caught by `npm run build`
+  // (pure TS compile, no TypeORM metadata validation) or by any Jest
+  // test (all of them construct AuditService with a plain mocked
+  // repository object, never a real DataSource) -- only surfaced the
+  // first time the real app was actually booted against Postgres.
+  @Column({ type: 'uuid', name: 'organisation_id', nullable: true })
   organisationId: string | null;
 
-  @Column({ name: 'branch_id', nullable: true })
+  @Column({ type: 'uuid', name: 'branch_id', nullable: true })
   branchId: string | null;
 
   // Nullable for the same reason organisationId is -- see above.
-  @Column({ name: 'org_type', nullable: true })
+  @Column({ type: 'varchar', name: 'org_type', nullable: true })
   orgType: string | null;
 
-  @Column({ name: 'entity_type' })
+  @Column({ type: 'varchar', name: 'entity_type' })
   entityType: string;
 
-  @Column({ name: 'entity_id', nullable: true })
+  @Column({ type: 'uuid', name: 'entity_id', nullable: true })
   entityId: string | null;
 
-  @Column()
+  @Column({ type: 'varchar' })
   action: AuditAction;
 
-  @Column()
+  @Column({ type: 'varchar' })
   severity: AuditSeverity;
 
-  @Column({ name: 'actor_user_id', nullable: true })
+  @Column({ type: 'uuid', name: 'actor_user_id', nullable: true })
   actorUserId: string | null;
 
-  @Column({ name: 'actor_role', nullable: true })
+  @Column({ type: 'varchar', name: 'actor_role', nullable: true })
   actorRole: string | null;
 
-  @Column()
+  @Column({ type: 'varchar' })
   source: AuditSource;
 
-  @Column({ name: 'ip_address', nullable: true })
+  @Column({ type: 'varchar', name: 'ip_address', nullable: true })
   ipAddress: string | null;
 
-  @Column({ name: 'user_agent', nullable: true })
+  @Column({ type: 'varchar', name: 'user_agent', nullable: true })
   userAgent: string | null;
 
-  @Column({ name: 'request_id', nullable: true })
+  @Column({ type: 'varchar', name: 'request_id', nullable: true })
   requestId: string | null;
 
   @Column({ type: 'jsonb', nullable: true })
   changes: Record<string, { from: unknown; to: unknown }> | null;
 
-  @Column({ nullable: true })
+  @Column({ type: 'text', nullable: true })
   reason: string | null;
 
   @Column({ type: 'jsonb', nullable: true })
