@@ -146,6 +146,24 @@ describe('AuditService.record — field policy (fail closed)', () => {
     });
     expect(saved[0].changes).toEqual({ bedCount: { from: 10, to: 20 } });
   });
+
+  // Phase 3 (Patients): the real, non-fixture entry, keyed 'patient' not
+  // 'Patient' -- see
+  // scope/Audit_Trail_Phase3_Patients_Implementation_Plan.md's field
+  // policy section. This is the test that would catch a repeat of the
+  // Phase 2 CrmLead-vs-'lead' key-mismatch bug for Patients specifically.
+  it('patient (entityType "patient"): a real field survives, an unknown field does not', async () => {
+    const { service, saved } = makeService();
+    await service.record({
+      ...baseParams,
+      entityType: 'patient',
+      changes: {
+        medicalHistory: { from: 'None', to: 'Diabetes' },
+        notAFieldOnTheEntity: { from: 1, to: 2 },
+      },
+    });
+    expect(saved[0].changes).toEqual({ medicalHistory: { from: 'None', to: 'Diabetes' } });
+  });
 });
 
 describe('AuditService.record — critical severity without a transaction', () => {

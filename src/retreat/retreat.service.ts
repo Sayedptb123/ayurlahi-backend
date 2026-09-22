@@ -22,6 +22,7 @@ import { BookingFieldDefinition } from './entities/booking-field-definition.enti
 import { CreateFieldDefinitionDto, UpdateFieldDefinitionDto } from './dto/field-definition.dto';
 import { NotificationsService } from '../notifications/notifications.service';
 import { BranchVisibilityService } from '../branch-visibility/branch-visibility.service';
+import { AuditService } from '../audit/audit.service';
 
 // Phase 0: half-open interval overlap. Two ranges [aStart,aEnd) and [bStart,bEnd)
 // overlap iff aStart < bEnd AND aEnd > bStart. Back-to-back (a ends when b starts)
@@ -64,6 +65,7 @@ export class RetreatService {
         private patientBillingService: PatientBillingService,
         private patientsService: PatientsService,
         private branchVisibilityService: BranchVisibilityService,
+        private auditService: AuditService,
     ) { }
 
     // Map a clinic_capabilities row to the set of care programs the org is allowed
@@ -1651,6 +1653,31 @@ export class RetreatService {
                 });
                 const saved = await manager.save(newPatient);
                 booking.patientId = saved.id;
+
+                // Second patient-creation path found in Phase 3 recon --
+                // bypasses PatientsService.create() entirely, so needs its
+                // own audit call. orgType is a literal here: this route is
+                // gated by @RequireModule('booking') (ModuleGuard checks
+                // ClinicCapabilities, a CLINIC-only table), so it's
+                // unreachable by any non-CLINIC org -- verified, not
+                // assumed. Uses the transaction already in scope even
+                // though severity ('sensitive') doesn't strictly require
+                // it -- free durability improvement, decision C.
+                await this.auditService.record(
+                    {
+                        organisationId: clinicId,
+                        branchId: saved.branchId,
+                        orgType: 'CLINIC',
+                        entityType: 'patient',
+                        entityId: saved.id,
+                        action: 'create',
+                        severity: 'sensitive',
+                        actorUserId: performedBy ?? null,
+                        source: 'api',
+                        metadata: { via: 'booking_promotion', bookingId },
+                    },
+                    manager,
+                );
             }
 
             return manager.save(booking);

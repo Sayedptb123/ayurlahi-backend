@@ -397,3 +397,61 @@ describe('RetreatService — removeBooking (refund gate)', () => {
         expect(bookingRepo.softDelete).toHaveBeenCalledWith({ id: 'bk-1' });
     });
 });
+
+// Phase 3 audit instrumentation -- second patient-creation path found in
+// recon (scope/Audit_Trail_Phase3_Patients_Reconnaissance.md): this
+// bypasses PatientsService.create() entirely, so it needs its own test
+// distinct from patients.service.spec.ts's create() coverage.
+describe('RetreatService.promoteEnquiry — audit event (second patient-creation path)', () => {
+    const makeService = (opts: { existingPatient?: any } = {}) => {
+        const booking = {
+            id: 'bk-1', organisationId: 'org-1', branchId: 'branch-1', patientId: null,
+            enquiry: { phone: '9999999999', contactName: 'Jane Doe' },
+        };
+        const managerRecord: any[] = [];
+        const manager: any = {
+            findOne: jest.fn((entity: any) => {
+                if (entity?.name === 'RoomBooking') return Promise.resolve({ ...booking });
+                if (entity?.name === 'Patient') return Promise.resolve(opts.existingPatient ?? null);
+                return Promise.resolve(null);
+            }),
+            create: jest.fn((_entity: any, data: any) => data),
+            save: jest.fn((arg1: any, arg2?: any) => Promise.resolve(arg2 ?? { id: 'p-new', ...arg1 })),
+        };
+        const dataSource: any = { transaction: jest.fn((cb: any) => cb(manager)) };
+        const patientsService: any = { generateNextPatientCode: jest.fn(() => Promise.resolve('P00001')) };
+        const auditService: any = {
+            record: jest.fn((params: any, mgr: any) => { managerRecord.push({ params, mgr }); return Promise.resolve(); }),
+        };
+        const service = new RetreatService(
+            {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any,
+            {} as any, {} as any, {} as any, {} as any,
+            dataSource, {} as any, {} as any, patientsService, {} as any, auditService,
+        );
+        return { service, auditService, managerRecord, manager };
+    };
+
+    it('records action=create with source=api and via=booking_promotion, using the transaction manager', async () => {
+        const { service, managerRecord } = makeService();
+        await service.promoteEnquiry('org-1', 'bk-1', 'u-1');
+
+        expect(managerRecord).toHaveLength(1);
+        expect(managerRecord[0].params).toMatchObject({
+            organisationId: 'org-1',
+            orgType: 'CLINIC',
+            entityType: 'patient',
+            action: 'create',
+            severity: 'sensitive',
+            actorUserId: 'u-1',
+            source: 'api',
+            metadata: { via: 'booking_promotion', bookingId: 'bk-1' },
+        });
+        expect(managerRecord[0].mgr).toBeDefined(); // participates in the transaction, per decision C
+    });
+
+    it('does not audit a creation when the phone-dedup match finds an existing patient', async () => {
+        const { service, managerRecord } = makeService({ existingPatient: { id: 'existing-p' } });
+        await service.promoteEnquiry('org-1', 'bk-1', 'u-1');
+        expect(managerRecord).toHaveLength(0);
+    });
+});

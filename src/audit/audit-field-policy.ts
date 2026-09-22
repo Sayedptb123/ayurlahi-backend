@@ -62,6 +62,26 @@ export const AUDIT_FIELD_POLICY: Record<
       'pricingDiscussed', 'pricingReaction', 'verbatimFeedback',
     ],
   },
+  // Phase 3 (Patients) -- keyed 'patient' (the literal entityType every
+  // PatientsService/RetreatService audit call passes), not 'Patient'.
+  // Every field UpdatePatientDto (src/patients/dto/update-patient.dto.ts)
+  // can carry, using the entity's own property name where the DTO uses an
+  // alias (patientId on the DTO -> patientCode on the entity). No
+  // exclusions -- decision D, locked 2026-09-23 after tracing
+  // PatientsService.findOne() (patients.service.ts:261-278): AYURLAHI_TEAM
+  // already has unrestricted, unaudited, cross-tenant read access to every
+  // patient's full clinical record today (both the org-match check and
+  // the branch-visibility check are skipped for that org type), and the
+  // audit-read gate is the identical condition -- so a full diff here is
+  // a strict subset of an exposure surface that already exists, not a new
+  // one. See scope/Audit_Trail_Phase3_Patients_Reconnaissance.md.
+  patient: {
+    allowed: [
+      'firstName', 'lastName', 'dateOfBirth', 'gender', 'phone', 'email',
+      'address', 'emergencyContact', 'bloodGroup', 'allergies',
+      'medicalHistory', 'branchId', 'fileNumber', 'patientCode',
+    ],
+  },
 };
 
 /**

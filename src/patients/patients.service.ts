@@ -13,6 +13,16 @@ import { CreatePatientDto } from './dto/create-patient.dto';
 import { UpdatePatientDto } from './dto/update-patient.dto';
 import { GetPatientsDto } from './dto/get-patients.dto';
 import { BranchVisibilityService } from '../branch-visibility/branch-visibility.service';
+import { AuditService } from '../audit/audit.service';
+import type { OrgType } from '../audit/audit.types';
+import type { AuthAuditContext } from '../auth/auth.service';
+
+// Same shape as AuthAuditContext, not re-exported from auth.service.ts
+// since only the interface (not the const) is exported there. See
+// scope/Audit_Trail_Phase3_Patients_Implementation_Plan.md -- renaming
+// AuthAuditContext to a module-agnostic name is deferred until a third
+// module needs it (Phase 1's same reasoning for not building CLS yet).
+const NO_CONTEXT: AuthAuditContext = { ipAddress: null, userAgent: null };
 
 @Injectable()
 export class PatientsService {
@@ -22,6 +32,7 @@ export class PatientsService {
     @InjectRepository(Branch)
     private branchesRepository: Repository<Branch>,
     private branchVisibilityService: BranchVisibilityService,
+    private auditService: AuditService,
   ) {}
 
   // Next sequential patient_code ("P00001", "P00002", …) for an organisation.
@@ -43,6 +54,7 @@ export class PatientsService {
     organisationId: string | undefined,
     organisationType: string | undefined,
     createDto: CreatePatientDto,
+    ctx: AuthAuditContext = NO_CONTEXT,
   ) {
     if (
       organisationType !== 'CLINIC' &&
@@ -131,7 +143,22 @@ export class PatientsService {
     });
 
     try {
-      return await this.patientsRepository.save(patient);
+      const saved = await this.patientsRepository.save(patient);
+      await this.auditService.record({
+        organisationId: clinicId as string,
+        branchId: saved.branchId,
+        orgType: organisationType as OrgType,
+        entityType: 'patient',
+        entityId: saved.id,
+        action: 'create',
+        severity: 'sensitive',
+        actorUserId: userId,
+        actorRole: userRole,
+        source: 'api',
+        ipAddress: ctx.ipAddress,
+        userAgent: ctx.userAgent,
+      });
+      return saved;
     } catch (err: any) {
       if (err?.code === '23505') {
         if (err?.constraint?.includes('phone')) {
@@ -242,6 +269,7 @@ export class PatientsService {
     userRole: string,
     organisationId: string | undefined,
     organisationType: string | undefined,
+    ctx: AuthAuditContext = NO_CONTEXT,
   ) {
     // Query builder, not relations:[...] — createdByUser/updatedByUser must never
     // pull User.passwordHash over the wire (it isn't select:false on the entity).
@@ -277,6 +305,25 @@ export class PatientsService {
       }
     }
 
+    // Placed after authorization succeeds -- a denied lookup isn't a
+    // "view", it belongs to the unauthorized-access-attempt category
+    // (module matrix Section U), out of scope for this phase, not
+    // conflated with a real view here.
+    await this.auditService.record({
+      organisationId: patient.organisationId,
+      branchId: patient.branchId,
+      orgType: organisationType as OrgType,
+      entityType: 'patient',
+      entityId: patient.id,
+      action: 'view',
+      severity: 'sensitive',
+      actorUserId: userId,
+      actorRole: userRole,
+      source: 'api',
+      ipAddress: ctx.ipAddress,
+      userAgent: ctx.userAgent,
+    });
+
     return patient;
   }
 
@@ -287,6 +334,7 @@ export class PatientsService {
     organisationId: string | undefined,
     organisationType: string | undefined,
     updateDto: UpdatePatientDto,
+    ctx: AuthAuditContext = NO_CONTEXT,
   ) {
     const patient = await this.patientsRepository.findOne({ where: { id } });
     if (!patient) {
@@ -314,13 +362,37 @@ export class PatientsService {
       }
     }
 
-    if (updateDto.firstName !== undefined)
+    // Before/after diff for the audit trail -- captured using the entity's
+    // own property names (patientCode, not the DTO's patientId alias) and
+    // the actual normalized value being assigned (e.g. the parsed Date for
+    // dateOfBirth, not the raw DTO string), never the raw DTO value where
+    // the two differ. Only records a key when the value actually changes,
+    // matching the CRM update() precedent.
+    const before: Record<string, any> = {};
+    const after: Record<string, any> = {};
+    const track = (key: string, oldValue: unknown, newValue: unknown) => {
+      if (oldValue !== newValue) {
+        before[key] = oldValue;
+        after[key] = newValue;
+      }
+    };
+
+    if (updateDto.firstName !== undefined) {
+      track('firstName', patient.firstName, updateDto.firstName);
       patient.firstName = updateDto.firstName;
-    if (updateDto.lastName !== undefined) patient.lastName = updateDto.lastName;
-    if (updateDto.patientId !== undefined)
+    }
+    if (updateDto.lastName !== undefined) {
+      track('lastName', patient.lastName, updateDto.lastName);
+      patient.lastName = updateDto.lastName;
+    }
+    if (updateDto.patientId !== undefined) {
+      track('patientCode', patient.patientCode, updateDto.patientId);
       patient.patientCode = updateDto.patientId;
-    if (updateDto.fileNumber !== undefined)
+    }
+    if (updateDto.fileNumber !== undefined) {
+      track('fileNumber', patient.fileNumber, updateDto.fileNumber);
       patient.fileNumber = updateDto.fileNumber;
+    }
     if (updateDto.branchId !== undefined && updateDto.branchId !== patient.branchId) {
       const branch = await this.branchesRepository.findOne({
         where: { id: updateDto.branchId, organisationId: patient.organisationId },
@@ -328,28 +400,78 @@ export class PatientsService {
       if (!branch) {
         throw new NotFoundException('Branch not found in this organisation');
       }
+      track('branchId', patient.branchId, updateDto.branchId);
       patient.branchId = updateDto.branchId;
     }
-    if (updateDto.dateOfBirth !== undefined)
-      patient.dateOfBirth = updateDto.dateOfBirth
-        ? new Date(updateDto.dateOfBirth)
-        : null;
-    if (updateDto.gender !== undefined) patient.gender = updateDto.gender;
-    if (updateDto.phone !== undefined) patient.phone = updateDto.phone;
-    if (updateDto.email !== undefined) patient.email = updateDto.email;
-    if (updateDto.address !== undefined) patient.address = updateDto.address;
-    if (updateDto.emergencyContact !== undefined)
+    if (updateDto.dateOfBirth !== undefined) {
+      const newDateOfBirth = updateDto.dateOfBirth ? new Date(updateDto.dateOfBirth) : null;
+      // Compare/store the normalized value, not the raw DTO string --
+      // ISO date strings (not epoch millis) so the diff stays readable to
+      // whoever eventually reads audit_logs, while still comparing by
+      // actual value rather than by Date object reference.
+      const oldIso = patient.dateOfBirth ? patient.dateOfBirth.toISOString().slice(0, 10) : null;
+      const newIso = newDateOfBirth ? newDateOfBirth.toISOString().slice(0, 10) : null;
+      track('dateOfBirth', oldIso, newIso);
+      patient.dateOfBirth = newDateOfBirth;
+    }
+    if (updateDto.gender !== undefined) {
+      track('gender', patient.gender, updateDto.gender);
+      patient.gender = updateDto.gender;
+    }
+    if (updateDto.phone !== undefined) {
+      track('phone', patient.phone, updateDto.phone);
+      patient.phone = updateDto.phone;
+    }
+    if (updateDto.email !== undefined) {
+      track('email', patient.email, updateDto.email);
+      patient.email = updateDto.email;
+    }
+    if (updateDto.address !== undefined) {
+      track('address', patient.address, updateDto.address);
+      patient.address = updateDto.address;
+    }
+    if (updateDto.emergencyContact !== undefined) {
+      track('emergencyContact', patient.emergencyContact, updateDto.emergencyContact);
       patient.emergencyContact = updateDto.emergencyContact;
-    if (updateDto.bloodGroup !== undefined)
+    }
+    if (updateDto.bloodGroup !== undefined) {
+      track('bloodGroup', patient.bloodGroup, updateDto.bloodGroup);
       patient.bloodGroup = updateDto.bloodGroup;
-    if (updateDto.allergies !== undefined)
+    }
+    if (updateDto.allergies !== undefined) {
+      track('allergies', patient.allergies, updateDto.allergies);
       patient.allergies = updateDto.allergies;
-    if (updateDto.medicalHistory !== undefined)
+    }
+    if (updateDto.medicalHistory !== undefined) {
+      track('medicalHistory', patient.medicalHistory, updateDto.medicalHistory);
       patient.medicalHistory = updateDto.medicalHistory;
+    }
 
     patient.updatedBy = userId;
 
-    return this.patientsRepository.save(patient);
+    const saved = await this.patientsRepository.save(patient);
+
+    if (Object.keys(after).length > 0) {
+      await this.auditService.record({
+        organisationId: patient.organisationId,
+        branchId: saved.branchId,
+        orgType: organisationType as OrgType,
+        entityType: 'patient',
+        entityId: saved.id,
+        action: 'update',
+        severity: 'sensitive',
+        actorUserId: userId,
+        actorRole: userRole,
+        source: 'api',
+        changes: Object.fromEntries(
+          Object.keys(after).map((k) => [k, { from: before[k], to: after[k] }]),
+        ),
+        ipAddress: ctx.ipAddress,
+        userAgent: ctx.userAgent,
+      });
+    }
+
+    return saved;
   }
 
   async remove(
@@ -358,15 +480,48 @@ export class PatientsService {
     userRole: string,
     organisationId: string | undefined,
     organisationType: string | undefined,
+    ctx: AuthAuditContext = NO_CONTEXT,
   ) {
+    // findOne() below already emits its own `view` event -- accepted as
+    // an honest side effect (the deleter did look at the record first),
+    // not routed around with a second internal-only lookup. Decision F,
+    // scope/Audit_Trail_Phase3_Patients_Reconnaissance.md.
     const patient = await this.findOne(
       id,
       userId,
       userRole,
       organisationId,
       organisationType,
+      ctx,
     );
-    await this.patientsRepository.softDelete(patient.id);
+
+    // Critical severity: the soft-delete and its audit record must commit
+    // together or not at all (v4's durability policy). No pessimistic
+    // lock needed here, unlike AuthService.resetPassword() -- softDelete()
+    // is a pure state assignment with no prior read to go stale against,
+    // so manager.transaction() alone provides the needed guarantee.
+    await this.patientsRepository.manager.transaction(async (manager) => {
+      await manager.getRepository(Patient).softDelete(patient.id);
+      await this.auditService.record(
+        {
+          organisationId: patient.organisationId,
+          branchId: patient.branchId,
+          orgType: organisationType as OrgType,
+          entityType: 'patient',
+          entityId: patient.id,
+          action: 'soft_delete',
+          severity: 'critical',
+          actorUserId: userId,
+          actorRole: userRole,
+          source: 'api',
+          metadata: { patientCode: patient.patientCode },
+          ipAddress: ctx.ipAddress,
+          userAgent: ctx.userAgent,
+        },
+        manager,
+      );
+    });
+
     return { message: 'Patient deleted successfully' };
   }
 }

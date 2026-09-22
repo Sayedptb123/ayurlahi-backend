@@ -19,6 +19,7 @@ import { PatientBillingModule } from '../patient-billing/patient-billing.module'
 import { PatientsModule } from '../patients/patients.module';
 import { ModuleGuard } from '../auth/guards/module.guard';
 import { BranchVisibilityModule } from '../branch-visibility/branch-visibility.module';
+import { AuditModule } from '../audit/audit.module';
 
 @Module({
   imports: [
@@ -27,6 +28,7 @@ import { BranchVisibilityModule } from '../branch-visibility/branch-visibility.m
     PatientBillingModule,
     PatientsModule,
     BranchVisibilityModule,
+    AuditModule,
   ],
   controllers: [RetreatController],
   providers: [RetreatService, ModuleGuard],
