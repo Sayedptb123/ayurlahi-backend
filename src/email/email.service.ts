@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, InternalServerErrorException, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Resend } from 'resend';
 
@@ -38,8 +38,8 @@ export class EmailService {
     this.logger.log(`Sending email to ${to} — subject: "${subject}"`);
     const { error } = await this.resend.emails.send({ from: this.fromEmail, to, subject, html });
     if (error) {
-      this.logger.error(`Failed to send email to ${to}: ${error.message}`);
-      throw new Error(error.message);
+      this.logger.error(`Failed to send email to ${to} (from ${this.fromEmail}): ${error.name} — ${error.message}`);
+      throw new InternalServerErrorException('Failed to send email. Please try again later.');
     }
     this.logger.log(`Email sent OK to ${to}`);
   }
