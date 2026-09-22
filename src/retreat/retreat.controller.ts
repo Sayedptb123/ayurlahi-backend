@@ -102,8 +102,8 @@ export class RetreatController {
     }
 
     @Get('today')
-    getTodaySummary(@Request() req) {
-        return this.retreatService.getTodaySummary(req.user.organisationId);
+    getTodaySummary(@Request() req, @Query('branchId') branchId?: string) {
+        return this.retreatService.getTodaySummary(req.user.organisationId, req.user.userId, req.user.role, branchId);
     }
 
     // Must be declared before any 'rooms/:id' route so 'available' isn't matched as :id

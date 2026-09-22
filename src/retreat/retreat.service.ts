@@ -417,7 +417,7 @@ export class RetreatService {
     // holds, and leads awaiting follow-up. Returns the actual items so that tile
     // counts (.length) and detail sheets are derived from exactly the same dataset —
     // one IST timezone calculation, one filtering implementation, zero drift.
-    async getTodaySummary(clinicId: string) {
+    async getTodaySummary(clinicId: string, userId?: string, userRole?: string, branchId?: string) {
         const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
         const istNow = new Date(Date.now() + IST_OFFSET_MS);
         const y = istNow.getUTCFullYear();
@@ -426,27 +426,54 @@ export class RetreatService {
         const startUtc = new Date(Date.UTC(y, m, d, 0, 0, 0, 0) - IST_OFFSET_MS);
         const endUtc = new Date(Date.UTC(y, m, d, 23, 59, 59, 999) - IST_OFFSET_MS);
 
+        // ADR-004 D9/Phase 4 branch scoping — every other booking/admission read in
+        // this file (getBookings, getAdmissions) applies this; this endpoint never
+        // did, so Arrivals/Departures/Holds always mixed every branch together
+        // regardless of who was asking or which branch the switcher had selected.
+        // Enquiries (followUps) have no branch column — they predate a branch pick —
+        // so they deliberately stay org-wide.
+        const visibleBranchIds = await this.branchVisibilityService.resolveVisibleBranchIds(userId, clinicId, userRole);
+        let branchWhere: any;
+        if (visibleBranchIds === null) {
+            if (branchId) branchWhere = Equal(branchId);
+        } else if (visibleBranchIds.length === 0) {
+            branchWhere = IsNull();
+        } else if (branchId && visibleBranchIds.includes(branchId)) {
+            branchWhere = Equal(branchId);
+        } else {
+            branchWhere = Or(IsNull(), In(visibleBranchIds));
+        }
+
+        const arrivalsWhere: any = {
+            organisationId: clinicId,
+            status: In([BookingStatus.HELD, BookingStatus.CONFIRMED]),
+            checkInDate: Between(startUtc, endUtc),
+        };
+        const departuresWhere: any = {
+            organisationId: clinicId,
+            status: AdmissionStatus.ACTIVE,
+            expectedCheckOutDate: Between(startUtc, endUtc),
+        };
+        const holdsWhere: any = { organisationId: clinicId, status: BookingStatus.HELD };
+        if (branchWhere !== undefined) {
+            arrivalsWhere.branchId = branchWhere;
+            departuresWhere.branchId = branchWhere;
+            holdsWhere.branchId = branchWhere;
+        }
+
         const [arrivals, departures, holds, followUps] = await Promise.all([
             this.bookingRepo.find({
-                where: {
-                    organisationId: clinicId,
-                    status: In([BookingStatus.HELD, BookingStatus.CONFIRMED]),
-                    checkInDate: Between(startUtc, endUtc),
-                },
+                where: arrivalsWhere,
                 relations: ['patient', 'room', 'treatmentPackage'],
                 order: { checkInDate: 'ASC' },
             }),
             this.admissionRepo.find({
-                where: {
-                    organisationId: clinicId,
-                    status: AdmissionStatus.ACTIVE,
-                    expectedCheckOutDate: Between(startUtc, endUtc),
-                },
+                where: departuresWhere,
                 relations: ['patient', 'room', 'treatmentPackage'],
                 order: { expectedCheckOutDate: 'ASC' },
             }),
             this.bookingRepo.find({
-                where: { organisationId: clinicId, status: BookingStatus.HELD },
+                where: holdsWhere,
                 relations: ['patient', 'room'],
                 order: { checkInDate: 'ASC' },
             }),
@@ -1002,7 +1029,15 @@ export class RetreatService {
                 status: BookingStatus.HELD,
                 notes: notes || null,
                 bookingDate: new Date(),
-                branchId: dto.branchId || null,
+                // Default to the room's own branch when the caller doesn't specify one —
+                // the room is the source of truth for which branch a stay belongs to.
+                // Without this every booking saved branch_id = NULL, which the branch
+                // switcher's strict `booking.branchId = :selectedBranchId` filter on the
+                // list view can never match, so bookings silently vanished from the
+                // Bookings List the moment a specific branch (not "All Locations") was
+                // selected — even though the calendar's OR-NULL visibility check let
+                // them still show there.
+                branchId: dto.branchId || room.branchId || null,
             });
             return manager.save(booking);
         });
