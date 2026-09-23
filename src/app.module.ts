@@ -141,6 +141,7 @@ import { PromotionsModule } from './promotions/promotions.module';
 import { Promotion } from './promotions/entities/promotion.entity';
 import { PromotionEvent } from './promotions/entities/promotion-event.entity';
 import { UsageEvent } from './analytics/entities/usage-event.entity';
+import { UsageEventType } from './analytics/entities/usage-event-type.entity';
 import { LeaveModule } from './leave/leave.module';
 import { LeaveType } from './leave/entities/leave-type.entity';
 import { LeaveRequest } from './leave/entities/leave-request.entity';
@@ -261,6 +262,7 @@ import { ProductRequest } from './product-requests/entities/product-request.enti
           Promotion,
           PromotionEvent,
           UsageEvent,
+          UsageEventType,
           LeaveType,
           LeaveRequest,
           LeaveBalance,

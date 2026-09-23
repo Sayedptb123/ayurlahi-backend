@@ -1,6 +1,6 @@
-import { Injectable, ForbiddenException } from '@nestjs/common';
+import { Injectable, ForbiddenException, BadRequestException, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, IsNull } from 'typeorm';
+import { Repository, IsNull, In } from 'typeorm';
 import { Order } from '../orders/entities/order.entity';
 import { User } from '../users/entities/user.entity';
 import { Organisation } from '../organisations/entities/organisation.entity';
@@ -11,6 +11,7 @@ import { PatientBill } from '../patient-billing/entities/patient-bill.entity';
 import { Expense } from '../expenses/entities/expense.entity';
 import { RoleUtils } from '../common/utils/role.utils';
 import { UsageEvent } from './entities/usage-event.entity';
+import { UsageEventType } from './entities/usage-event-type.entity';
 import { PurchaseOrder } from '../purchase-orders/entities/purchase-order.entity';
 import { PurchaseOrderItem } from '../purchase-orders/entities/purchase-order-item.entity';
 import { OrderItem } from '../orders/entities/order-item.entity';
@@ -23,6 +24,8 @@ import { OrganisationUser } from '../organisation-users/entities/organisation-us
 
 @Injectable()
 export class AnalyticsService {
+  private readonly logger = new Logger(AnalyticsService.name);
+
   constructor(
     @InjectRepository(Order)
     private ordersRepository: Repository<Order>,
@@ -42,6 +45,8 @@ export class AnalyticsService {
     private expensesRepository: Repository<Expense>,
     @InjectRepository(UsageEvent)
     private usageEventRepository: Repository<UsageEvent>,
+    @InjectRepository(UsageEventType)
+    private usageEventTypeRepository: Repository<UsageEventType>,
     @InjectRepository(PurchaseOrder)
     private purchaseOrdersRepository: Repository<PurchaseOrder>,
     @InjectRepository(PurchaseOrderItem)
@@ -887,13 +892,36 @@ export class AnalyticsService {
   async recordEvents(events: any[], organisationId: string, userId: string) {
     if (!events || !events.length) return { success: true, count: 0 };
 
+    // Registry validation (Usage_Event_Registry_Implementation_Plan.md,
+    // decision C): atomic -- any unregistered or inactive eventType fails
+    // the whole batch before anything is persisted. Medilink's mobile
+    // client already sends every event as part of a batched array (see
+    // TelemetryContext.tsx), so there is no true single-event mode to
+    // treat differently here.
+    const codes = [...new Set(events.map(e => e?.eventType))];
+    const registered = await this.usageEventTypeRepository.find({
+      where: { code: In(codes) },
+      select: ['code', 'isActive', 'allowedMetadataKeys'],
+    });
+    const byCode = new Map(registered.map(r => [r.code, r]));
+
+    for (const e of events) {
+      const entry = byCode.get(e?.eventType);
+      if (!entry || !entry.isActive) {
+        throw new BadRequestException(
+          `Unknown or inactive eventType "${e?.eventType}"`,
+        );
+      }
+    }
+
     const usageEvents = events.map(e => {
+      const entry = byCode.get(e.eventType)!;
       return this.usageEventRepository.create({
         organisation: organisationId ? { id: organisationId } : undefined,
         user: userId ? { id: userId } : undefined,
         eventType: e.eventType,
         screenName: e.screenName,
-        metadata: e.metadata,
+        metadata: this.filterMetadata(e.metadata, entry.allowedMetadataKeys),
         platform: e.platform,
         appVersion: e.appVersion,
         sessionId: e.sessionId,
@@ -903,6 +931,25 @@ export class AnalyticsService {
 
     await this.usageEventRepository.save(usageEvents);
     return { success: true, count: usageEvents.length };
+  }
+
+  // Decision D: strip metadata keys outside the event's allowlist, don't
+  // reject the batch over them -- an unregistered eventType is a client
+  // bug worth surfacing hard; an unexpected metadata key on an otherwise
+  // valid event is far more likely a developer adding a useful field
+  // without updating the allowlist yet. A NULL allowlist (event not yet
+  // reviewed) passes metadata through unfiltered -- not an error.
+  private filterMetadata(metadata: any, allowedKeys: string[] | null): any {
+    if (!metadata || !allowedKeys) return metadata;
+    const filtered: Record<string, unknown> = {};
+    for (const key of allowedKeys) {
+      if (key in metadata) filtered[key] = metadata[key];
+    }
+    const dropped = Object.keys(metadata).filter(k => !allowedKeys.includes(k));
+    if (dropped.length) {
+      this.logger.warn(`Dropped unregistered metadata keys [${dropped.join(', ')}] from event`);
+    }
+    return filtered;
   }
 
   async getTelemetryStats() {

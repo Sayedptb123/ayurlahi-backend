@@ -11,6 +11,7 @@ import { Appointment } from '../appointments/entities/appointment.entity';
 import { PatientBill } from '../patient-billing/entities/patient-bill.entity';
 import { Expense } from '../expenses/entities/expense.entity';
 import { UsageEvent } from './entities/usage-event.entity';
+import { UsageEventType } from './entities/usage-event-type.entity';
 import { PurchaseOrder } from '../purchase-orders/entities/purchase-order.entity';
 import { PurchaseOrderItem } from '../purchase-orders/entities/purchase-order-item.entity';
 import { OrderItem } from '../orders/entities/order-item.entity';
@@ -24,7 +25,7 @@ import { OrganisationUser } from '../organisation-users/entities/organisation-us
   imports: [
     TypeOrmModule.forFeature([
       Order, User, Organisation, Dispute,
-      Patient, Appointment, PatientBill, Expense, UsageEvent,
+      Patient, Appointment, PatientBill, Expense, UsageEvent, UsageEventType,
       PurchaseOrder, PurchaseOrderItem, OrderItem, InventoryItem, StockMovement,
       Admission, Room, OrganisationUser,
     ]),
