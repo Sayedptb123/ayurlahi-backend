@@ -1158,6 +1158,12 @@ export class AnalyticsService {
       .select("u.metadata->>'query'", 'query')
       .addSelect('COUNT(*)', 'count')
       .where("u.event_type = 'search'")
+      // Search_Tracking_Phase2_Implementation_Plan.md, decision B: once
+      // other screens (Patients, Staff, CRM, ...) also fire 'search'
+      // events, this "Top Searches" widget must stay scoped to the
+      // medicine/product catalog search it was built for, or it starts
+      // mixing patient/staff names into a medicine-search report.
+      .andWhere("u.screen_name = 'ProductsScreen'")
       .andWhere("u.metadata->>'query' IS NOT NULL")
       .andWhere("trim(u.metadata->>'query') != ''");
     if (organisationId) searchQb.andWhere('u.organisation_id = :organisationId', { organisationId });

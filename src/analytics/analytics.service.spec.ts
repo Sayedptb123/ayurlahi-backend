@@ -175,3 +175,49 @@ describe('AnalyticsService.recordEvents — full seed regression guard (test #8)
     expect(usageEventRepository.save).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('AnalyticsService.getMarketplaceActivityByOrg', () => {
+  // Search_Tracking_Phase2_Implementation_Plan.md, decision B / test #2:
+  // a chainable mock querybuilder per createQueryBuilder() call, since the
+  // method builds two independent query builders (search, add_to_cart).
+  const makeChainableQb = (rawResult: any[]) => {
+    const calls: { method: string; args: any[] }[] = [];
+    const qb: any = {};
+    const chain = (method: string) => (...args: any[]) => {
+      calls.push({ method, args });
+      return qb;
+    };
+    qb.select = chain('select');
+    qb.addSelect = chain('addSelect');
+    qb.where = chain('where');
+    qb.andWhere = chain('andWhere');
+    qb.groupBy = chain('groupBy');
+    qb.orderBy = chain('orderBy');
+    qb.limit = chain('limit');
+    qb.getRawMany = jest.fn().mockResolvedValue(rawResult);
+    return { qb, calls };
+  };
+
+  it("scopes the topSearches query to screen_name = 'ProductsScreen' (regression guard for decision B)", async () => {
+    const search = makeChainableQb([{ query: 'paracetamol', count: '5' }]);
+    const products = makeChainableQb([]);
+    const queryBuilders = [search.qb, products.qb];
+    const usageEventRepository = {
+      createQueryBuilder: jest.fn(() => queryBuilders.shift()),
+    };
+    const unused = {} as any;
+    const service = new AnalyticsService(
+      unused, unused, unused, unused, unused, unused, unused, unused,
+      usageEventRepository as any, unused,
+      unused, unused, unused, unused, unused, unused, unused, unused,
+    );
+
+    const result = await service.getMarketplaceActivityByOrg('org-1');
+
+    const scoped = search.calls.find(
+      (c) => c.method === 'andWhere' && c.args[0] === "u.screen_name = 'ProductsScreen'",
+    );
+    expect(scoped).toBeDefined();
+    expect(result.topSearches).toEqual([{ query: 'paracetamol', count: 5 }]);
+  });
+});
