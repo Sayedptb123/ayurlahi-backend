@@ -9,13 +9,20 @@ import { PatientBillPayment } from './entities/patient-bill-payment.entity';
 
 const item = { itemType: 'consultation', itemName: 'Consultation', quantity: 1, unitPrice: 1000 };
 
-const makeService = (opts: { ledgerSum?: number; bill?: any } = {}) => {
+const makeService = (
+  opts: { ledgerSum?: number; bill?: any; maxBillNumber?: number | null; saveError?: any } = {},
+) => {
   const managerSave = jest.fn((_entity: any, x: any) =>
     Promise.resolve(x.id ? x : { ...x, id: 'bill-1' }),
+  );
+  if (opts.saveError) managerSave.mockImplementationOnce(() => Promise.reject(opts.saveError));
+  const managerQuery = jest.fn((sql: string) =>
+    Promise.resolve(sql.includes('pg_advisory_xact_lock') ? [{}] : [{ max: opts.maxBillNumber ?? 0 }]),
   );
   const manager: any = {
     save: managerSave,
     create: jest.fn((_entity: any, x: any) => x),
+    query: managerQuery,
   };
   const billsRepository: any = {
     count: jest.fn(() => Promise.resolve(0)),
@@ -46,7 +53,7 @@ const makeService = (opts: { ledgerSum?: number; bill?: any } = {}) => {
     { sendToUsers: jest.fn() } as any,
     { resolveVisibleBranchIds: jest.fn() } as any,
   );
-  return { service, billsRepository, billItemsRepository, managerSave };
+  return { service, billsRepository, billItemsRepository, managerSave, managerQuery, manager };
 };
 
 const createBill = (service: PatientBillingService, dto: any) =>
@@ -201,5 +208,66 @@ describe('PatientBillingService.update — ledger owns paid amount and status (G
     const { service } = makeService({ bill: existing(), ledgerSum: 400 });
     const saved = await update(service, { notes: 'x', paidAmount: 9999 } as any);
     expect(saved.paidAmount).toBe(400);
+  });
+});
+
+describe('PatientBillingService — bill numbering survives deleted bills', () => {
+  it('takes the highest issued number + 1, not the live-bill count', async () => {
+    // CNS on staging: live 00001, 00002, 00003, 00005 (00004 deleted) → count+1 collided with 00005.
+    const { service, managerSave } = makeService({ maxBillNumber: 5 });
+    await createBill(service, {});
+    expect(managerSave.mock.calls[0][1].billNumber).toBe('BILL-00006');
+  });
+
+  it('starts at BILL-00001 for an org with no bills', async () => {
+    const { service, managerSave } = makeService({ maxBillNumber: null });
+    await createBill(service, {});
+    expect(managerSave.mock.calls[0][1].billNumber).toBe('BILL-00001');
+  });
+
+  it('counts soft-deleted bills and ignores non-standard numbers when finding the highest', async () => {
+    const { service, managerQuery } = makeService({ maxBillNumber: 4 });
+    await createBill(service, {});
+    const maxSql: string = managerQuery.mock.calls.find(([sql]) => sql.includes('MAX'))[0];
+    expect(maxSql).not.toMatch(/deleted_at/);
+    expect(maxSql).toContain("'^BILL-([0-9]+)$'");
+  });
+
+  it('takes the per-org lock before reading the highest number, inside the save transaction', async () => {
+    const { service, managerQuery, billsRepository } = makeService({ maxBillNumber: 1 });
+    await createBill(service, {});
+    expect(billsRepository.manager.transaction).toHaveBeenCalledTimes(1);
+    expect(managerQuery.mock.calls[0][0]).toContain('pg_advisory_xact_lock');
+    expect(managerQuery.mock.calls[0][1]).toEqual(['patient_bill_number:org-1']);
+    expect(managerQuery.mock.calls[1][0]).toContain('MAX');
+  });
+
+  it('keeps a supplied bill number and allocates nothing', async () => {
+    const { service, managerSave, managerQuery } = makeService();
+    await createBill(service, { billNumber: 'OP-77' });
+    expect(managerSave.mock.calls[0][1].billNumber).toBe('OP-77');
+    expect(managerQuery).not.toHaveBeenCalled();
+  });
+
+  it('turns a duplicate-number race on insert into a 409, not a 500', async () => {
+    const { service } = makeService({
+      saveError: Object.assign(new Error('duplicate'), { code: '23505', constraint: 'idx_bills_org_number' }),
+    });
+    await expect(createBill(service, { billNumber: 'OP-77' })).rejects.toThrow(
+      'Bill number OP-77 already exists',
+    );
+  });
+
+  it('uses the same allocation when admission builds a bill', async () => {
+    const { service, manager } = makeService({ maxBillNumber: 9 });
+    const bill = await service.buildBillFromBooking(manager, {
+      organisationId: 'org-1',
+      patientId: 'p-1',
+      bookingId: null,
+      admissionId: 'adm-1',
+      lineItems: [{ name: 'Room', unitPrice: 500 }],
+      advancePaid: 0,
+    });
+    expect(bill.billNumber).toBe('BILL-00010');
   });
 });

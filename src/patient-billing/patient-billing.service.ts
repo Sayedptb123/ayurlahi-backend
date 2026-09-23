@@ -57,6 +57,26 @@ export class PatientBillingService {
     return { subtotal };
   }
 
+  // Next auto bill number for an org: highest BILL-n ever issued (soft-deleted
+  // bills included, so a number is never reused) + 1. The advisory lock is held
+  // until the caller's transaction ends, so two bills created at the same moment
+  // can't both take the same number. Must run inside a transaction.
+  private async nextBillNumber(
+    manager: EntityManager,
+    organisationId: string,
+  ): Promise<string> {
+    await manager.query('SELECT pg_advisory_xact_lock(hashtext($1))', [
+      `patient_bill_number:${organisationId}`,
+    ]);
+    const [row] = await manager.query(
+      `SELECT COALESCE(MAX(substring(bill_number FROM '^BILL-([0-9]+)$')::int), 0) AS max
+         FROM patient_bills
+        WHERE organisation_id = $1`,
+      [organisationId],
+    );
+    return `BILL-${String(Number(row?.max ?? 0) + 1).padStart(5, '0')}`;
+  }
+
   // Builds a PatientBill + BillItem[] (+ first ledger payment, if an advance was
   // already paid) from booking/admission-derived line items, inside the caller's
   // own transaction (ADR-003 Phase 2). Used by RetreatService.checkIn() — kept
@@ -86,8 +106,7 @@ export class PatientBillingService {
       : subtotal > 0 ? BillStatus.PARTIAL
       : BillStatus.PENDING;
 
-    const billCount = await manager.count(PatientBill, { where: { organisationId } });
-    const billNumber = `BILL-${String(billCount + 1).padStart(5, '0')}`;
+    const billNumber = await this.nextBillNumber(manager, organisationId);
 
     const bill = manager.create(PatientBill, {
       organisationId,
@@ -161,12 +180,8 @@ export class PatientBillingService {
       throw new BadRequestException('Clinic not associated with user');
     }
 
-    // Auto-generate billNumber if not provided
-    if (!createDto.billNumber) {
-      const count = await this.billsRepository.count({ where: { organisationId: clinicId } });
-      createDto.billNumber = `BILL-${String(count + 1).padStart(5, '0')}`;
-      console.log(`[Billing] Auto-generated billNumber: ${createDto.billNumber}`);
-    } else {
+    // No billNumber → one is allocated inside the save transaction below.
+    if (createDto.billNumber) {
       // Check billNumber uniqueness within this org
       const existingBill = await this.billsRepository.findOne({
         where: { billNumber: createDto.billNumber, organisationId: clinicId },
@@ -331,6 +346,12 @@ export class PatientBillingService {
     });
 
     return this.billsRepository.manager.transaction(async (manager) => {
+      if (!bill.billNumber) {
+        if (!clinicId) {
+          throw new BadRequestException('Clinic not associated with user');
+        }
+        bill.billNumber = await this.nextBillNumber(manager, clinicId);
+      }
       const saved = await manager.save(PatientBill, bill);
       if (paidAmount > 0) {
         await manager.save(
@@ -347,6 +368,13 @@ export class PatientBillingService {
         );
       }
       return saved;
+    }).catch((err) => {
+      // A supplied billNumber can still race another request between the
+      // uniqueness check above and the insert; the unique index catches it.
+      if (err?.code === '23505' && err?.constraint === 'idx_bills_org_number') {
+        throw new ConflictException(`Bill number ${bill.billNumber} already exists`);
+      }
+      throw err;
     });
   }
 
