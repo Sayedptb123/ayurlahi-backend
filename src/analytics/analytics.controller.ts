@@ -5,6 +5,7 @@ import {
   UseGuards,
   Request,
   ForbiddenException,
+  BadRequestException,
   Post,
   Body,
 } from '@nestjs/common';
@@ -257,5 +258,34 @@ export class AnalyticsController {
 
     const daysInt = days ? parseInt(days, 10) : 30;
     return this.analyticsService.getFunnelAnalytics(daysInt);
+  }
+
+  // Tracking Phase 4/5 item 3 -- answers one concrete "of sessions that
+  // viewed X, how many subsequently did Y" question at a time, not a
+  // per-screen engagement ranking. See
+  // AnalyticsService.getScreenToActionConversion for the full design
+  // rationale (bounded time window, not a bare sessionId match).
+  @Get('screen-to-action')
+  async getScreenToActionConversion(
+    @Request() req,
+    @Query('fromScreen') fromScreen: string,
+    @Query('toEventType') toEventType: string,
+    @Query('days') days?: string,
+    @Query('withinMinutes') withinMinutes?: string,
+  ) {
+    const userRole = req.user.role?.toUpperCase();
+    const isAdmin = userRole === 'ADMIN' || userRole === 'SUPER_ADMIN' || userRole === 'SUPPORT';
+
+    if (!isAdmin) {
+      throw new ForbiddenException('You do not have permission to view screen-to-action analytics');
+    }
+
+    if (!fromScreen || !toEventType) {
+      throw new BadRequestException('fromScreen and toEventType are both required.');
+    }
+
+    const daysInt = days ? parseInt(days, 10) : 30;
+    const withinMinutesInt = withinMinutes ? parseInt(withinMinutes, 10) : 30;
+    return this.analyticsService.getScreenToActionConversion(fromScreen, toEventType, daysInt, withinMinutesInt);
   }
 }

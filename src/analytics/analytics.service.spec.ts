@@ -354,3 +354,110 @@ describe('AnalyticsService.getFunnelAnalytics — marketplaceFunnel section', ()
     expect(result.bookingStatusSnapshot).toEqual({});
   });
 });
+
+describe('AnalyticsService.getScreenToActionConversion', () => {
+  // Tracking Phase 4/5 item 3. Real-DB verification (2026-09-23) already
+  // confirmed the query against live data (Bookings -> booking_created,
+  // 90 days: viewed=64, subsequentAction=5, matching hand-verified raw
+  // SQL exactly) -- these tests guard the temporal-matching logic itself,
+  // especially the window boundaries, which are easiest to get precisely
+  // right against controlled synthetic timestamps.
+  const makeService = (viewRows: any[], actionRows: any[]) => {
+    const queues = [viewRows, actionRows];
+    const usageEventRepository = {
+      createQueryBuilder: jest.fn(() => {
+        const rows = queues.shift();
+        const qb: any = {};
+        const chain = () => () => qb;
+        qb.select = chain();
+        qb.addSelect = chain();
+        qb.where = chain();
+        qb.andWhere = chain();
+        qb.orderBy = chain();
+        qb.getRawMany = jest.fn().mockResolvedValue(rows);
+        return qb;
+      }),
+    };
+    const unused = {} as any;
+    const service = new AnalyticsService(
+      unused, unused, unused, unused, unused, unused, unused, unused,
+      usageEventRepository as any, unused,
+      unused, unused, unused, unused, unused, unused, unused, unused,
+    );
+    return { service, usageEventRepository };
+  };
+
+  const iso = (offsetMinutesFromBase: number) =>
+    new Date(new Date('2026-09-23T00:00:00.000Z').getTime() + offsetMinutesFromBase * 60000).toISOString();
+
+  it('counts a session as converted only when the action falls strictly after the view, within the window', async () => {
+    const { service } = makeService(
+      [{ sessionId: 's1', occurredAt: iso(0) }, { sessionId: 's2', occurredAt: iso(0) }],
+      [{ sessionId: 's1', occurredAt: iso(10) }], // s1: 10 min after view -- inside a 30-min window
+    );
+    const result = await service.getScreenToActionConversion('Bookings', 'booking_created', 90, 30);
+    expect(result.viewed).toBe(2);
+    expect(result.subsequentAction).toBe(1);
+    expect(result.rate).toBe(50);
+  });
+
+  it('includes an action exactly at the window boundary (<=, not <)', async () => {
+    const { service } = makeService(
+      [{ sessionId: 's1', occurredAt: iso(0) }],
+      [{ sessionId: 's1', occurredAt: iso(30) }], // exactly 30 min later, window = 30
+    );
+    const result = await service.getScreenToActionConversion('Bookings', 'booking_created', 90, 30);
+    expect(result.subsequentAction).toBe(1);
+  });
+
+  it('excludes an action just past the window boundary', async () => {
+    const { service } = makeService(
+      [{ sessionId: 's1', occurredAt: iso(0) }],
+      [{ sessionId: 's1', occurredAt: iso(30.01) }],
+    );
+    const result = await service.getScreenToActionConversion('Bookings', 'booking_created', 90, 30);
+    expect(result.subsequentAction).toBe(0);
+  });
+
+  it('excludes an action that happened before the view (not "subsequent")', async () => {
+    const { service } = makeService(
+      [{ sessionId: 's1', occurredAt: iso(10) }],
+      [{ sessionId: 's1', occurredAt: iso(5) }], // 5 min before the view
+    );
+    const result = await service.getScreenToActionConversion('Bookings', 'booking_created', 90, 30);
+    expect(result.subsequentAction).toBe(0);
+  });
+
+  it('dedupes multiple views in the same session, using the earliest as the anchor', async () => {
+    const { service } = makeService(
+      [
+        { sessionId: 's1', occurredAt: iso(0) },
+        { sessionId: 's1', occurredAt: iso(60) }, // a second, later view in the same session
+      ],
+      [{ sessionId: 's1', occurredAt: iso(20) }], // 20 min after the EARLIEST view -- should match
+    );
+    const result = await service.getScreenToActionConversion('Bookings', 'booking_created', 90, 30);
+    expect(result.viewed).toBe(1); // one session, not two view-rows
+    expect(result.subsequentAction).toBe(1);
+  });
+
+  it('returns the "no sessions viewed" caveat and never queries actions when there are no views', async () => {
+    const { service, usageEventRepository } = makeService([], []);
+    const result = await service.getScreenToActionConversion('NoSuchScreen', 'booking_created', 90, 30);
+    expect(result).toEqual({
+      fromScreen: 'NoSuchScreen', toEventType: 'booking_created', days: 90, withinMinutes: 30,
+      viewed: 0, subsequentAction: 0, rate: 0,
+      caveat: 'No sessions viewed this screen in the given window.',
+    });
+    // Only the views query should have run -- the guard short-circuits
+    // before ever building the actions query.
+    expect(usageEventRepository.createQueryBuilder).toHaveBeenCalledTimes(1);
+  });
+
+  it('includes the non-abandonment caveat whenever there is at least one viewed session', async () => {
+    const { service } = makeService([{ sessionId: 's1', occurredAt: iso(0) }], []);
+    const result = await service.getScreenToActionConversion('Bookings', 'booking_created', 90, 30);
+    expect(result.subsequentAction).toBe(0);
+    expect(result.caveat).toContain('is not proof of abandonment');
+  });
+});

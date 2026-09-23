@@ -1494,4 +1494,105 @@ export class AnalyticsService {
       bookingStatusSnapshot,
     };
   }
+
+  /**
+   * Tracking Phase 4/5 item 3 (screen engagement -> subsequent meaningful
+   * action; see scope/Tracking_Phase4_Question_Coverage_Recon.md question
+   * #17). Answers one concrete question at a time -- "of sessions that
+   * viewed <fromScreen>, how many subsequently performed <toEventType>
+   * within <withinMinutes>?" -- rather than a per-screen engagement score
+   * for every screen, which would manufacture a ranking nobody asked for.
+   *
+   * Why a bounded time window, not just "same sessionId": traced
+   * TelemetryContext.tsx's actual sessionId lifecycle -- it's generated
+   * once per app launch (a useRef, not tied to login or any visit
+   * boundary) and never resets on backgrounding, only on a genuine app
+   * restart. Confirmed against real data this is not a theoretical
+   * concern: real sessions span up to ~38 hours. A bare sessionId match
+   * with no time bound would count something that happened a day later in
+   * the same never-restarted session as "subsequent," which isn't what
+   * the question means. 30 minutes is the same session-timeout
+   * convention most web analytics tools default to -- not tuned against
+   * this app's data, an explicit, documented, overridable choice.
+   *
+   * Matching is done in application code, not a correlated SQL subquery:
+   * data volume here is small (~9k total usage_events rows at the time
+   * this was written) and per-session temporal matching in JS is more
+   * obviously correct than forcing a per-row-bounded EXISTS into
+   * TypeORM's QueryBuilder DSL, which has no clean way to express "a
+   * later event within N minutes of THIS row's own timestamp" without a
+   * correlated subquery.
+   *
+   * Deliberately does NOT claim the remainder "abandoned" -- a session
+   * with a view but no matching subsequent action may have completed the
+   * action through an untracked path, in a different session, or simply
+   * outside the window. The caveat field says this explicitly rather than
+   * letting a bare ratio imply more certainty than the data supports.
+   */
+  async getScreenToActionConversion(
+    fromScreen: string,
+    toEventType: string,
+    days: number = 30,
+    withinMinutes: number = 30,
+  ) {
+    const views = await this.usageEventRepository
+      .createQueryBuilder('v')
+      .select('v.sessionId', 'sessionId')
+      .addSelect('v.occurredAt', 'occurredAt')
+      .where("v.eventType = 'screen_view'")
+      .andWhere('v.screenName = :fromScreen', { fromScreen })
+      .andWhere(`v.occurredAt >= CURRENT_DATE - INTERVAL '${days} days'`)
+      .andWhere('v.sessionId IS NOT NULL')
+      .orderBy('v.occurredAt', 'ASC')
+      .getRawMany();
+
+    // Earliest view per session in the window -- "of sessions that viewed
+    // X" counts a session once regardless of how many times it viewed X.
+    const firstViewBySession = new Map<string, Date>();
+    for (const row of views) {
+      if (!firstViewBySession.has(row.sessionId)) {
+        firstViewBySession.set(row.sessionId, new Date(row.occurredAt));
+      }
+    }
+    const viewed = firstViewBySession.size;
+
+    if (viewed === 0) {
+      return {
+        fromScreen, toEventType, days, withinMinutes,
+        viewed: 0, subsequentAction: 0, rate: 0,
+        caveat: 'No sessions viewed this screen in the given window.',
+      };
+    }
+
+    const sessionIds = [...firstViewBySession.keys()];
+    const actions = await this.usageEventRepository
+      .createQueryBuilder('a')
+      .select('a.sessionId', 'sessionId')
+      .addSelect('a.occurredAt', 'occurredAt')
+      .where('a.eventType = :toEventType', { toEventType })
+      .andWhere('a.sessionId IN (:...sessionIds)', { sessionIds })
+      .getRawMany();
+
+    let subsequentAction = 0;
+    for (const sessionId of sessionIds) {
+      const viewedAt = firstViewBySession.get(sessionId)!;
+      const matched = actions.some((a) => {
+        if (a.sessionId !== sessionId) return false;
+        const diffMinutes = (new Date(a.occurredAt).getTime() - viewedAt.getTime()) / 60000;
+        return diffMinutes > 0 && diffMinutes <= withinMinutes;
+      });
+      if (matched) subsequentAction++;
+    }
+
+    return {
+      fromScreen,
+      toEventType,
+      days,
+      withinMinutes,
+      viewed,
+      subsequentAction,
+      rate: viewed > 0 ? (subsequentAction / viewed) * 100 : 0,
+      caveat: 'A session with no matching subsequent action is not proof of abandonment -- the action may have happened through an untracked path, in a different session, or outside this time window.',
+    };
+  }
 }
