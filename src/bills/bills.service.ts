@@ -10,6 +10,7 @@ import { CreateRecurringBillDto } from './dto/create-recurring-bill.dto';
 import { UpdateRecurringBillDto } from './dto/update-recurring-bill.dto';
 import { LogBillPaymentDto } from './dto/log-bill-payment.dto';
 import { Cron, CronExpression } from '@nestjs/schedule';
+import { DEFAULT_TIMEZONE, organisationBusinessDate } from '../common/business-date';
 
 export type RequestUser = { userId: string; organisationId: string; role?: string; organisationType?: string };
 
@@ -183,13 +184,18 @@ export class BillsService {
   }
 
   private async processDueBillsInternal(organisationId?: string) {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-
+    // "Due today" is each bill's organisation's business date (G9), computed in
+    // SQL because one run can cover many organisations. Previously this was the
+    // server's local midnight formatted as a UTC date, i.e. yesterday in IST.
     const queryBuilder = this.billRepo.createQueryBuilder('b')
       .where('b.is_active = :isActive', { isActive: true })
       .andWhere('b.deleted_at IS NULL')
-      .andWhere('b.next_due_date <= :today', { today: today.toISOString().split('T')[0] });
+      .andWhere(
+        `b.next_due_date <= (now() AT TIME ZONE COALESCE(
+          (SELECT os.timezone FROM organisation_settings os WHERE os.organisation_id = b.organisation_id),
+          :defaultTimezone))::date`,
+        { defaultTimezone: DEFAULT_TIMEZONE },
+      );
 
     if (organisationId) {
       queryBuilder.andWhere('b.organisation_id = :organisationId', { organisationId });
@@ -236,7 +242,10 @@ export class BillsService {
               billAmount: expenseAmount,
               dueDate: new Date(bill.nextDueDate),
               paidAmount: expenseAmount,
-              paidDate: new Date(),
+              paidDate: (await organisationBusinessDate(
+                this.billRepo.manager,
+                bill.organisationId,
+              )) as unknown as Date,
               isLate: false,
               lateFee: 0,
               expenseId: savedExpense.id,

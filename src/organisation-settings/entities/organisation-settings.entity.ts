@@ -75,6 +75,11 @@ export class OrganisationSettings {
   @Column({ type: 'varchar', length: 20, default: AppointmentPolicy.AUTO, name: 'appointment_policy' })
   appointmentPolicy: AppointmentPolicy;
 
+  // IANA timezone that defines the organisation's business day ("today" for
+  // bills, payments and, later, vouchers and day close). See common/business-date.ts.
+  @Column({ type: 'varchar', length: 64, default: 'Asia/Kolkata', name: 'timezone' })
+  timezone: string;
+
   @OneToOne(() => Organisation)
   @JoinColumn({ name: 'organisation_id' })
   organisation: Organisation;

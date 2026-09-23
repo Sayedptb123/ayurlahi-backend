@@ -28,6 +28,7 @@ import { ResetPasswordDto } from './dto/reset-password.dto';
 import { NotificationsService } from '../notifications/notifications.service';
 import { SmsService } from '../sms/sms.service';
 import { OrganisationSettingsService } from '../organisation-settings/organisation-settings.service';
+import { DEFAULT_TIMEZONE } from '../common/business-date';
 import { EmailService } from '../email/email.service';
 import { IsNull } from 'typeorm';
 import { normalizePhone } from '../common/utils/phone.util';
@@ -106,6 +107,13 @@ export class AuthService {
       hasOpd: cap.hasOpd,
       enabledModules: cap.enabledModules ?? [],
     };
+  }
+
+  // The organisation's business-day timezone (G9), sent to the app so its
+  // "today" matches the backend's. See common/business-date.ts.
+  private async fetchTimezone(orgId: string): Promise<string> {
+    const settings = await this.organisationSettingsService.findByOrganisationId(orgId);
+    return settings?.timezone || DEFAULT_TIMEZONE;
   }
 
   private async fetchStaffPosition(userId: string, orgId: string): Promise<string | null> {
@@ -309,6 +317,7 @@ export class AuthService {
             isActive: currentOrg.organisation.isActive,
             permissions: currentOrg.permissions ?? null,
             capabilities: loginCapabilities,
+            timezone: await this.fetchTimezone(currentOrg.organisation.id),
             staffPosition: loginStaffPosition,
           }
           : null,
@@ -566,6 +575,7 @@ export class AuthService {
         capabilities: savedOrg.type === 'CLINIC'
           ? { hasPostnatalCare: true, hasAyurveda: true, hasIpd: true, hasOpd: true }
           : null,
+        timezone: DEFAULT_TIMEZONE,
       },
     };
   }
@@ -623,6 +633,7 @@ export class AuthService {
           isActive: currentOrgUser.organisation.isActive,
           permissions: currentOrgUser.permissions ?? null,
           capabilities: meCapabilities,
+          timezone: await this.fetchTimezone(currentOrgUser.organisation.id),
           staffPosition: meStaffPosition,
         }
         : null,
@@ -720,6 +731,7 @@ export class AuthService {
             isActive: currentOrg.organisation.isActive,
             permissions: currentOrg.permissions ?? null,
             capabilities: refreshCapabilities,
+            timezone: await this.fetchTimezone(currentOrg.organisation.id),
             staffPosition: refreshStaffPosition,
           }
           : null,
@@ -1023,6 +1035,7 @@ export class AuthService {
             isActive: currentOrg.organisation.isActive,
             permissions: currentOrg.permissions,
             capabilities,
+            timezone: await this.fetchTimezone(currentOrg.organisation.id),
             staffPosition: otpStaffPosition,
           }
         : null,

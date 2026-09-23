@@ -17,7 +17,13 @@ const makeService = (
   );
   if (opts.saveError) managerSave.mockImplementationOnce(() => Promise.reject(opts.saveError));
   const managerQuery = jest.fn((sql: string) =>
-    Promise.resolve(sql.includes('pg_advisory_xact_lock') ? [{}] : [{ max: opts.maxBillNumber ?? 0 }]),
+    Promise.resolve(
+      sql.includes('pg_advisory_xact_lock')
+        ? [{}]
+        : sql.includes('timezone')
+          ? [{ timezone: 'Asia/Kolkata' }]
+          : [{ max: opts.maxBillNumber ?? 0 }],
+    ),
   );
   const manager: any = {
     save: managerSave,
@@ -43,7 +49,7 @@ const makeService = (
       getRawOne: jest.fn(() => Promise.resolve({ sum: String(opts.ledgerSum ?? 0) })),
     })),
   };
-  const none: any = { findOne: jest.fn(() => Promise.resolve(null)) };
+  const none: any = { findOne: jest.fn(() => Promise.resolve(null)), find: jest.fn(() => Promise.resolve([])) };
 
   const service = new PatientBillingService(
     billsRepository,
@@ -269,5 +275,68 @@ describe('PatientBillingService — bill numbering survives deleted bills', () =
       advancePaid: 0,
     });
     expect(bill.billNumber).toBe('BILL-00010');
+  });
+});
+
+describe('PatientBillingService — "today" is the organisation business date (G9)', () => {
+  afterEach(() => jest.useRealTimers());
+
+  // 01:28 IST on 24 Sep = 19:58Z on 23 Sep: the UTC date is still the 23rd.
+  const lateNight = new Date('2026-09-23T19:58:00Z');
+
+  it('admission bill and its advance are dated the IST day, not the UTC day', async () => {
+    jest.useFakeTimers({ now: lateNight, doNotFake: ['nextTick', 'setImmediate'] });
+    const { service, manager, managerSave } = makeService({ maxBillNumber: 1 });
+    const bill = await service.buildBillFromBooking(manager, {
+      organisationId: 'org-1',
+      patientId: 'p-1',
+      bookingId: 'b-1',
+      admissionId: 'adm-1',
+      lineItems: [{ name: 'Room', unitPrice: 500 }],
+      advancePaid: 200,
+    });
+    expect(bill.billDate as unknown as string).toBe('2026-09-24');
+    expect(paymentSaves(managerSave)[0].paidAt).toBe('2026-09-24');
+  });
+
+  it('recordPayment defaults paidAt to the IST day, and keeps a supplied date', async () => {
+    jest.useFakeTimers({ now: lateNight, doNotFake: ['nextTick', 'setImmediate'] });
+    const payRepoSave = jest.fn((x: any) => Promise.resolve(x));
+    const bill = { id: 'bill-1', organisationId: 'org-1', total: 1000, status: BillStatus.PENDING };
+    const { service, manager } = makeService();
+    manager.getRepository = jest.fn((entity: any) =>
+      entity === PatientBillPayment
+        ? {
+            create: (x: any) => x,
+            save: payRepoSave,
+            createQueryBuilder: () => ({
+              select: jest.fn().mockReturnThis(),
+              where: jest.fn().mockReturnThis(),
+              andWhere: jest.fn().mockReturnThis(),
+              getRawOne: () => Promise.resolve({ sum: '0' }),
+            }),
+          }
+        : {
+            createQueryBuilder: () => ({
+              setLock: jest.fn().mockReturnThis(),
+              where: jest.fn().mockReturnThis(),
+              getOne: () => Promise.resolve(bill),
+            }),
+            findOne: () => Promise.resolve({ ...bill }),
+            save: (x: any) => Promise.resolve(x),
+          },
+    );
+    jest.spyOn(service, 'findOne').mockResolvedValue(bill as any);
+
+    await service.recordPayment('bill-1', 'u-1', 'RECEPTIONIST', 'org-1', 'CLINIC', {
+      amount: 100,
+      paymentMethod: PaymentMethod.CASH,
+    });
+    await service.recordPayment('bill-1', 'u-1', 'RECEPTIONIST', 'org-1', 'CLINIC', {
+      amount: 100,
+      paymentMethod: PaymentMethod.CASH,
+      paidAt: '2026-09-20',
+    });
+    expect(payRepoSave.mock.calls.map(([x]) => x.paidAt)).toEqual(['2026-09-24', '2026-09-20']);
   });
 });

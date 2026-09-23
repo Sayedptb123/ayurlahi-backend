@@ -22,6 +22,7 @@ import { PaymentDto } from './dto/payment.dto';
 import { GetBillsDto } from './dto/get-bills.dto';
 import { NotificationsService } from '../notifications/notifications.service';
 import { BranchVisibilityService } from '../branch-visibility/branch-visibility.service';
+import { organisationBusinessDate } from '../common/business-date';
 
 @Injectable()
 export class PatientBillingService {
@@ -107,6 +108,7 @@ export class PatientBillingService {
       : BillStatus.PENDING;
 
     const billNumber = await this.nextBillNumber(manager, organisationId);
+    const today = await organisationBusinessDate(manager, organisationId);
 
     const bill = manager.create(PatientBill, {
       organisationId,
@@ -114,7 +116,7 @@ export class PatientBillingService {
       bookingId,
       admissionId,
       billNumber,
-      billDate: new Date().toISOString().slice(0, 10) as unknown as Date,
+      billDate: today as unknown as Date,
       subtotal,
       discount: 0,
       tax: 0,
@@ -147,7 +149,7 @@ export class PatientBillingService {
         organisationId,
         billId: savedBill.id,
         amount: advancePaid,
-        paidAt: new Date().toISOString().slice(0, 10),
+        paidAt: today,
         paymentMethod: PaymentMethod.CASH,
         notes: 'Advance paid at booking',
         createdBy: createdBy ?? null,
@@ -777,7 +779,9 @@ export class PatientBillingService {
           organisationId: bill.organisationId,
           billId: bill.id,
           amount: paymentDto.amount,
-          paidAt: (paymentDto.paidAt ?? new Date().toISOString()).slice(0, 10),
+          paidAt: paymentDto.paidAt
+            ? paymentDto.paidAt.slice(0, 10)
+            : await organisationBusinessDate(manager, bill.organisationId),
           paymentMethod: paymentDto.paymentMethod,
           referenceNo: paymentDto.referenceNo ?? null,
           notes: paymentDto.notes ?? null,
