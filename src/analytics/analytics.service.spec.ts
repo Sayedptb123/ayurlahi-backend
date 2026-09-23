@@ -461,3 +461,92 @@ describe('AnalyticsService.getScreenToActionConversion', () => {
     expect(result.caveat).toContain('is not proof of abandonment');
   });
 });
+
+describe('AnalyticsService.getFeatureUsageByOrg / getFeatureUsageByUser — meaningfulEvents', () => {
+  // Tracking Phase 4/5 item 4. Real-DB verification (2026-09-23) already
+  // confirmed the FILTER-clause query against live data (one real org:
+  // totalEvents=2908, meaningfulEvents=1139) -- these tests guard the
+  // query construction (the exact event types excluded) and that
+  // totalEvents/topFeatures are unchanged, not the SQL semantics, which
+  // only a real database can prove.
+  const makeChainableQb = (rawManyResult: any[]) => {
+    const calls: { method: string; args: any[] }[] = [];
+    const qb: any = {};
+    const chain = (method: string) => (...args: any[]) => {
+      calls.push({ method, args });
+      return qb;
+    };
+    qb.select = chain('select');
+    qb.addSelect = chain('addSelect');
+    qb.where = chain('where');
+    qb.andWhere = chain('andWhere');
+    qb.groupBy = chain('groupBy');
+    qb.addGroupBy = chain('addGroupBy');
+    qb.orderBy = chain('orderBy');
+    qb.limit = chain('limit');
+    qb.getRawMany = jest.fn().mockResolvedValue(rawManyResult);
+    return { qb, calls };
+  };
+
+  it('getFeatureUsageByOrg: excludes only app_open/app_foreground/app_background from meaningfulEvents, leaves totalEvents/topFeatures unchanged', async () => {
+    const orgTotalsQb = makeChainableQb([{ orgId: 'org-1', totalEvents: '2908', meaningfulEvents: '1139' }]);
+    const featuresQb = makeChainableQb([{ orgId: 'org-1', screenName: 'Dashboard', count: '384' }]);
+    const orgsQb = makeChainableQb([{ id: 'org-1', name: 'PMS Ayurvedic Group' }]);
+    const usageEventQueryBuilders = [orgTotalsQb.qb, featuresQb.qb];
+    const usageEventRepository = { createQueryBuilder: jest.fn(() => usageEventQueryBuilders.shift()) };
+    const organisationsRepository = { createQueryBuilder: jest.fn(() => orgsQb.qb) };
+    const unused = {} as any;
+    const service = new AnalyticsService(
+      unused, unused, organisationsRepository as any, unused, unused, unused, unused, unused,
+      usageEventRepository as any, unused,
+      unused, unused, unused, unused, unused, unused, unused, unused, unused,
+    );
+
+    const result = await service.getFeatureUsageByOrg();
+
+    const addSelectCalls = orgTotalsQb.calls.filter((c) => c.method === 'addSelect').map((c) => c.args[0]);
+    const meaningfulSql = addSelectCalls.find((s: string) => s.includes('FILTER'));
+    expect(meaningfulSql).toContain("event_type NOT IN ('app_open', 'app_foreground', 'app_background')");
+    // Only the 3 lifecycle codes are excluded -- screen_view and every
+    // business event stay in meaningfulEvents.
+    expect(meaningfulSql).not.toContain('screen_view');
+    expect(meaningfulSql).not.toContain('search');
+
+    expect(result[0]).toEqual({
+      organisationId: 'org-1',
+      organisationName: 'PMS Ayurvedic Group',
+      totalEvents: 2908,
+      meaningfulEvents: 1139,
+      topFeatures: [{ screenName: 'Dashboard', count: 384 }],
+    });
+  });
+
+  it('getFeatureUsageByUser: same exclusion, response includes meaningfulEvents alongside the existing fields', async () => {
+    const userTotalsQb = makeChainableQb([{ userId: 'u-1', totalEvents: '3300', meaningfulEvents: '964' }]);
+    const featuresQb = makeChainableQb([{ userId: 'u-1', screenName: 'Dashboard', count: '273' }]);
+    const usersQb = makeChainableQb([{ id: 'u-1', firstName: 'Pms', lastName: 'Muthukoya Thangal' }]);
+    const roleQb = makeChainableQb([{ userId: 'u-1', role: 'OWNER', organisationId: 'org-1' }]);
+    const usageEventQueryBuilders = [userTotalsQb.qb, featuresQb.qb];
+    const usageEventRepository = { createQueryBuilder: jest.fn(() => usageEventQueryBuilders.shift()) };
+    const usersRepository = { createQueryBuilder: jest.fn(() => usersQb.qb) };
+    const organisationUsersRepository = { createQueryBuilder: jest.fn(() => roleQb.qb) };
+    const unused = {} as any;
+    const service = new AnalyticsService(
+      unused, usersRepository as any, unused, unused, unused, unused, unused, unused,
+      usageEventRepository as any, unused,
+      unused, unused, unused, unused, unused, unused, unused, unused,
+      organisationUsersRepository as any,
+    );
+
+    const result = await service.getFeatureUsageByUser();
+
+    expect(result[0]).toEqual({
+      userId: 'u-1',
+      userName: 'Pms Muthukoya Thangal',
+      role: 'OWNER',
+      totalEvents: 3300,
+      meaningfulEvents: 964,
+      topFeatures: [{ screenName: 'Dashboard', count: 273 }],
+    });
+  });
+});

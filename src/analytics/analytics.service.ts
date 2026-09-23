@@ -1015,10 +1015,35 @@ export class AnalyticsService {
    * by organisation, with each org's top screens nested underneath).
    */
   async getFeatureUsageByOrg(startDate?: string, endDate?: string, limit: number = 15) {
+    // Tracking Phase 4/5 item 4 -- meaningfulEvents added alongside
+    // totalEvents, not replacing it. Real data confirmed the exact
+    // concern this item was checking for: app_open/app_foreground/
+    // app_background are 68.7% of all usage_events (verified via a real
+    // GROUP BY), never carry a screenName, and are therefore already
+    // excluded from topFeatures below -- but nothing excluded them from
+    // totalEvents, the field this method's ranking/ORDER BY is actually
+    // built on. That's a real inconsistency between what selects the top
+    // N orgs and what's shown about them, not a hypothetical one: two
+    // real orgs in this data have meaningful-event ratios of 39% and 12%
+    // of their totalEvents respectively -- a materially different
+    // "actually active" story totalEvents alone can't tell.
+    //
+    // Deliberately NOT changing what totalEvents means or what the
+    // ranking/ORDER BY/LIMIT here is based on -- this already feeds a
+    // live screen (TelemetryDashboardScreen's "Most Active Clinics"), and
+    // silently changing which orgs rank in the top N as a side effect of
+    // a "reporting improvement" would be a real behavior change, not a
+    // read-side addition. meaningfulEvents is additive so a consumer can
+    // choose to re-sort or display both, without this commit deciding
+    // that for them.
     const orgTotalsQb = this.usageEventRepository
       .createQueryBuilder('u')
       .select('u.organisation_id', 'orgId')
       .addSelect('COUNT(*)', 'totalEvents')
+      .addSelect(
+        "COUNT(*) FILTER (WHERE u.event_type NOT IN ('app_open', 'app_foreground', 'app_background'))",
+        'meaningfulEvents',
+      )
       .where('u.organisation_id IS NOT NULL');
     if (startDate) orgTotalsQb.andWhere('u.occurredAt >= :startDate', { startDate });
     if (endDate) orgTotalsQb.andWhere('u.occurredAt <= :endDate', { endDate });
@@ -1064,6 +1089,7 @@ export class AnalyticsService {
       organisationId: r.orgId,
       organisationName: nameById.get(r.orgId) ?? 'Unknown',
       totalEvents: parseInt(r.totalEvents, 10) || 0,
+      meaningfulEvents: parseInt(r.meaningfulEvents, 10) || 0,
       topFeatures: featuresByOrg.get(r.orgId) ?? [],
     }));
   }
@@ -1079,10 +1105,17 @@ export class AnalyticsService {
     endDate?: string,
     limit: number = 20,
   ) {
+    // Tracking Phase 4/5 item 4 -- see getFeatureUsageByOrg's comment for
+    // the full rationale (same finding, same fix, same "additive, doesn't
+    // change the existing ranking" constraint).
     const userTotalsQb = this.usageEventRepository
       .createQueryBuilder('u')
       .select('u.user_id', 'userId')
       .addSelect('COUNT(*)', 'totalEvents')
+      .addSelect(
+        "COUNT(*) FILTER (WHERE u.event_type NOT IN ('app_open', 'app_foreground', 'app_background'))",
+        'meaningfulEvents',
+      )
       .where('u.user_id IS NOT NULL');
     if (organisationId) userTotalsQb.andWhere('u.organisation_id = :organisationId', { organisationId });
     if (startDate) userTotalsQb.andWhere('u.occurredAt >= :startDate', { startDate });
@@ -1142,6 +1175,7 @@ export class AnalyticsService {
       userName: userById.get(r.userId) ?? 'Unknown',
       role: roleByUser.get(r.userId) ?? null,
       totalEvents: parseInt(r.totalEvents, 10) || 0,
+      meaningfulEvents: parseInt(r.meaningfulEvents, 10) || 0,
       topFeatures: featuresByUser.get(r.userId) ?? [],
     }));
   }
