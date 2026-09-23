@@ -274,6 +274,29 @@ export class PatientBillingService {
     const total = subtotal - discount + tax;
     const paidAmount = createDto.paidAmount || 0;
 
+    // Money taken while creating a bill is a real payment, so it goes into the
+    // ledger like recordPayment() does — never onto paid_amount alone.
+    // reconcileBill() recomputes paid_amount from the ledger, so a cache-only
+    // amount would silently vanish on the bill's next payment (ADR-003 D3;
+    // scope/Cash_Management_MVP_Implementation_Plan_2026-09-24.md §2 G1).
+    if (paidAmount > 0) {
+      if (paidAmount > total + 0.001) {
+        throw new BadRequestException(
+          'Payment amount exceeds bill total. Overpayment not allowed.',
+        );
+      }
+      if (!createDto.paymentMethod) {
+        throw new BadRequestException(
+          'paymentMethod is required when paidAmount is set',
+        );
+      }
+      if (createDto.status === BillStatus.CANCELLED) {
+        throw new BadRequestException(
+          'Cannot record payment for cancelled bill',
+        );
+      }
+    }
+
     let status = createDto.status || BillStatus.DRAFT;
     if (paidAmount > 0 && paidAmount < total) {
       status = BillStatus.PARTIAL;
@@ -307,7 +330,24 @@ export class PatientBillingService {
       items: billItems,
     });
 
-    return this.billsRepository.save(bill);
+    return this.billsRepository.manager.transaction(async (manager) => {
+      const saved = await manager.save(PatientBill, bill);
+      if (paidAmount > 0) {
+        await manager.save(
+          PatientBillPayment,
+          manager.create(PatientBillPayment, {
+            organisationId: saved.organisationId,
+            billId: saved.id,
+            amount: paidAmount,
+            paidAt: createDto.billDate.slice(0, 10),
+            paymentMethod: createDto.paymentMethod,
+            notes: 'Paid at billing',
+            createdBy: userId ?? null,
+          }),
+        );
+      }
+      return saved;
+    });
   }
 
   async findAll(
@@ -557,27 +597,67 @@ export class PatientBillingService {
       }
     }
 
-    if (updateDto.items !== undefined) {
-      await this.billItemsRepository.delete({ billId: bill.id });
-      bill.items = updateDto.items.map((item) =>
-        this.billItemsRepository.create({
-          billId: bill.id,
-          itemType: item.itemType,
-          itemName: item.itemName,
-          quantity: item.quantity || 1,
-          unitPrice: item.unitPrice,
-          discount: item.discount || 0,
-          description: item.description || null,
-          total: item.unitPrice * (item.quantity || 1) - (item.discount || 0),
-        }),
+    // Paid amount and the payment-derived statuses (partial/paid) come only from
+    // the payment ledger (ADR-003 D3), never from an edit. Checked before the
+    // items are replaced below so a rejected update leaves the bill untouched
+    // (scope/Cash_Management_MVP_Implementation_Plan_2026-09-24.md §2 G2).
+    if (
+      updateDto.status === BillStatus.PAID ||
+      updateDto.status === BillStatus.PARTIAL
+    ) {
+      throw new BadRequestException(
+        'Paid and partial status follow recorded payments — record a payment instead',
+      );
+    }
+    const paid = await this.sumPayments(this.billPaymentsRepository, bill.id);
+    if (
+      updateDto.status !== undefined &&
+      updateDto.status !== BillStatus.CANCELLED &&
+      paid > 0
+    ) {
+      throw new BadRequestException(
+        'This bill has recorded payments, so its status follows them',
       );
     }
 
-    if (
+    const newItems =
+      updateDto.items !== undefined
+        ? updateDto.items.map((item) =>
+            this.billItemsRepository.create({
+              billId: bill.id,
+              itemType: item.itemType,
+              itemName: item.itemName,
+              quantity: item.quantity || 1,
+              unitPrice: item.unitPrice,
+              discount: item.discount || 0,
+              description: item.description || null,
+              total: item.unitPrice * (item.quantity || 1) - (item.discount || 0),
+            }),
+          )
+        : undefined;
+    const totalsChanged =
       updateDto.items !== undefined ||
       updateDto.discount !== undefined ||
-      updateDto.tax !== undefined
-    ) {
+      updateDto.tax !== undefined;
+    if (totalsChanged && paid > 0) {
+      const { subtotal } = this.calculateBillTotals(newItems ?? bill.items);
+      const newTotal =
+        subtotal -
+        Number(updateDto.discount ?? bill.discount) +
+        Number(updateDto.tax ?? bill.tax);
+      if (paid > newTotal + 0.001) {
+        throw new BadRequestException(
+          'Bill total cannot be less than the amount already paid',
+        );
+      }
+    }
+
+    if (updateDto.items !== undefined) {
+      await this.billItemsRepository.delete({ billId: bill.id });
+      bill.items = newItems!;
+    }
+
+    if (totalsChanged) {
       const { subtotal } = this.calculateBillTotals(bill.items);
       bill.subtotal = subtotal;
       bill.discount = updateDto.discount ?? bill.discount;
@@ -598,23 +678,18 @@ export class PatientBillingService {
       bill.billDate = new Date(updateDto.billDate);
     if (updateDto.dueDate !== undefined)
       bill.dueDate = updateDto.dueDate ? new Date(updateDto.dueDate) : null;
-    if (updateDto.paidAmount !== undefined) {
-      bill.paidAmount = updateDto.paidAmount;
-    }
     if (updateDto.status !== undefined) bill.status = updateDto.status;
     if (updateDto.paymentMethod !== undefined)
       bill.paymentMethod = updateDto.paymentMethod;
     if (updateDto.notes !== undefined) bill.notes = updateDto.notes;
 
-    // Recalculate status based on payment
-    if (updateDto.paidAmount !== undefined) {
-      if (Number(bill.paidAmount) >= Number(bill.total)) {
-        bill.status = BillStatus.PAID;
-      } else if (Number(bill.paidAmount) > 0) {
-        bill.status = BillStatus.PARTIAL;
-      } else {
-        bill.status = BillStatus.PENDING;
-      }
+    // A changed total moves a paid bill between partial and paid; the ledger
+    // decides which (same rule as reconcileBill()).
+    if (totalsChanged && paid > 0 && bill.status !== BillStatus.CANCELLED) {
+      const newTotal =
+        Number(bill.subtotal) - Number(bill.discount) + Number(bill.tax);
+      bill.status =
+        newTotal - paid <= 0.001 ? BillStatus.PAID : BillStatus.PARTIAL;
     }
 
     bill.updatedBy = userId;

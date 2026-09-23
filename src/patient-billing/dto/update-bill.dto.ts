@@ -71,10 +71,9 @@ export class UpdateBillDto {
   @IsEnum(PaymentMethod)
   paymentMethod?: PaymentMethod;
 
-  @IsOptional()
-  @IsNumber()
-  @Min(0)
-  paidAmount?: number;
+  // No paidAmount: payments go through POST /patient-billing/:id/payment so the
+  // ledger stays the source of truth (ADR-003 D3). forbidNonWhitelisted
+  // rejects it with a 400.
 
   @IsOptional()
   @IsString()
