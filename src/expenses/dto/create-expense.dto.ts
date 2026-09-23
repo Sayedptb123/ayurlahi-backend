@@ -30,7 +30,7 @@ export class CreateExpenseDto {
     @IsString()
     receiptUrl?: string;
 
-    @IsOptional()
-    @IsString()
-    status?: string;
+    // No `status` here on purpose: a new expense is always 'pending'. Accepting
+    // it let any clinic member create an already-verified expense, skipping
+    // approval. Status changes only via PATCH (UpdateExpenseDto), manager-only.
 }

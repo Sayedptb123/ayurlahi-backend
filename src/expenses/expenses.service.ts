@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
+import { Injectable, NotFoundException, ForbiddenException, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In, IsNull } from 'typeorm';
 import { Expense } from './entities/expense.entity';
@@ -17,6 +17,13 @@ export interface GetExpensesQuery {
     startDate?: string;
     endDate?: string;
 }
+
+// flagged → verified is the Expenses screen's "Mark as Verified" action.
+const ALLOWED_TRANSITIONS: Record<string, string[]> = {
+    pending: ['verified', 'flagged'],
+    flagged: ['verified'],
+    verified: [],
+};
 
 @Injectable()
 export class ExpensesService {
@@ -41,7 +48,7 @@ export class ExpensesService {
             description: createExpenseDto.description,
             expenseDate: new Date(createExpenseDto.date),
             receiptUrl: createExpenseDto.receiptUrl ?? null,
-            status: createExpenseDto.status ?? 'pending',
+            status: 'pending',
             incurredBy: reqUser.userId,
             createdBy: reqUser.userId,
         });
@@ -120,6 +127,27 @@ export class ExpensesService {
         if (!expense) throw new NotFoundException(`Expense with ID ${id} not found`);
 
         const previousStatus = expense.status;
+        const nextStatus = updateExpenseDto.status ?? previousStatus;
+        const statusChanging = nextStatus !== previousStatus;
+        const editsFields = (['amount', 'category', 'description', 'date', 'receiptUrl'] as const)
+            .some((f) => updateExpenseDto[f] !== undefined);
+
+        // Content is editable only while pending. Once verified or flagged the
+        // record is evidence of a decision; a correction is a new expense, not
+        // an edit. Verified is terminal.
+        if (editsFields && previousStatus !== 'pending') {
+            throw new BadRequestException(`A ${previousStatus} expense is locked and cannot be edited`);
+        }
+        if (statusChanging && !ALLOWED_TRANSITIONS[previousStatus]?.includes(nextStatus)) {
+            throw new BadRequestException(`Cannot change expense status from ${previousStatus} to ${nextStatus}`);
+        }
+
+        // Segregation of duties: nobody verifies an expense they submitted.
+        // Wording matters: the mobile client force-logs-out on a 403 whose
+        // message matches /deactivat|account|revoked/ (lib/api/client.ts).
+        if (statusChanging && nextStatus === 'verified' && (expense.incurredBy ?? expense.createdBy) === reqUser.userId) {
+            throw new ForbiddenException('You cannot verify an expense you submitted yourself');
+        }
 
         if (updateExpenseDto.amount !== undefined) expense.amount = updateExpenseDto.amount;
         if (updateExpenseDto.category !== undefined) expense.category = updateExpenseDto.category;
@@ -179,6 +207,11 @@ export class ExpensesService {
             where: { id, organisationId: reqUser.organisationId, deletedAt: IsNull() },
         });
         if (!expense) throw new NotFoundException(`Expense with ID ${id} not found`);
+        // Only a pending (undecided) expense can be withdrawn. Verified and
+        // flagged ones stay on record so reports and the audit trail hold.
+        if (expense.status !== 'pending') {
+            throw new BadRequestException(`A ${expense.status} expense cannot be deleted`);
+        }
         expense.deletedAt = new Date();
         await this.expenseRepository.save(expense);
         return { message: 'Expense deleted successfully' };
