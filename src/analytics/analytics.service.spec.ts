@@ -255,8 +255,11 @@ describe('AnalyticsService.getFunnelAnalytics — marketplaceFunnel section', ()
     const marketplaceQb = makeChainableQb({
       searched: '5', addedToCart: '18', checkoutStarted: '21', checkoutCompleted: '12',
     });
+    const bookingFunnelQb = makeChainableQb({
+      created: '15', confirmed: '11', promotedToPatient: '0', checkedIn: '0', cancelled: '2',
+    });
     const timeToValueQb = makeChainableQb({ avgDays: '3.5' });
-    const usageEventQueryBuilders = [searchIntentQb.qb, marketplaceQb.qb];
+    const usageEventQueryBuilders = [searchIntentQb.qb, marketplaceQb.qb, bookingFunnelQb.qb];
     const usageEventRepository = {
       createQueryBuilder: jest.fn(() => usageEventQueryBuilders.shift()),
       count: jest.fn().mockResolvedValue(0),
@@ -264,11 +267,19 @@ describe('AnalyticsService.getFunnelAnalytics — marketplaceFunnel section', ()
     const ordersRepository = {
       createQueryBuilder: jest.fn(() => timeToValueQb.qb),
     };
+    const statusSnapshotQb = makeChainableQb(null);
+    statusSnapshotQb.qb.getRawMany = jest.fn().mockResolvedValue([
+      { status: 'HELD', count: '8' },
+      { status: 'FULFILLED', count: '2' },
+      { status: 'CONFIRMED', count: '12' },
+    ]);
+    const roomBookingsRepository = { createQueryBuilder: jest.fn(() => statusSnapshotQb.qb) };
     const unused = {} as any;
     const service = new AnalyticsService(
       ordersRepository as any, unused, unused, unused, unused, unused, unused, unused,
       usageEventRepository as any, unused,
-      unused, unused, unused, unused, unused, unused, unused, unused,
+      unused, unused, unused, unused, unused, unused, unused,
+      roomBookingsRepository as any, unused,
     );
 
     const result = await service.getFunnelAnalytics(30);
@@ -289,23 +300,47 @@ describe('AnalyticsService.getFunnelAnalytics — marketplaceFunnel section', ()
       checkoutStarted: 21,
       checkoutCompleted: 12,
     });
+
+    // Guards bookingFunnel's query -- "created" is a raw COUNT, not
+    // COUNT(DISTINCT ... bookingId) like the other stages, since
+    // booking_created's trackEvent() fires before the mutation succeeds
+    // and has no bookingId to attach (confirmed by tracing the real code).
+    const bookingSelectCall = bookingFunnelQb.calls.find((c) => c.method === 'select');
+    expect(bookingSelectCall!.args[0]).toContain("event_type = 'booking_created'");
+    expect(bookingSelectCall!.args[0]).not.toContain('bookingId');
+    const bookingAddSelectCalls = bookingFunnelQb.calls.filter((c) => c.method === 'addSelect').map((c) => c.args[0]);
+    expect(bookingAddSelectCalls.some((s: string) => s.includes("booking_confirmed") && s.includes("DISTINCT"))).toBe(true);
+
+    expect(result.bookingFunnel).toEqual({
+      created: 15, confirmed: 11, promotedToPatient: 0, checkedIn: 0, cancelled: 2,
+    });
+
+    // Guards bookingStatusSnapshot -- straight from room_bookings.status,
+    // not usage_events at all.
+    expect(roomBookingsRepository.createQueryBuilder).toHaveBeenCalled();
+    expect(result.bookingStatusSnapshot).toEqual({ HELD: 8, FULFILLED: 2, CONFIRMED: 12 });
   });
 
-  it('defaults to all zeros when the query returns no rows (e.g. empty window)', async () => {
+  it('defaults to all zeros / empty when the queries return no rows (e.g. empty window)', async () => {
     const searchIntentQb = makeChainableQb(null);
     const marketplaceQb = makeChainableQb(undefined);
+    const bookingFunnelQb = makeChainableQb(undefined);
     const timeToValueQb = makeChainableQb(null);
-    const usageEventQueryBuilders = [searchIntentQb.qb, marketplaceQb.qb];
+    const usageEventQueryBuilders = [searchIntentQb.qb, marketplaceQb.qb, bookingFunnelQb.qb];
     const usageEventRepository = {
       createQueryBuilder: jest.fn(() => usageEventQueryBuilders.shift()),
       count: jest.fn().mockResolvedValue(0),
     };
     const ordersRepository = { createQueryBuilder: jest.fn(() => timeToValueQb.qb) };
+    const statusSnapshotQb = makeChainableQb(null);
+    statusSnapshotQb.qb.getRawMany = jest.fn().mockResolvedValue([]);
+    const roomBookingsRepository = { createQueryBuilder: jest.fn(() => statusSnapshotQb.qb) };
     const unused = {} as any;
     const service = new AnalyticsService(
       ordersRepository as any, unused, unused, unused, unused, unused, unused, unused,
       usageEventRepository as any, unused,
-      unused, unused, unused, unused, unused, unused, unused, unused,
+      unused, unused, unused, unused, unused, unused, unused,
+      roomBookingsRepository as any, unused,
     );
 
     const result = await service.getFunnelAnalytics(30);
@@ -313,5 +348,9 @@ describe('AnalyticsService.getFunnelAnalytics — marketplaceFunnel section', ()
     expect(result.marketplaceFunnel).toEqual({
       searched: 0, addedToCart: 0, checkoutStarted: 0, checkoutCompleted: 0,
     });
+    expect(result.bookingFunnel).toEqual({
+      created: 0, confirmed: 0, promotedToPatient: 0, checkedIn: 0, cancelled: 0,
+    });
+    expect(result.bookingStatusSnapshot).toEqual({});
   });
 });

@@ -20,6 +20,7 @@ import { StockMovement } from '../inventory/entities/stock-movement.entity';
 import { Supplier } from '../suppliers/entities/supplier.entity';
 import { Admission } from '../retreat/entities/admission.entity';
 import { Room } from '../retreat/entities/room.entity';
+import { RoomBooking } from '../retreat/entities/room-booking.entity';
 import { OrganisationUser } from '../organisation-users/entities/organisation-user.entity';
 
 @Injectable()
@@ -61,6 +62,8 @@ export class AnalyticsService {
     private admissionsRepository: Repository<Admission>,
     @InjectRepository(Room)
     private roomsRepository: Repository<Room>,
+    @InjectRepository(RoomBooking)
+    private roomBookingsRepository: Repository<RoomBooking>,
     @InjectRepository(OrganisationUser)
     private organisationUsersRepository: Repository<OrganisationUser>,
   ) { }
@@ -1406,6 +1409,73 @@ export class AnalyticsService {
       checkoutCompleted: parseInt(marketplaceFunnelRaw?.checkoutCompleted || '0', 10),
     };
 
+    // 6. Booking lifecycle -- Tracking Phase 4 recon question #10/#11, item
+    // 2 of the reporting workstream (see
+    // scope/Tracking_Phase4_Question_Coverage_Recon.md). Two DELIBERATELY
+    // SEPARATE views, not one blended number -- see the plan doc for why:
+    //
+    // (a) bookingFunnel: event-derived, from usage_events. NOT a
+    // bookingId-joined per-booking conversion -- confirmed by tracing the
+    // real code that booking_created's trackEvent() call fires BEFORE
+    // createMutation.mutate() runs, so it has no bookingId to attach
+    // (every other booking_* event fires AFTER its mutation, with a real
+    // RoomBooking object, and does carry one). "created" is therefore a
+    // raw event count; the later stages are COUNT(DISTINCT bookingId) to
+    // avoid double-counting one booking confirmed/checked-in more than
+    // once. This is telemetry-observed activity, not a guaranteed-complete
+    // record -- usage_events is client-side, best-effort delivery.
+    //
+    // (b) bookingStatusSnapshot: the AUTHORITATIVE current-state count,
+    // straight from room_bookings.status -- always accurate regardless of
+    // any tracking gap, but a snapshot only: a booking confirmed and later
+    // cancelled shows only as CANCELLED here, with no history of having
+    // passed through CONFIRMED. That history is exactly what (a) is for.
+    // Neither view alone answers "conversion AND history" -- that's why
+    // both are returned rather than picking one.
+    const bookingFunnelRaw = await this.usageEventRepository
+      .createQueryBuilder('u')
+      .select("COUNT(CASE WHEN u.event_type = 'booking_created' THEN 1 END)", 'created')
+      .addSelect(
+        "COUNT(DISTINCT CASE WHEN u.event_type = 'booking_confirmed' THEN u.metadata->>'bookingId' END)",
+        'confirmed',
+      )
+      .addSelect(
+        "COUNT(DISTINCT CASE WHEN u.event_type = 'booking_promoted_to_patient' THEN u.metadata->>'bookingId' END)",
+        'promotedToPatient',
+      )
+      .addSelect(
+        "COUNT(DISTINCT CASE WHEN u.event_type = 'booking_checked_in' THEN u.metadata->>'bookingId' END)",
+        'checkedIn',
+      )
+      .addSelect(
+        "COUNT(DISTINCT CASE WHEN u.event_type = 'booking_cancelled' THEN u.metadata->>'bookingId' END)",
+        'cancelled',
+      )
+      .where(`u.occurredAt >= CURRENT_DATE - INTERVAL '${days} days'`)
+      .andWhere("u.event_type LIKE 'booking_%'")
+      .getRawOne();
+
+    const bookingFunnel = {
+      created: parseInt(bookingFunnelRaw?.created || '0', 10),
+      confirmed: parseInt(bookingFunnelRaw?.confirmed || '0', 10),
+      promotedToPatient: parseInt(bookingFunnelRaw?.promotedToPatient || '0', 10),
+      checkedIn: parseInt(bookingFunnelRaw?.checkedIn || '0', 10),
+      cancelled: parseInt(bookingFunnelRaw?.cancelled || '0', 10),
+    };
+
+    const statusSnapshotRaw = await this.roomBookingsRepository
+      .createQueryBuilder('rb')
+      .select('rb.status', 'status')
+      .addSelect('COUNT(*)', 'count')
+      .where('rb.deletedAt IS NULL')
+      .groupBy('rb.status')
+      .getRawMany();
+
+    const bookingStatusSnapshot = statusSnapshotRaw.reduce((acc, r) => {
+      acc[r.status] = parseInt(r.count, 10) || 0;
+      return acc;
+    }, {} as Record<string, number>);
+
     return {
       searchIntent,
       checkoutFunnel: {
@@ -1420,6 +1490,8 @@ export class AnalyticsService {
       },
       timeToValueDays: avgDaysToFirstPurchase,
       marketplaceFunnel,
+      bookingFunnel,
+      bookingStatusSnapshot,
     };
   }
 }
