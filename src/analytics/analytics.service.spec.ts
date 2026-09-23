@@ -221,3 +221,97 @@ describe('AnalyticsService.getMarketplaceActivityByOrg', () => {
     expect(result.topSearches).toEqual([{ query: 'paracetamol', count: 5 }]);
   });
 });
+
+describe('AnalyticsService.getFunnelAnalytics — marketplaceFunnel section', () => {
+  // Tracking_Phase4_Question_Coverage_Recon.md question #3. Real-DB
+  // verification (2026-09-23) already confirmed this exact query against
+  // live data (raw psql and the real endpoint both returned
+  // {searched:5, addedToCart:18, checkoutStarted:21, checkoutCompleted:12}
+  // for the same window) -- this test guards the query construction and
+  // response-shape mapping, not the SQL semantics themselves, which only
+  // a real database can prove.
+  const makeChainableQb = (rawOneResult: any) => {
+    const calls: { method: string; args: any[] }[] = [];
+    const qb: any = {};
+    const chain = (method: string) => (...args: any[]) => {
+      calls.push({ method, args });
+      return qb;
+    };
+    qb.select = chain('select');
+    qb.addSelect = chain('addSelect');
+    qb.where = chain('where');
+    qb.andWhere = chain('andWhere');
+    qb.groupBy = chain('groupBy');
+    qb.orderBy = chain('orderBy');
+    qb.limit = chain('limit');
+    qb.innerJoin = chain('innerJoin');
+    qb.getRawMany = jest.fn().mockResolvedValue([]);
+    qb.getRawOne = jest.fn().mockResolvedValue(rawOneResult);
+    return { qb, calls };
+  };
+
+  it('builds the session-scoped CASE/COUNT DISTINCT query and maps the response correctly', async () => {
+    const searchIntentQb = makeChainableQb(null);
+    const marketplaceQb = makeChainableQb({
+      searched: '5', addedToCart: '18', checkoutStarted: '21', checkoutCompleted: '12',
+    });
+    const timeToValueQb = makeChainableQb({ avgDays: '3.5' });
+    const usageEventQueryBuilders = [searchIntentQb.qb, marketplaceQb.qb];
+    const usageEventRepository = {
+      createQueryBuilder: jest.fn(() => usageEventQueryBuilders.shift()),
+      count: jest.fn().mockResolvedValue(0),
+    };
+    const ordersRepository = {
+      createQueryBuilder: jest.fn(() => timeToValueQb.qb),
+    };
+    const unused = {} as any;
+    const service = new AnalyticsService(
+      ordersRepository as any, unused, unused, unused, unused, unused, unused, unused,
+      usageEventRepository as any, unused,
+      unused, unused, unused, unused, unused, unused, unused, unused,
+    );
+
+    const result = await service.getFunnelAnalytics(30);
+
+    // Guards the actual query built for marketplaceFunnel -- the second
+    // createQueryBuilder() call on usageEventRepository.
+    const selectCall = marketplaceQb.calls.find((c) => c.method === 'select');
+    expect(selectCall!.args[0]).toContain("event_type = 'search'");
+    expect(selectCall!.args[0]).toContain("screen_name = 'ProductsScreen'");
+    const addSelectCalls = marketplaceQb.calls.filter((c) => c.method === 'addSelect').map((c) => c.args[0]);
+    expect(addSelectCalls.some((s: string) => s.includes("event_type = 'add_to_cart'"))).toBe(true);
+    expect(addSelectCalls.some((s: string) => s.includes("event_type = 'checkout_started'"))).toBe(true);
+    expect(addSelectCalls.some((s: string) => s.includes("event_type = 'checkout_completed'"))).toBe(true);
+
+    expect(result.marketplaceFunnel).toEqual({
+      searched: 5,
+      addedToCart: 18,
+      checkoutStarted: 21,
+      checkoutCompleted: 12,
+    });
+  });
+
+  it('defaults to all zeros when the query returns no rows (e.g. empty window)', async () => {
+    const searchIntentQb = makeChainableQb(null);
+    const marketplaceQb = makeChainableQb(undefined);
+    const timeToValueQb = makeChainableQb(null);
+    const usageEventQueryBuilders = [searchIntentQb.qb, marketplaceQb.qb];
+    const usageEventRepository = {
+      createQueryBuilder: jest.fn(() => usageEventQueryBuilders.shift()),
+      count: jest.fn().mockResolvedValue(0),
+    };
+    const ordersRepository = { createQueryBuilder: jest.fn(() => timeToValueQb.qb) };
+    const unused = {} as any;
+    const service = new AnalyticsService(
+      ordersRepository as any, unused, unused, unused, unused, unused, unused, unused,
+      usageEventRepository as any, unused,
+      unused, unused, unused, unused, unused, unused, unused, unused,
+    );
+
+    const result = await service.getFunnelAnalytics(30);
+
+    expect(result.marketplaceFunnel).toEqual({
+      searched: 0, addedToCart: 0, checkoutStarted: 0, checkoutCompleted: 0,
+    });
+  });
+});

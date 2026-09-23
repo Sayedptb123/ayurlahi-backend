@@ -1367,6 +1367,45 @@ export class AnalyticsService {
 
     const avgDaysToFirstPurchase = parseFloat(timeToValueRaw?.avgDays || '0');
 
+    // 5. Marketplace funnel (Tracking Phase 4 -- reporting, not new
+    // instrumentation, see scope/Tracking_Phase4_Question_Coverage_Recon.md
+    // question #3). Session-scoped stage counts using the sessionId every
+    // usage_events row already carries -- NOT a strict sequential funnel
+    // (a session reaching "addedToCart" is not asserted to have also
+    // reached "searched" first, since browsing without a text search is a
+    // real path through ProductsScreen, e.g. via category filter alone).
+    // Reported as independent per-stage session counts within the window,
+    // not chained conversion rates, so the numbers can't imply a causal
+    // order the data doesn't actually prove.
+    const marketplaceFunnelRaw = await this.usageEventRepository
+      .createQueryBuilder('u')
+      .select(
+        "COUNT(DISTINCT CASE WHEN u.event_type = 'search' AND u.screen_name = 'ProductsScreen' THEN u.session_id END)",
+        'searched',
+      )
+      .addSelect(
+        "COUNT(DISTINCT CASE WHEN u.event_type = 'add_to_cart' THEN u.session_id END)",
+        'addedToCart',
+      )
+      .addSelect(
+        "COUNT(DISTINCT CASE WHEN u.event_type = 'checkout_started' THEN u.session_id END)",
+        'checkoutStarted',
+      )
+      .addSelect(
+        "COUNT(DISTINCT CASE WHEN u.event_type = 'checkout_completed' THEN u.session_id END)",
+        'checkoutCompleted',
+      )
+      .where(`u.occurredAt >= CURRENT_DATE - INTERVAL '${days} days'`)
+      .andWhere('u.sessionId IS NOT NULL')
+      .getRawOne();
+
+    const marketplaceFunnel = {
+      searched: parseInt(marketplaceFunnelRaw?.searched || '0', 10),
+      addedToCart: parseInt(marketplaceFunnelRaw?.addedToCart || '0', 10),
+      checkoutStarted: parseInt(marketplaceFunnelRaw?.checkoutStarted || '0', 10),
+      checkoutCompleted: parseInt(marketplaceFunnelRaw?.checkoutCompleted || '0', 10),
+    };
+
     return {
       searchIntent,
       checkoutFunnel: {
@@ -1380,6 +1419,7 @@ export class AnalyticsService {
         rate: registrationStarted > 0 ? (registrationCompleted / registrationStarted) * 100 : 0,
       },
       timeToValueDays: avgDaysToFirstPurchase,
+      marketplaceFunnel,
     };
   }
 }
