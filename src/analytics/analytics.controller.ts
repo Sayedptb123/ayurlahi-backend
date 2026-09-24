@@ -10,7 +10,7 @@ import {
   Post,
   Body,
 } from '@nestjs/common';
-import { AnalyticsService } from './analytics.service';
+import { AnalyticsService, AnalyticsBranchCtx } from './analytics.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 
 @Controller('analytics')
@@ -21,16 +21,18 @@ export class AnalyticsController {
     private readonly branchVisibility: BranchVisibilityService,
   ) {}
 
-  // Branch scoping G9 (scope/Branch_Scoping_Remediation_Plan_2026-09-24.md):
-  // clinic analytics aggregate the whole organisation, so a branch-restricted
-  // user (isolated org) must not receive them — the app only offers Analytics
-  // to managers and above. Branch-filtered analytics for restricted users are
-  // Phase 9. Owners / admins / managers and shared-visibility orgs unchanged.
-  private async assertOrganisationWideAnalytics(req: any) {
-    const scope = await this.branchVisibility.scopeFor(req.user);
-    if (scope.kind !== 'all') {
-      throw new ForbiddenException('Clinic analytics are available to owners, admins and managers');
-    }
+  // Branch scoping (scope/Branch_Scoping_Remediation_Plan_2026-09-24.md):
+  // Phase 5 (G9) refused clinic analytics to branch-restricted users because
+  // they aggregated the whole organisation. Phase 9: every clinic analytic is
+  // computed over the caller's branches (patient scope for clinical / stay /
+  // expense data, inventory scope for procurement / stock), then narrowed by
+  // the switcher's ?branchId — which can never widen the scope.
+  private async branchCtx(req: any, branchId?: string): Promise<AnalyticsBranchCtx> {
+    const [patient, inventory] = await Promise.all([
+      this.branchVisibility.scopeFor(req.user),
+      this.branchVisibility.inventoryScopeFor(req.user),
+    ]);
+    return { patient, inventory, branchId };
   }
 
   @Get('dashboard')
@@ -58,13 +60,14 @@ export class AnalyticsController {
     @Request() req,
     @Query('startDate') startDate?: string,
     @Query('endDate') endDate?: string,
+    @Query('branchId') branchId?: string,
   ) {
-    await this.assertOrganisationWideAnalytics(req);
+    const ctx = await this.branchCtx(req, branchId);
     const organisationId = req.user.organisationId;
     if (!organisationId) {
       throw new ForbiddenException('No organisation associated with this account');
     }
-    return this.analyticsService.getClinicDashboard(organisationId, startDate, endDate);
+    return this.analyticsService.getClinicDashboard(organisationId, startDate, endDate, ctx);
   }
 
   // Phase 24B.1 — Procurement leakage for the caller's own clinic.
@@ -73,8 +76,9 @@ export class AnalyticsController {
     @Request() req,
     @Query('startDate') startDate?: string,
     @Query('endDate') endDate?: string,
+    @Query('branchId') branchId?: string,
   ) {
-    await this.assertOrganisationWideAnalytics(req);
+    const ctx = await this.branchCtx(req, branchId);
     const organisationId = req.user.organisationId;
     if (!organisationId) {
       throw new ForbiddenException('No organisation associated with this account');
@@ -83,6 +87,7 @@ export class AnalyticsController {
       organisationId,
       startDate,
       endDate,
+      ctx,
     );
   }
 
@@ -108,24 +113,24 @@ export class AnalyticsController {
 
   // Phase 24B.4 — inventory health for the caller's own clinic.
   @Get('inventory-health')
-  async getInventoryHealth(@Request() req) {
-    await this.assertOrganisationWideAnalytics(req);
+  async getInventoryHealth(@Request() req, @Query('branchId') branchId?: string) {
+    const ctx = await this.branchCtx(req, branchId);
     const organisationId = req.user.organisationId;
     if (!organisationId) {
       throw new ForbiddenException('No organisation associated with this account');
     }
-    return this.analyticsService.getInventoryHealth(organisationId);
+    return this.analyticsService.getInventoryHealth(organisationId, ctx);
   }
 
   // Phase 24B.3 — supplier performance (lead-time + price variance), own clinic.
   @Get('supplier-performance')
-  async getSupplierPerformance(@Request() req) {
-    await this.assertOrganisationWideAnalytics(req);
+  async getSupplierPerformance(@Request() req, @Query('branchId') branchId?: string) {
+    const ctx = await this.branchCtx(req, branchId);
     const organisationId = req.user.organisationId;
     if (!organisationId) {
       throw new ForbiddenException('No organisation associated with this account');
     }
-    return this.analyticsService.getSupplierPerformance(organisationId);
+    return this.analyticsService.getSupplierPerformance(organisationId, ctx);
   }
 
   // Phase 24A.3 — unified purchase + expense spend view, own clinic.
@@ -134,13 +139,14 @@ export class AnalyticsController {
     @Request() req,
     @Query('startDate') startDate?: string,
     @Query('endDate') endDate?: string,
+    @Query('branchId') branchId?: string,
   ) {
-    await this.assertOrganisationWideAnalytics(req);
+    const ctx = await this.branchCtx(req, branchId);
     const organisationId = req.user.organisationId;
     if (!organisationId) {
       throw new ForbiddenException('No organisation associated with this account');
     }
-    return this.analyticsService.getSpendSummary(organisationId, startDate, endDate);
+    return this.analyticsService.getSpendSummary(organisationId, startDate, endDate, ctx);
   }
 
   // Phase 24B.6 — postnatal occupancy, own clinic.
@@ -149,13 +155,14 @@ export class AnalyticsController {
     @Request() req,
     @Query('startDate') startDate?: string,
     @Query('endDate') endDate?: string,
+    @Query('branchId') branchId?: string,
   ) {
-    await this.assertOrganisationWideAnalytics(req);
+    const ctx = await this.branchCtx(req, branchId);
     const organisationId = req.user.organisationId;
     if (!organisationId) {
       throw new ForbiddenException('No organisation associated with this account');
     }
-    return this.analyticsService.getPostnatalOccupancy(organisationId, startDate, endDate);
+    return this.analyticsService.getPostnatalOccupancy(organisationId, startDate, endDate, ctx);
   }
 
   @Post('events')

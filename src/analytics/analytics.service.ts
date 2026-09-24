@@ -1,6 +1,7 @@
 import { Injectable, ForbiddenException, BadRequestException, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, IsNull, In } from 'typeorm';
+import { Repository, IsNull, In, ObjectLiteral, SelectQueryBuilder } from 'typeorm';
+import { BranchScope, BranchVisibilityService } from '../branch-visibility/branch-visibility.service';
 import { Order } from '../orders/entities/order.entity';
 import { User } from '../users/entities/user.entity';
 import { Organisation } from '../organisations/entities/organisation.entity';
@@ -22,6 +23,19 @@ import { Admission } from '../retreat/entities/admission.entity';
 import { Room } from '../retreat/entities/room.entity';
 import { RoomBooking } from '../retreat/entities/room-booking.entity';
 import { OrganisationUser } from '../organisation-users/entities/organisation-user.entity';
+
+// Branch scoping Phase 9 (scope/Branch_Scoping_Remediation_Plan_2026-09-24.md):
+// every clinic analytic aggregates only the caller's branches, then the
+// switcher's selection. Two scopes, because an organisation's patient and
+// inventory visibility are independent decisions (ADR-005):
+//   patient   — patients, appointments, bills, admissions, rooms, expenses
+//   inventory — marketplace orders, purchase orders, branch stock, movements
+// Omitted (Ayurlahi-team / base-wide callers) = no branch filter.
+export interface AnalyticsBranchCtx {
+  patient: BranchScope;
+  inventory: BranchScope;
+  branchId?: string;
+}
 
 @Injectable()
 export class AnalyticsService {
@@ -66,7 +80,42 @@ export class AnalyticsService {
     private roomBookingsRepository: Repository<RoomBooking>,
     @InjectRepository(OrganisationUser)
     private organisationUsersRepository: Repository<OrganisationUser>,
+    private branchVisibilityService: BranchVisibilityService,
   ) { }
+
+  // Scope + switcher on a query builder (a branch outside scope matches nothing).
+  private scopeQb<T extends ObjectLiteral>(qb: SelectQueryBuilder<T>, column: string, scope: BranchScope | undefined, branchId?: string) {
+    if (!scope) return qb;
+    this.branchVisibilityService.applyBranchScope(qb, column, scope);
+    this.branchVisibilityService.narrowToSelectedBranch(qb, column, branchId, scope);
+    return qb;
+  }
+
+  // The same rule for raw SQL: returns ' AND …' and pushes its parameters.
+  private sqlBranch(column: string, scope: BranchScope | undefined, branchId: string | undefined, params: any[]): string {
+    if (!scope) return '';
+    // Decide "matches nothing" BEFORE pushing any parameter: an unused bound
+    // parameter makes Postgres fail the whole query.
+    if (scope.kind === 'branches' && scope.ids.length === 0) return ' AND 1 = 0';
+    if (branchId && scope.kind === 'branches' && !scope.ids.includes(branchId)) return ' AND 1 = 0';
+    let clause = '';
+    if (scope.kind === 'branches') {
+      params.push(scope.ids);
+      clause += ` AND ${column} = ANY($${params.length}::uuid[])`;
+    }
+    if (branchId) {
+      params.push(branchId);
+      clause += ` AND ${column} = $${params.length}::uuid`;
+    }
+    return clause;
+  }
+
+  // Date range as bound parameters (never string-built SQL).
+  private dateRange<T extends ObjectLiteral>(qb: SelectQueryBuilder<T>, column: string, startDate?: string, endDate?: string) {
+    if (startDate) qb.andWhere(`${column} >= :rangeStart`, { rangeStart: startDate });
+    if (endDate) qb.andWhere(`${column} <= :rangeEnd`, { rangeEnd: endDate });
+    return qb;
+  }
 
   async getDashboardStats(
     userRole: string,
@@ -124,40 +173,46 @@ export class AnalyticsService {
     organisationId: string,
     startDate?: string,
     endDate?: string,
+    ctx?: AnalyticsBranchCtx,
   ) {
-    const dateFilter = (col: string) => {
-      const parts: string[] = [];
-      if (startDate) parts.push(`${col} >= '${startDate}'`);
-      if (endDate) parts.push(`${col} <= '${endDate}'`);
-      return parts.length ? parts.join(' AND ') : null;
-    };
+    // Every figure is patient-side data, so each query takes the patient scope.
+    // Dates are bound parameters: the previous version string-built them into
+    // the SQL from the query string (SQL injection).
+    const scoped = <T extends ObjectLiteral>(qb: SelectQueryBuilder<T>, column: string) =>
+      this.scopeQb(qb, column, ctx?.patient, ctx?.branchId);
 
     // Total patients
-    const totalPatients = await this.patientsRepository
-      .createQueryBuilder('p')
-      .where('p.organisationId = :organisationId', { organisationId })
-      .andWhere('p.deletedAt IS NULL')
-      .getCount();
+    const totalPatients = await scoped(
+      this.patientsRepository
+        .createQueryBuilder('p')
+        .where('p.organisationId = :organisationId', { organisationId })
+        .andWhere('p.deletedAt IS NULL'),
+      'p.branchId',
+    ).getCount();
 
     // Total appointments
-    const apptQb = this.appointmentsRepository
-      .createQueryBuilder('a')
-      .where('a.organisationId = :organisationId', { organisationId })
-      .andWhere('a.deletedAt IS NULL');
-    const apptDateFilter = dateFilter('a.appointmentDate');
-    if (apptDateFilter) apptQb.andWhere(apptDateFilter);
+    const apptQb = scoped(
+      this.appointmentsRepository
+        .createQueryBuilder('a')
+        .where('a.organisationId = :organisationId', { organisationId })
+        .andWhere('a.deletedAt IS NULL'),
+      'a.branchId',
+    );
+    this.dateRange(apptQb, 'a.appointmentDate', startDate, endDate);
     const totalAppointments = await apptQb.getCount();
 
     // Appointments by status
-    const apptByStatusQb = this.appointmentsRepository
-      .createQueryBuilder('a')
-      .select('a.status', 'status')
-      .addSelect('COUNT(*)', 'count')
-      .where('a.organisationId = :organisationId', { organisationId })
-      .andWhere('a.deletedAt IS NULL')
-      .groupBy('a.status');
-    const apptByStatusDateFilter = dateFilter('a.appointmentDate');
-    if (apptByStatusDateFilter) apptByStatusQb.andWhere(apptByStatusDateFilter);
+    const apptByStatusQb = scoped(
+      this.appointmentsRepository
+        .createQueryBuilder('a')
+        .select('a.status', 'status')
+        .addSelect('COUNT(*)', 'count')
+        .where('a.organisationId = :organisationId', { organisationId })
+        .andWhere('a.deletedAt IS NULL')
+        .groupBy('a.status'),
+      'a.branchId',
+    );
+    this.dateRange(apptByStatusQb, 'a.appointmentDate', startDate, endDate);
     const apptByStatusRaw = await apptByStatusQb.getRawMany();
     const appointmentsByStatus = apptByStatusRaw.map((r) => ({
       status: r.status,
@@ -165,41 +220,48 @@ export class AnalyticsService {
     }));
 
     // Revenue from paid/partial bills
-    const revenueQb = this.billsRepository
-      .createQueryBuilder('b')
-      .select('COALESCE(SUM(b.paidAmount), 0)', 'revenue')
-      .where('b.organisationId = :organisationId', { organisationId })
-      .andWhere('b.deletedAt IS NULL')
-      .andWhere("b.status IN ('paid', 'partial')");
-    const billDateFilter = dateFilter('b.billDate');
-    if (billDateFilter) revenueQb.andWhere(billDateFilter);
+    const revenueQb = scoped(
+      this.billsRepository
+        .createQueryBuilder('b')
+        .select('COALESCE(SUM(b.paidAmount), 0)', 'revenue')
+        .where('b.organisationId = :organisationId', { organisationId })
+        .andWhere('b.deletedAt IS NULL')
+        .andWhere("b.status IN ('paid', 'partial')"),
+      'b.branchId',
+    );
+    this.dateRange(revenueQb, 'b.billDate', startDate, endDate);
     const revenueResult = await revenueQb.getRawOne();
     const totalRevenue = parseFloat(revenueResult?.revenue ?? '0');
 
     // Total expenses
-    const expQb = this.expensesRepository
-      .createQueryBuilder('e')
-      .select('COALESCE(SUM(e.amount), 0)', 'total')
-      .where('e.organisationId = :organisationId', { organisationId })
-      .andWhere('e.deletedAt IS NULL');
-    const expDateFilter = dateFilter('e.expenseDate');
-    if (expDateFilter) expQb.andWhere(expDateFilter);
+    const expQb = scoped(
+      this.expensesRepository
+        .createQueryBuilder('e')
+        .select('COALESCE(SUM(e.amount), 0)', 'total')
+        .where('e.organisationId = :organisationId', { organisationId })
+        .andWhere('e.deletedAt IS NULL'),
+      'e.branchId',
+    );
+    this.dateRange(expQb, 'e.expenseDate', startDate, endDate);
     const expResult = await expQb.getRawOne();
     const totalExpenses = parseFloat(expResult?.total ?? '0');
 
     // Revenue by month (last 12 months or within date range)
-    const revenueByMonthQb = this.billsRepository
-      .createQueryBuilder('b')
-      .select("TO_CHAR(b.billDate, 'Mon YYYY')", 'month')
-      .addSelect("DATE_TRUNC('month', b.billDate)", 'monthStart')
-      .addSelect('COALESCE(SUM(b.paidAmount), 0)', 'amount')
-      .where('b.organisationId = :organisationId', { organisationId })
-      .andWhere('b.deletedAt IS NULL')
-      .andWhere("b.status IN ('paid', 'partial')")
-      .groupBy("TO_CHAR(b.billDate, 'Mon YYYY'), DATE_TRUNC('month', b.billDate)")
-      .orderBy("DATE_TRUNC('month', b.billDate)", 'ASC')
-      .limit(12);
-    if (billDateFilter) revenueByMonthQb.andWhere(billDateFilter);
+    const revenueByMonthQb = scoped(
+      this.billsRepository
+        .createQueryBuilder('b')
+        .select("TO_CHAR(b.billDate, 'Mon YYYY')", 'month')
+        .addSelect("DATE_TRUNC('month', b.billDate)", 'monthStart')
+        .addSelect('COALESCE(SUM(b.paidAmount), 0)', 'amount')
+        .where('b.organisationId = :organisationId', { organisationId })
+        .andWhere('b.deletedAt IS NULL')
+        .andWhere("b.status IN ('paid', 'partial')")
+        .groupBy("TO_CHAR(b.billDate, 'Mon YYYY'), DATE_TRUNC('month', b.billDate)")
+        .orderBy("DATE_TRUNC('month', b.billDate)", 'ASC')
+        .limit(12),
+      'b.branchId',
+    );
+    this.dateRange(revenueByMonthQb, 'b.billDate', startDate, endDate);
     const revenueByMonthRaw = await revenueByMonthQb.getRawMany();
     const revenueByMonth = revenueByMonthRaw.map((r) => ({
       month: r.month,
@@ -230,6 +292,7 @@ export class AnalyticsService {
     organisationId: string,
     startDate?: string,
     endDate?: string,
+    ctx?: AnalyticsBranchCtx,
   ) {
     // On-platform (marketplace orders)
     const onQb = this.ordersRepository
@@ -242,6 +305,7 @@ export class AnalyticsService {
       .andWhere("o.status NOT IN ('cancelled', 'returned')");
     if (startDate) onQb.andWhere('o.createdAt >= :startDate', { startDate });
     if (endDate) onQb.andWhere('o.createdAt <= :endDate', { endDate });
+    this.scopeQb(onQb, 'o.branchId', ctx?.inventory, ctx?.branchId);
     const onRaw = await onQb.getRawOne();
 
     // Off-platform (purchase orders to the clinic's own suppliers)
@@ -254,6 +318,7 @@ export class AnalyticsService {
       .andWhere("po.status NOT IN ('draft', 'cancelled')");
     if (startDate) offQb.andWhere('po.orderDate >= :startDate', { startDate });
     if (endDate) offQb.andWhere('po.orderDate <= :endDate', { endDate });
+    this.scopeQb(offQb, 'po.branchId', ctx?.inventory, ctx?.branchId);
     const offRaw = await offQb.getRawOne();
 
     const onPlatformSpend = parseFloat(onRaw?.spend ?? '0');
@@ -267,9 +332,9 @@ export class AnalyticsService {
 
     // Phase 24B.2 — breakdowns
     const [bySupplier, byMedicine, unmetDemand] = await Promise.all([
-      this.spendBySupplier(organisationId, startDate, endDate),
-      this.spendByMedicine(organisationId, startDate, endDate),
-      this.unmetDemandForClinic(organisationId),
+      this.spendBySupplier(organisationId, startDate, endDate, ctx),
+      this.spendByMedicine(organisationId, startDate, endDate, ctx),
+      this.unmetDemandForClinic(organisationId, ctx),
     ]);
 
     return {
@@ -405,6 +470,7 @@ export class AnalyticsService {
     organisationId: string,
     startDate?: string,
     endDate?: string,
+    ctx?: AnalyticsBranchCtx,
   ) {
     const qb = this.purchaseOrdersRepository
       .createQueryBuilder('po')
@@ -419,6 +485,7 @@ export class AnalyticsService {
       .groupBy('po.supplierId');
     if (startDate) qb.andWhere('po.orderDate >= :startDate', { startDate });
     if (endDate) qb.andWhere('po.orderDate <= :endDate', { endDate });
+    this.scopeQb(qb, 'po.branchId', ctx?.inventory, ctx?.branchId);
     const rows = await qb.getRawMany();
     return rows
       .map((r) => ({
@@ -440,6 +507,7 @@ export class AnalyticsService {
     organisationId: string | null,
     startDate?: string,
     endDate?: string,
+    ctx?: AnalyticsBranchCtx,
   ) {
     const offQb = this.purchaseOrderItemsRepository
       .createQueryBuilder('poi')
@@ -455,6 +523,7 @@ export class AnalyticsService {
       offQb.andWhere('po.organisationId = :organisationId', { organisationId });
     if (startDate) offQb.andWhere('po.orderDate >= :startDate', { startDate });
     if (endDate) offQb.andWhere('po.orderDate <= :endDate', { endDate });
+    this.scopeQb(offQb, 'po.branchId', ctx?.inventory, ctx?.branchId);
     const offRows = await offQb.getRawMany();
 
     const onQb = this.orderItemsRepository
@@ -471,6 +540,7 @@ export class AnalyticsService {
       onQb.andWhere('o.organisationId = :organisationId', { organisationId });
     if (startDate) onQb.andWhere('o.createdAt >= :startDate', { startDate });
     if (endDate) onQb.andWhere('o.createdAt <= :endDate', { endDate });
+    this.scopeQb(onQb, 'o.branchId', ctx?.inventory, ctx?.branchId);
     const onRows = await onQb.getRawMany();
 
     const byKey = new Map<
@@ -508,20 +578,23 @@ export class AnalyticsService {
    * Phase 24B.2 — a clinic's own "unmet demand": low-stock inventory items that
    * are NOT linked to a marketplace product (so "Order Now" can't help them yet).
    */
-  private async unmetDemandForClinic(organisationId: string) {
-    const rows = await this.inventoryItemsRepository
-      .createQueryBuilder('item')
-      .select('item.name', 'name')
-      .addSelect('item.currentStock', 'currentStock')
-      .addSelect('item.minStockLevel', 'minStockLevel')
-      .where('item.organisationId = :organisationId', { organisationId })
-      .andWhere('item.deletedAt IS NULL')
-      .andWhere('item.productId IS NULL')
-      .andWhere('item.currentStock <= item.minStockLevel')
-      .orderBy('item.name', 'ASC')
-      .limit(50)
-      .getRawMany();
-    return rows.map((r) => ({
+  // Unlinked items at or below their reorder level — from BRANCH stock
+  // (ADR-005): inventory_items stopped being written at the Step 3 cutover.
+  private async unmetDemandForClinic(organisationId: string, ctx?: AnalyticsBranchCtx) {
+    const params: any[] = [organisationId];
+    const branch = this.sqlBranch('bs.branch_id', ctx?.inventory, ctx?.branchId, params);
+    const rows = await this.inventoryItemsRepository.manager.query(
+      `SELECT m.name AS name, bs.current_stock AS "currentStock", bs.min_stock_level AS "minStockLevel"
+         FROM inventory_branch_stock bs
+         JOIN inventory_item_masters m ON m.id = bs.item_master_id AND m.deleted_at IS NULL
+        WHERE bs.organisation_id = $1 AND bs.deleted_at IS NULL
+          AND m.product_id IS NULL
+          AND bs.current_stock <= bs.min_stock_level${branch}
+        ORDER BY m.name ASC
+        LIMIT 50`,
+      params,
+    );
+    return rows.map((r: any) => ({
       name: r.name,
       currentStock: parseInt(r.currentStock ?? '0', 10),
       minStockLevel: parseInt(r.minStockLevel ?? '0', 10),
@@ -558,115 +631,92 @@ export class AnalyticsService {
    * and cost-price trend from the `stock_movements` ledger (24C.1). Turnover /
    * days-of-cover need consumption-OUT events, which don't exist yet — omitted.
    */
-  async getInventoryHealth(organisationId: string) {
-    const summaryRaw = await this.inventoryItemsRepository
-      .createQueryBuilder('item')
-      .select('COUNT(*)', 'items')
-      .addSelect(
-        'COUNT(*) FILTER (WHERE item.current_stock <= item.min_stock_level)',
-        'low',
-      )
-      .addSelect('COUNT(*) FILTER (WHERE item.current_stock = 0)', 'outOfStock')
-      .addSelect('COUNT(item.product_id)', 'linked')
-      .addSelect(
-        'COUNT(*) FILTER (WHERE item.product_id IS NOT NULL AND item.current_stock <= item.min_stock_level)',
-        'linkedLow',
-      )
-      .addSelect(
-        'COALESCE(SUM(item.current_stock * COALESCE(item.cost_price, item.unit_price, 0)), 0)',
-        'stockValue',
-      )
-      // Phase 24C.2 — dead/expired-stock (needs batch/expiry)
-      .addSelect(
-        'COUNT(*) FILTER (WHERE item.expiry_date IS NOT NULL AND item.expiry_date < CURRENT_DATE AND item.current_stock > 0)',
-        'expired',
-      )
-      .addSelect(
-        "COUNT(*) FILTER (WHERE item.expiry_date IS NOT NULL AND item.expiry_date >= CURRENT_DATE AND item.expiry_date < CURRENT_DATE + INTERVAL '30 days' AND item.current_stock > 0)",
-        'expiringSoon',
-      )
-      .addSelect(
-        'COALESCE(SUM(item.current_stock * COALESCE(item.cost_price, item.unit_price, 0)) FILTER (WHERE item.expiry_date IS NOT NULL AND item.expiry_date < CURRENT_DATE), 0)',
-        'expiredValue',
-      )
-      .where('item.organisationId = :organisationId', { organisationId })
-      .andWhere('item.deletedAt IS NULL')
-      .getRawOne();
+  // Branch scoping Phase 9: stock health is read from BRANCH stock
+  // (inventory_branch_stock + inventory_item_masters, ADR-005) under the
+  // caller's inventory scope + switcher. It used to read inventory_items,
+  // which stopped being written at the ADR-005 Step 3 cutover, so these
+  // figures had gone stale. "items" counts stock lines (an item held at two
+  // branches is two lines) — the unit branch-scoped stock is managed in.
+  async getInventoryHealth(organisationId: string, ctx?: AnalyticsBranchCtx) {
+    const m = this.inventoryItemsRepository.manager;
+    const sp: any[] = [organisationId];
+    const stockBranch = this.sqlBranch('bs.branch_id', ctx?.inventory, ctx?.branchId, sp);
+    const [summaryRaw] = await m.query(
+      `SELECT COUNT(*) AS items,
+              COUNT(*) FILTER (WHERE bs.current_stock <= bs.min_stock_level) AS low,
+              COUNT(*) FILTER (WHERE bs.current_stock = 0) AS "outOfStock",
+              COUNT(im.product_id) AS linked,
+              COUNT(*) FILTER (WHERE im.product_id IS NOT NULL AND bs.current_stock <= bs.min_stock_level) AS "linkedLow",
+              COALESCE(SUM(bs.current_stock * COALESCE(im.cost_price, im.unit_price, 0)), 0) AS "stockValue",
+              COUNT(*) FILTER (WHERE bs.expiry_date IS NOT NULL AND bs.expiry_date < CURRENT_DATE AND bs.current_stock > 0) AS expired,
+              COUNT(*) FILTER (WHERE bs.expiry_date IS NOT NULL AND bs.expiry_date >= CURRENT_DATE AND bs.expiry_date < CURRENT_DATE + INTERVAL '30 days' AND bs.current_stock > 0) AS "expiringSoon",
+              COALESCE(SUM(bs.current_stock * COALESCE(im.cost_price, im.unit_price, 0)) FILTER (WHERE bs.expiry_date IS NOT NULL AND bs.expiry_date < CURRENT_DATE), 0) AS "expiredValue"
+         FROM inventory_branch_stock bs
+         JOIN inventory_item_masters im ON im.id = bs.item_master_id AND im.deleted_at IS NULL
+        WHERE bs.organisation_id = $1 AND bs.deleted_at IS NULL${stockBranch}`,
+      sp,
+    );
 
     const items = parseInt(summaryRaw?.items ?? '0', 10);
     const linked = parseInt(summaryRaw?.linked ?? '0', 10);
     const linkedLow = parseInt(summaryRaw?.linkedLow ?? '0', 10);
 
-    // Phase 24B.5 — reorder coverage: linked items that have actually been
-    // reordered on-platform (≥1 order_delivery movement) vs all linked items.
-    const reorderedRaw = await this.stockMovementsRepository
-      .createQueryBuilder('sm')
-      .select('COUNT(DISTINCT sm.inventoryItemId)', 'cnt')
-      .where('sm.organisationId = :organisationId', { organisationId })
-      .andWhere('sm.deletedAt IS NULL')
-      .andWhere("sm.movementType = 'order_delivery'")
-      .getRawOne();
+    // Movements: keyed by stock line (inventory_branch_stock_id), falling back
+    // to the legacy inventory_item_id for movements recorded before the cutover;
+    // scoped by the movement's own branch.
+    const movement = (extra: string) => {
+      const params: any[] = [organisationId];
+      const branch = this.sqlBranch('sm.branch_id', ctx?.inventory, ctx?.branchId, params);
+      return { sql: `sm.organisation_id = $1 AND sm.deleted_at IS NULL${branch}${extra}`, params };
+    };
+    const key = `COALESCE(sm.inventory_branch_stock_id::text, sm.inventory_item_id::text)`;
+    const nameExpr = `COALESCE(MAX(im.name), MAX(ii.name), 'Unknown')`;
+    const joins = `LEFT JOIN inventory_branch_stock bs ON bs.id = sm.inventory_branch_stock_id
+                   LEFT JOIN inventory_item_masters im ON im.id = bs.item_master_id
+                   LEFT JOIN inventory_items ii ON ii.id = sm.inventory_item_id`;
+
+    // Phase 24B.5 — reorder coverage: stock lines reordered on-platform.
+    const reordered = movement(` AND sm.movement_type = 'order_delivery'`);
+    const [reorderedRaw] = await m.query(
+      `SELECT COUNT(DISTINCT ${key}) AS cnt FROM stock_movements sm WHERE ${reordered.sql}`,
+      reordered.params,
+    );
     const reorderedItems = parseInt(reorderedRaw?.cnt ?? '0', 10);
 
     // Stockout frequency from the ledger (times balance hit 0).
-    const stockoutRows = await this.stockMovementsRepository
-      .createQueryBuilder('sm')
-      .select('sm.inventoryItemId', 'itemId')
-      .addSelect('COUNT(*)', 'stockouts')
-      .where('sm.organisationId = :organisationId', { organisationId })
-      .andWhere('sm.deletedAt IS NULL')
-      .andWhere('sm.balanceAfter = 0')
-      .groupBy('sm.inventoryItemId')
-      .getRawMany();
-
-    // Cost-price trend: first vs latest unit_cost per item (from ledger).
-    const costRows = await this.stockMovementsRepository
-      .createQueryBuilder('sm')
-      .select('sm.inventoryItemId', 'itemId')
-      .addSelect('sm.unitCost', 'unitCost')
-      .where('sm.organisationId = :organisationId', { organisationId })
-      .andWhere('sm.deletedAt IS NULL')
-      .andWhere('sm.unitCost IS NOT NULL')
-      .orderBy('sm.createdAt', 'ASC')
-      .getRawMany();
-
-    // Resolve names for any referenced items.
-    const itemIds = [
-      ...new Set([
-        ...stockoutRows.map((r) => r.itemId),
-        ...costRows.map((r) => r.itemId),
-      ]),
-    ];
-    const nameById = new Map<string, string>();
-    if (itemIds.length) {
-      const named = await this.inventoryItemsRepository
-        .createQueryBuilder('item')
-        .select(['item.id AS id', 'item.name AS name'])
-        .where('item.id IN (:...itemIds)', { itemIds })
-        .getRawMany();
-      for (const n of named) nameById.set(n.id, n.name);
-    }
-
+    const so = movement(` AND sm.balance_after = 0`);
+    const stockoutRows = await m.query(
+      `SELECT ${nameExpr} AS name, COUNT(*) AS stockouts
+         FROM stock_movements sm ${joins}
+        WHERE ${so.sql}
+        GROUP BY ${key}`,
+      so.params,
+    );
     const stockouts = stockoutRows
-      .map((r) => ({
-        name: nameById.get(r.itemId) ?? 'Unknown',
-        stockouts: parseInt(r.stockouts ?? '0', 10),
-      }))
-      .sort((a, b) => b.stockouts - a.stockouts)
+      .map((r: any) => ({ name: r.name, stockouts: parseInt(r.stockouts ?? '0', 10) }))
+      .sort((a: any, b: any) => b.stockouts - a.stockouts)
       .slice(0, 10);
 
-    // first/latest cost per item
-    const costByItem = new Map<string, { first: number; latest: number }>();
+    // Cost-price trend: first vs latest unit cost per stock line.
+    const ct = movement(` AND sm.unit_cost IS NOT NULL`);
+    const costRows = await m.query(
+      `SELECT ${key} AS "itemKey", COALESCE(im.name, ii.name, 'Unknown') AS name, sm.unit_cost AS "unitCost"
+         FROM stock_movements sm ${joins}
+        WHERE ${ct.sql}
+        ORDER BY sm.created_at ASC`,
+      ct.params,
+    );
+    const costByItem = new Map<string, { name: string; first: number; latest: number }>();
     for (const r of costRows) {
       const cost = parseFloat(r.unitCost ?? '0');
-      const e = costByItem.get(r.itemId);
-      if (!e) costByItem.set(r.itemId, { first: cost, latest: cost });
+      const e = costByItem.get(r.itemKey);
+      if (!e) costByItem.set(r.itemKey, { name: r.name, first: cost, latest: cost });
       else e.latest = cost;
     }
-    const costTrend = [...costByItem.entries()]
-      .filter(([, v]) => v.first !== v.latest)
-      .map(([itemId, v]) => ({
-        name: nameById.get(itemId) ?? 'Unknown',
+    const costTrend = [...costByItem.values()]
+      .filter((v) => v.first !== v.latest)
+      .map((v) => ({
+        name: v.name,
         firstCost: v.first,
         latestCost: v.latest,
         changePct:
@@ -707,8 +757,8 @@ export class AnalyticsService {
    * per supplier (received_at − order_date) and price variance for the same item
    * across suppliers (where to negotiate / switch).
    */
-  async getSupplierPerformance(organisationId: string) {
-    const leadRows = await this.purchaseOrdersRepository
+  async getSupplierPerformance(organisationId: string, ctx?: AnalyticsBranchCtx) {
+    const leadQb = this.purchaseOrdersRepository
       .createQueryBuilder('po')
       .leftJoin(Supplier, 's', 's.id = po.supplierId')
       .select('po.supplierId', 'supplierId')
@@ -722,8 +772,9 @@ export class AnalyticsService {
       .andWhere('po.deletedAt IS NULL')
       .andWhere("po.status = 'received'")
       .andWhere('po.received_at IS NOT NULL')
-      .groupBy('po.supplierId')
-      .getRawMany();
+      .groupBy('po.supplierId');
+    this.scopeQb(leadQb, 'po.branchId', ctx?.inventory, ctx?.branchId);
+    const leadRows = await leadQb.getRawMany();
 
     const leadTimeBySupplier = leadRows
       .map((r) => ({
@@ -734,7 +785,7 @@ export class AnalyticsService {
       }))
       .sort((a, b) => a.avgLeadDays - b.avgLeadDays);
 
-    const priceRows = await this.purchaseOrderItemsRepository
+    const priceQb = this.purchaseOrderItemsRepository
       .createQueryBuilder('poi')
       .leftJoin('poi.purchaseOrder', 'po')
       .select('LOWER(TRIM(poi.itemName))', 'key')
@@ -747,8 +798,9 @@ export class AnalyticsService {
       .andWhere('po.deletedAt IS NULL')
       .andWhere("po.status NOT IN ('draft', 'cancelled')")
       .groupBy('LOWER(TRIM(poi.itemName))')
-      .having('MIN(poi.unitPrice) <> MAX(poi.unitPrice)')
-      .getRawMany();
+      .having('MIN(poi.unitPrice) <> MAX(poi.unitPrice)');
+    this.scopeQb(priceQb, 'po.branchId', ctx?.inventory, ctx?.branchId);
+    const priceRows = await priceQb.getRawMany();
 
     const priceVariance = priceRows
       .map((r) => {
@@ -782,6 +834,7 @@ export class AnalyticsService {
     organisationId: string,
     startDate?: string,
     endDate?: string,
+    ctx?: AnalyticsBranchCtx,
   ) {
     const poQb = this.purchaseOrdersRepository
       .createQueryBuilder('po')
@@ -792,6 +845,7 @@ export class AnalyticsService {
       .andWhere("po.status NOT IN ('draft', 'cancelled')");
     if (startDate) poQb.andWhere('po.orderDate >= :startDate', { startDate });
     if (endDate) poQb.andWhere('po.orderDate <= :endDate', { endDate });
+    this.scopeQb(poQb, 'po.branchId', ctx?.inventory, ctx?.branchId);
     const poRaw = await poQb.getRawOne();
 
     const expQb = this.expensesRepository
@@ -803,6 +857,7 @@ export class AnalyticsService {
       .groupBy('e.category');
     if (startDate) expQb.andWhere('e.expenseDate >= :startDate', { startDate });
     if (endDate) expQb.andWhere('e.expenseDate <= :endDate', { endDate });
+    this.scopeQb(expQb, 'e.branchId', ctx?.patient, ctx?.branchId);
     const expRows = await expQb.getRawMany();
 
     const expensesByCategory = expRows
@@ -833,31 +888,40 @@ export class AnalyticsService {
     organisationId: string,
     startDate?: string,
     endDate?: string,
+    ctx?: AnalyticsBranchCtx,
   ) {
-    const activeAdmissions = await this.admissionsRepository
-      .createQueryBuilder('a')
-      .where('a.organisationId = :organisationId', { organisationId })
-      .andWhere('a.deletedAt IS NULL')
-      .andWhere("a.status = 'ACTIVE'")
-      .getCount();
+    const scoped = <T extends ObjectLiteral>(qb: SelectQueryBuilder<T>, column: string) =>
+      this.scopeQb(qb, column, ctx?.patient, ctx?.branchId);
+    const activeAdmissions = await scoped(
+      this.admissionsRepository
+        .createQueryBuilder('a')
+        .where('a.organisationId = :organisationId', { organisationId })
+        .andWhere('a.deletedAt IS NULL')
+        .andWhere("a.status = 'ACTIVE'"),
+      'a.branchId',
+    ).getCount();
 
-    const occupiedRaw = await this.admissionsRepository
-      .createQueryBuilder('a')
-      .select('COUNT(DISTINCT a.roomId)', 'cnt')
-      .where('a.organisationId = :organisationId', { organisationId })
-      .andWhere('a.deletedAt IS NULL')
-      .andWhere("a.status = 'ACTIVE'")
-      .getRawOne();
+    const occupiedRaw = await scoped(
+      this.admissionsRepository
+        .createQueryBuilder('a')
+        .select('COUNT(DISTINCT a.roomId)', 'cnt')
+        .where('a.organisationId = :organisationId', { organisationId })
+        .andWhere('a.deletedAt IS NULL')
+        .andWhere("a.status = 'ACTIVE'"),
+      'a.branchId',
+    ).getRawOne();
     const occupiedRooms = parseInt(occupiedRaw?.cnt ?? '0', 10);
 
-    const totalRooms = await this.roomsRepository
-      .createQueryBuilder('r')
-      .where('r.organisationId = :organisationId', { organisationId })
-      .andWhere('r.deletedAt IS NULL')
-      .andWhere('r.is_active = true')
-      .getCount();
+    const totalRooms = await scoped(
+      this.roomsRepository
+        .createQueryBuilder('r')
+        .where('r.organisationId = :organisationId', { organisationId })
+        .andWhere('r.deletedAt IS NULL')
+        .andWhere('r.is_active = true'),
+      'r.branchId',
+    ).getCount();
 
-    const losRaw = await this.admissionsRepository
+    const losRaw = await scoped(this.admissionsRepository
       .createQueryBuilder('a')
       .select(
         'AVG(EXTRACT(EPOCH FROM (a.actual_check_out_date - a.check_in_date)) / 86400.0)',
@@ -866,7 +930,7 @@ export class AnalyticsService {
       .where('a.organisationId = :organisationId', { organisationId })
       .andWhere('a.deletedAt IS NULL')
       .andWhere("a.status = 'DISCHARGED'")
-      .andWhere('a.actual_check_out_date IS NOT NULL')
+      .andWhere('a.actual_check_out_date IS NOT NULL'), 'a.branchId')
       .getRawOne();
 
     const admQb = this.admissionsRepository
@@ -876,6 +940,7 @@ export class AnalyticsService {
       .andWhere("a.status <> 'CANCELLED'");
     if (startDate) admQb.andWhere('a.check_in_date >= :startDate', { startDate });
     if (endDate) admQb.andWhere('a.check_in_date <= :endDate', { endDate });
+    scoped(admQb, 'a.branchId');
     const admissionsInPeriod = await admQb.getCount();
 
     return {

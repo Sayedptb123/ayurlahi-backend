@@ -278,6 +278,30 @@ async function ensureFixture(ds: DataSource): Promise<Fixture> {
       [orgId, `ZZBF-PO-${side}`, supplierId, branchId[side]]);
   }
 
+  // Analytics fixture (Phase 9): activity in Branch A only for revenue and
+  // off-platform spend, so Branch B must aggregate to exactly zero; branch
+  // stock in both branches (A low, B healthy).
+  await record(
+    `SELECT id FROM patient_bills WHERE organisation_id = $1 AND bill_number = $2 AND deleted_at IS NULL`,
+    `INSERT INTO patient_bills (organisation_id, bill_number, patient_id, bill_date, subtotal, paid_amount, status, branch_id)
+     VALUES ($1, $2, $3, '2026-01-02', 100, 100, 'paid', $4) RETURNING id`,
+    [orgId, 'ZZBF-PAID-A', patients.A, branchA]);
+  await record(
+    `SELECT id FROM purchase_orders WHERE organisation_id = $1 AND po_number = $2`,
+    `INSERT INTO purchase_orders (organisation_id, po_number, supplier_id, branch_id, status, total_amount, order_date, received_at)
+     VALUES ($1, $2, $3, $4, 'received', 250, '2026-01-01', '2026-01-05') RETURNING id`,
+    [orgId, 'ZZBF-PO-RCV-A', supplierId, branchA]);
+  const master = await record(
+    `SELECT id FROM inventory_item_masters WHERE organisation_id = $1 AND name = $2 AND deleted_at IS NULL`,
+    `INSERT INTO inventory_item_masters (organisation_id, name, unit, cost_price) VALUES ($1, $2, 'Unit', 10) RETURNING id`,
+    [orgId, 'ZZBF Item']);
+  for (const [branch, stock] of [[branchA, 2], [branchB, 10]] as [string, number][]) {
+    await ds.query(
+      `INSERT INTO inventory_branch_stock (organisation_id, item_master_id, branch_id, current_stock, min_stock_level)
+       SELECT $1, $2, $3, $4, 5 WHERE NOT EXISTS (SELECT 1 FROM inventory_branch_stock WHERE item_master_id = $2 AND branch_id = $3)`,
+      [orgId, master, branch, stock]);
+  }
+
   return { orgId, branchA, branchB, userIds, doctorStaffId, patients, records, stays, enquiries, procurement };
 }
 
@@ -834,26 +858,6 @@ describe('Branch isolation contract (real DB)', () => {
     });
   });
 
-  describe('clinic analytics (G9)', () => {
-    const ROUTES = ['/analytics/clinic', '/analytics/procurement', '/analytics/inventory-health',
-      '/analytics/supplier-performance', '/analytics/spend-summary', '/analytics/postnatal-occupancy'];
-    it('branch-restricted, multi-branch and unassigned users get 403 — with or without branchId', async () => {
-      for (const role of ['restrictedA', 'multiAB', 'unassigned'] as Role[]) {
-        for (const route of ROUTES) {
-          expect([role, route, (await api(role).get(route)).status]).toEqual([role, route, 403]);
-          expect([role, route, (await api(role).get(`${route}?branchId=${fx.branchA}`)).status]).toEqual([role, route, 403]);
-        }
-      }
-    }, 120000); // 36 paced requests
-    it("owner and manager get organisation-wide totals that match the database", async () => {
-      const [{ n }] = await ds.query(`SELECT count(*)::int n FROM patients WHERE organisation_id = $1 AND deleted_at IS NULL`, [fx.orgId]);
-      for (const role of ['owner', 'manager'] as Role[]) {
-        const res = await api(role).get('/analytics/clinic');
-        expect(res.status).toBe(200);
-        expect(res.body.totalPatients).toBe(n);
-      }
-    });
-  });
   // ── Phase 7: enquiries (G12) ──────────────────────────────────────────────
   describe('enquiries (G12)', () => {
     const enq = (k: 'A' | 'B' | 'NULL') => fx.enquiries[k];
@@ -1009,6 +1013,91 @@ describe('Branch isolation contract (real DB)', () => {
       expect(await n('owner', `&branchId=${fx.branchA}`)).toBe(1);
       expect(await n('restrictedA', '')).toBe(1);
       expect(await n('restrictedA', `&branchId=${fx.branchB}`)).toBe(0);
+    });
+  });
+  // ── Phase 9: branch-scoped clinic analytics — totals vs direct DB aggregation ─
+  describe('clinic analytics totals (Phase 9)', () => {
+    type Set_ = 'ALL' | ('A' | 'B')[];
+    const VARIANTS: { role: Role; branch?: 'A' | 'B'; expect: Set_ }[] = [
+      { role: 'restrictedA', expect: ['A'] },
+      { role: 'restrictedA', branch: 'B', expect: [] },      // can't obtain B
+      { role: 'multiAB', expect: ['A', 'B'] },
+      { role: 'multiAB', branch: 'A', expect: ['A'] },
+      { role: 'multiAB', branch: 'B', expect: ['B'] },
+      { role: 'owner', expect: 'ALL' },                       // incl. NULL-branch rows
+      { role: 'owner', branch: 'B', expect: ['B'] },
+      { role: 'unassigned', expect: [] },                     // nothing branch-scoped
+    ];
+    const branchIdOf = (b: 'A' | 'B') => (b === 'A' ? fx.branchA : fx.branchB);
+    // Independent SQL (not the implementation's): WHERE org AND <branch set>.
+    const agg = async (sql: string, col: string, set: Set_): Promise<number> => {
+      const params: any[] = [fx.orgId];
+      let where = '';
+      if (set !== 'ALL') {
+        params.push(set.map(branchIdOf));
+        where = ` AND ${col} = ANY($2::uuid[])`;
+      }
+      const [row] = await ds.query(sql.replace('/*BRANCH*/', where), params);
+      return Number(Object.values(row)[0] ?? 0);
+    };
+    const url = (path: string, b?: 'A' | 'B') => `${path}${b ? `?branchId=${branchIdOf(b)}` : ''}`;
+
+    for (const v of VARIANTS) {
+      const label = `${v.role}${v.branch ? ` + switcher ${v.branch}` : ''} → ${v.expect === 'ALL' ? 'all branches' : `[${v.expect.join(',')}]`}`;
+
+      it(`clinic dashboard: ${label}`, async () => {
+        const res = await api(v.role).get(url('/analytics/clinic', v.branch));
+        expect(res.status).toBe(200);
+        expect(res.body.totalPatients).toBe(await agg(`SELECT count(*) FROM patients WHERE organisation_id = $1 AND deleted_at IS NULL /*BRANCH*/`, 'branch_id', v.expect));
+        expect(res.body.totalAppointments).toBe(await agg(`SELECT count(*) FROM appointments WHERE organisation_id = $1 AND deleted_at IS NULL /*BRANCH*/`, 'branch_id', v.expect));
+        expect(res.body.totalRevenue).toBe(await agg(`SELECT COALESCE(SUM(paid_amount),0) FROM patient_bills WHERE organisation_id = $1 AND deleted_at IS NULL AND status IN ('paid','partial') /*BRANCH*/`, 'branch_id', v.expect));
+        expect(res.body.totalExpenses).toBe(await agg(`SELECT COALESCE(SUM(amount),0) FROM expenses WHERE organisation_id = $1 AND deleted_at IS NULL /*BRANCH*/`, 'branch_id', v.expect));
+      });
+
+      it(`procurement + spend summary: ${label}`, async () => {
+        const on = await agg(`SELECT COALESCE(SUM(total_amount),0) FROM orders WHERE organisation_id = $1 AND deleted_at IS NULL AND status NOT IN ('cancelled','returned') /*BRANCH*/`, 'branch_id', v.expect);
+        const off = await agg(`SELECT COALESCE(SUM(total_amount),0) FROM purchase_orders WHERE organisation_id = $1 AND deleted_at IS NULL AND status NOT IN ('draft','cancelled') /*BRANCH*/`, 'branch_id', v.expect);
+        const proc = await api(v.role).get(url('/analytics/procurement', v.branch));
+        expect(proc.status).toBe(200);
+        expect(proc.body.onPlatformSpend).toBe(on);
+        expect(proc.body.offPlatformSpend).toBe(off);
+        const spend = await api(v.role).get(url('/analytics/spend-summary', v.branch));
+        expect(spend.body.purchasesTotal).toBe(off);
+        expect(spend.body.expensesTotal).toBe(await agg(`SELECT COALESCE(SUM(amount),0) FROM expenses WHERE organisation_id = $1 AND deleted_at IS NULL /*BRANCH*/`, 'branch_id', v.expect));
+      });
+
+      it(`inventory health + supplier performance + occupancy: ${label}`, async () => {
+        const inv = await api(v.role).get(url('/analytics/inventory-health', v.branch));
+        expect(inv.status).toBe(200);
+        const stockFrom = `FROM inventory_branch_stock bs JOIN inventory_item_masters im ON im.id = bs.item_master_id AND im.deleted_at IS NULL WHERE bs.organisation_id = $1 AND bs.deleted_at IS NULL /*BRANCH*/`;
+        expect(inv.body.summary.items).toBe(await agg(`SELECT count(*) ${stockFrom}`, 'bs.branch_id', v.expect));
+        expect(inv.body.summary.lowStock).toBe(await agg(`SELECT count(*) FILTER (WHERE bs.current_stock <= bs.min_stock_level) ${stockFrom}`, 'bs.branch_id', v.expect));
+        expect(inv.body.summary.stockValue).toBe(await agg(`SELECT COALESCE(SUM(bs.current_stock * COALESCE(im.cost_price, im.unit_price, 0)),0) ${stockFrom}`, 'bs.branch_id', v.expect));
+        const sup = await api(v.role).get(url('/analytics/supplier-performance', v.branch));
+        const received = (sup.body.leadTimeBySupplier ?? []).reduce((n: number, r: any) => n + r.receivedPos, 0);
+        expect(received).toBe(await agg(`SELECT count(*) FROM purchase_orders WHERE organisation_id = $1 AND deleted_at IS NULL AND status = 'received' AND received_at IS NOT NULL /*BRANCH*/`, 'branch_id', v.expect));
+        const occ = await api(v.role).get(url('/analytics/postnatal-occupancy', v.branch));
+        expect(occ.body.activeAdmissions).toBe(await agg(`SELECT count(*) FROM admissions WHERE organisation_id = $1 AND deleted_at IS NULL AND status = 'ACTIVE' /*BRANCH*/`, 'branch_id', v.expect));
+        expect(occ.body.totalRooms).toBe(await agg(`SELECT count(*) FROM rooms WHERE organisation_id = $1 AND deleted_at IS NULL AND is_active = true /*BRANCH*/`, 'branch_id', v.expect));
+      });
+    }
+
+    it('a branch with no activity aggregates to exactly zero (not the org total, not another branch)', async () => {
+      const a = (await api('owner').get(url('/analytics/clinic', 'A'))).body;
+      const b = (await api('owner').get(url('/analytics/clinic', 'B'))).body;
+      expect(a.totalRevenue).toBeGreaterThan(0);
+      expect(b.totalRevenue).toBe(0);
+      expect(b.revenueByMonth).toEqual([]);
+      const pa = (await api('owner').get(url('/analytics/procurement', 'A'))).body;
+      const pb = (await api('owner').get(url('/analytics/procurement', 'B'))).body;
+      expect(pa.offPlatformSpend).toBeGreaterThan(0);
+      expect(pb.offPlatformSpend).toBe(0);
+      expect(pb.bySupplier).toEqual([]);
+    });
+
+    it('date filters are bound parameters (a quote in startDate is not SQL)', async () => {
+      const res = await api('owner').get(`/analytics/clinic?startDate=${encodeURIComponent("2026-01-01' OR '1'='1")}`);
+      expect(res.status).not.toBe(200); // rejected as a bad date, not executed as SQL
     });
   });
 });

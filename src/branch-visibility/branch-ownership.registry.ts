@@ -178,13 +178,13 @@ export const BRANCH_OWNED_AREAS: BranchOwnedArea[] = [
     prefix: '/analytics',
     anchor: 'none',
     routes: {
-      'GET /analytics/clinic': covered, // restricted → 403; branch-filtered view is Phase 9
-      'GET /analytics/procurement': covered, // restricted → 403; branch-filtered view is Phase 9
+      'GET /analytics/clinic': covered, // Phase 9: branch-scoped totals, DB-cross-checked
+      'GET /analytics/procurement': covered, // Phase 9: branch-scoped totals, DB-cross-checked
       'GET /analytics/procurement/base': orgWide('Ayurlahi team / org admin only (existing role gate)'),
-      'GET /analytics/spend-summary': covered, // restricted → 403; branch-filtered view is Phase 9
-      'GET /analytics/inventory-health': covered, // restricted → 403; branch-filtered view is Phase 9
-      'GET /analytics/supplier-performance': covered, // restricted → 403; branch-filtered view is Phase 9
-      'GET /analytics/postnatal-occupancy': covered, // restricted → 403; branch-filtered view is Phase 9
+      'GET /analytics/spend-summary': covered, // Phase 9: branch-scoped totals, DB-cross-checked
+      'GET /analytics/inventory-health': covered, // Phase 9: branch-scoped totals, DB-cross-checked
+      'GET /analytics/supplier-performance': covered, // Phase 9: branch-scoped totals, DB-cross-checked
+      'GET /analytics/postnatal-occupancy': covered, // Phase 9: branch-scoped totals, DB-cross-checked
       'GET /analytics/dashboard': orgWide('Ayurlahi team dashboard'),
       'GET /analytics/telemetry': orgWide('Ayurlahi team'),
       'GET /analytics/feature-usage/by-org': orgWide('Ayurlahi team'),
