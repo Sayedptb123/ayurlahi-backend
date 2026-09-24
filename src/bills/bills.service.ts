@@ -131,42 +131,54 @@ export class BillsService {
     // Calculate late flag
     const isLate = paidDate > dueDate;
 
-    // Create Expense record
-    const expense = this.expenseRepo.create({
-      organisationId: bill.organisationId,
-      amount: logDto.paidAmount,
-      category: bill.category,
-      description: `Bill Payment: ${bill.billName} - Period ${logDto.billPeriodStart || 'N/A'} to ${logDto.billPeriodEnd || 'N/A'}${logDto.billNumber ? ` (Ref: ${logDto.billNumber})` : ''}`,
-      expenseDate: paidDate,
-      status: 'verified', // real logged payment is verified
-      paymentMethod: bill.paymentMethod ?? 'bank_transfer',
-      createdBy: reqUser.userId,
-    });
-    const savedExpense = await this.expenseRepo.save(expense);
+    // Expense, payment and due-date advance commit together, and this is the
+    // transaction the cash module posts its Payment Voucher in (Cash MVP plan
+    // §6). The bill row is locked so two logs can't both advance the due date.
+    const savedPayment = await this.billRepo.manager.transaction(async (manager) => {
+      const locked = await manager.getRepository(RecurringBill).findOne({
+        where: { id: bill.id },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!locked) throw new NotFoundException('Recurring bill not found');
 
-    // Create BillPayment record
-    const payment = this.paymentRepo.create({
-      recurringBillId: bill.id,
-      billPeriodStart: logDto.billPeriodStart ? new Date(logDto.billPeriodStart) : null,
-      billPeriodEnd: logDto.billPeriodEnd ? new Date(logDto.billPeriodEnd) : null,
-      billAmount: logDto.billAmount,
-      billNumber: logDto.billNumber ?? null,
-      billDate: logDto.billDate ? new Date(logDto.billDate) : null,
-      dueDate: dueDate,
-      billUrl: logDto.billUrl ?? null,
-      paidAmount: logDto.paidAmount,
-      paidDate: paidDate,
-      isLate,
-      lateFee: logDto.lateFee ?? 0,
-      expenseId: savedExpense.id,
-    });
-    const savedPayment = await this.paymentRepo.save(payment);
+      const savedExpense = await manager.getRepository(Expense).save(
+        manager.getRepository(Expense).create({
+          organisationId: bill.organisationId,
+          amount: logDto.paidAmount,
+          category: bill.category,
+          description: `Bill Payment: ${bill.billName} - Period ${logDto.billPeriodStart || 'N/A'} to ${logDto.billPeriodEnd || 'N/A'}${logDto.billNumber ? ` (Ref: ${logDto.billNumber})` : ''}`,
+          expenseDate: paidDate,
+          status: 'verified', // real logged payment is verified
+          paymentMethod: bill.paymentMethod ?? 'bank_transfer',
+          createdBy: reqUser.userId,
+        }),
+      );
 
-    // Advance the recurring bill's next due date if we paid for the current/future cycle
-    if (dueDate >= bill.nextDueDate) {
-      bill.nextDueDate = this.calculateNextDueDate(bill.nextDueDate, bill.frequency, bill.dayOfMonth ?? undefined, bill.dayOfWeek ?? undefined);
-      await this.billRepo.save(bill);
-    }
+      const payment = await manager.getRepository(BillPayment).save(
+        manager.getRepository(BillPayment).create({
+          recurringBillId: bill.id,
+          billPeriodStart: logDto.billPeriodStart ? new Date(logDto.billPeriodStart) : null,
+          billPeriodEnd: logDto.billPeriodEnd ? new Date(logDto.billPeriodEnd) : null,
+          billAmount: logDto.billAmount,
+          billNumber: logDto.billNumber ?? null,
+          billDate: logDto.billDate ? new Date(logDto.billDate) : null,
+          dueDate: dueDate,
+          billUrl: logDto.billUrl ?? null,
+          paidAmount: logDto.paidAmount,
+          paidDate: paidDate,
+          isLate,
+          lateFee: logDto.lateFee ?? 0,
+          expenseId: savedExpense.id,
+        }),
+      );
+
+      // Advance the recurring bill's next due date if we paid for the current/future cycle
+      if (dueDate >= locked.nextDueDate) {
+        locked.nextDueDate = this.calculateNextDueDate(locked.nextDueDate, locked.frequency, locked.dayOfMonth ?? undefined, locked.dayOfWeek ?? undefined);
+        await manager.getRepository(RecurringBill).save(locked);
+      }
+      return payment;
+    });
 
     return savedPayment;
   }
@@ -206,62 +218,79 @@ export class BillsService {
 
     for (const bill of dueBills) {
       try {
-        let expenseId: string | null = null;
-
-        // Auto create expense configuration
-        if (bill.autoCreateExpense) {
-          const expenseAmount = bill.estimatedAmount ? Number(bill.estimatedAmount) : 0;
-          let isAutoApproved = bill.autoApprove;
-
-          if (isAutoApproved && bill.approvalThreshold !== null) {
-            isAutoApproved = expenseAmount <= Number(bill.approvalThreshold);
-          }
-
-          const expense = this.expenseRepo.create({
-            organisationId: bill.organisationId,
-            amount: expenseAmount,
-            category: bill.category,
-            description: `Auto-generated: ${bill.billName} (Schedule)`,
-            expenseDate: new Date(bill.nextDueDate),
-            status: isAutoApproved ? 'verified' : 'pending',
-            paymentMethod: bill.paymentMethod ?? 'bank_transfer',
-            createdBy: bill.createdBy || undefined,
+        // Expense, auto-pay payment and the due-date advance commit together:
+        // a partial run (expense saved, due date not advanced) used to create
+        // the same expense again on the next run. This is also the transaction
+        // the cash module posts its voucher in (Cash MVP plan §6).
+        // Notifications go out only after the commit.
+        let notice: string;
+        await this.billRepo.manager.transaction(async (manager) => {
+          const locked = await manager.getRepository(RecurringBill).findOne({
+            where: { id: bill.id },
+            lock: { mode: 'pessimistic_write' },
           });
-          const savedExpense = await this.expenseRepo.save(expense);
-          expenseId = savedExpense.id;
-
-          // Notify OWNER/MANAGER. Branch identity travels with the bill's
-          // own branchId (NULL is a valid, organisation-wide state).
-          const branchLabel = await this.getBranchLabel(bill.branchId);
-          this.notifyOrg(bill.organisationId, 'Recurring Bill Due', `Bill "${bill.billName}"${branchLabel} is due. ${isAutoApproved ? 'An approved' : 'A pending'} expense of ₹${expenseAmount.toLocaleString('en-IN')} has been generated.`);
-
-          // If autoPay is active, immediately log the payment record too
-          if (bill.autoPay) {
-            const payment = this.paymentRepo.create({
-              recurringBillId: bill.id,
-              billAmount: expenseAmount,
-              dueDate: new Date(bill.nextDueDate),
-              paidAmount: expenseAmount,
-              paidDate: (await organisationBusinessDate(
-                this.billRepo.manager,
-                bill.organisationId,
-              )) as unknown as Date,
-              isLate: false,
-              lateFee: 0,
-              expenseId: savedExpense.id,
-            });
-            await this.paymentRepo.save(payment);
+          // Another run already advanced this bill since it was selected.
+          if (!locked || String(locked.nextDueDate) !== String(bill.nextDueDate)) {
+            notice = '';
+            return;
           }
-        } else {
-          // If no auto-create, still notify that the bill is due
           const branchLabel = await this.getBranchLabel(bill.branchId);
-          this.notifyOrg(bill.organisationId, 'Recurring Bill Due', `Bill "${bill.billName}"${branchLabel} is due on ${bill.nextDueDate}. Record the payment once paid.`);
-        }
 
-        // Advance next due date
-        bill.nextDueDate = this.calculateNextDueDate(bill.nextDueDate, bill.frequency, bill.dayOfMonth ?? undefined, bill.dayOfWeek ?? undefined);
-        await this.billRepo.save(bill);
-        processedCount++;
+          if (bill.autoCreateExpense) {
+            const expenseAmount = bill.estimatedAmount ? Number(bill.estimatedAmount) : 0;
+            let isAutoApproved = bill.autoApprove;
+
+            if (isAutoApproved && bill.approvalThreshold !== null) {
+              isAutoApproved = expenseAmount <= Number(bill.approvalThreshold);
+            }
+
+            const savedExpense = await manager.getRepository(Expense).save(
+              manager.getRepository(Expense).create({
+                organisationId: bill.organisationId,
+                amount: expenseAmount,
+                category: bill.category,
+                description: `Auto-generated: ${bill.billName} (Schedule)`,
+                expenseDate: new Date(bill.nextDueDate),
+                status: isAutoApproved ? 'verified' : 'pending',
+                paymentMethod: bill.paymentMethod ?? 'bank_transfer',
+                createdBy: bill.createdBy || undefined,
+              }),
+            );
+            // Branch identity travels with the bill's own branchId (NULL is a
+            // valid, organisation-wide state).
+            notice = `Bill "${bill.billName}"${branchLabel} is due. ${isAutoApproved ? 'An approved' : 'A pending'} expense of ₹${expenseAmount.toLocaleString('en-IN')} has been generated.`;
+
+            // If autoPay is active, immediately log the payment record too
+            if (bill.autoPay) {
+              await manager.getRepository(BillPayment).save(
+                manager.getRepository(BillPayment).create({
+                  recurringBillId: bill.id,
+                  billAmount: expenseAmount,
+                  dueDate: new Date(bill.nextDueDate),
+                  paidAmount: expenseAmount,
+                  paidDate: (await organisationBusinessDate(
+                    manager,
+                    bill.organisationId,
+                  )) as unknown as Date,
+                  isLate: false,
+                  lateFee: 0,
+                  expenseId: savedExpense.id,
+                }),
+              );
+            }
+          } else {
+            // If no auto-create, still notify that the bill is due
+            notice = `Bill "${bill.billName}"${branchLabel} is due on ${bill.nextDueDate}. Record the payment once paid.`;
+          }
+
+          // Advance next due date
+          locked.nextDueDate = this.calculateNextDueDate(bill.nextDueDate, bill.frequency, bill.dayOfMonth ?? undefined, bill.dayOfWeek ?? undefined);
+          await manager.getRepository(RecurringBill).save(locked);
+        });
+        if (notice!) {
+          this.notifyOrg(bill.organisationId, 'Recurring Bill Due', notice!);
+          processedCount++;
+        }
       } catch (err) {
         console.error(`❌ Error processing recurring bill ${bill.id}:`, err.message);
       }

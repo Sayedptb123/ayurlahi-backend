@@ -226,45 +226,53 @@ export class AssetsService {
       nextMaintDate = new Date(maintDate.getTime() + asset.maintenanceIntervalDays * 24 * 60 * 60 * 1000);
     }
 
-    // 2. Create the ledger Expense if integrated
-    let paymentId: string | null = null;
-    if (dto.integrateExpense && dto.cost && dto.cost > 0) {
-      const expense = this.expenseRepository.create({
-        organisationId,
-        amount: dto.cost,
-        category: 'Maintenance',
-        description: `Asset Maintenance Cost: [${asset.assetCode}] ${asset.name} - Service provider: ${dto.serviceProvider || 'N/A'}`,
-        expenseDate: maintDate,
-        status: 'verified',
-        incurredBy: userId,
-        createdBy: userId,
-        approvedBy: userId,
-        approvedAt: new Date(),
-      });
-      const savedExpense = await this.expenseRepository.save(expense);
-      paymentId = savedExpense.id;
-    }
+    // Expense, maintenance record and asset update commit together, and this
+    // is the transaction the cash module posts its Payment Voucher in (Cash
+    // MVP plan §6). Previously a failure after the expense save left an
+    // expense with no maintenance record.
+    const savedMaint = await this.assetRepository.manager.transaction(async (manager) => {
+      // 2. Create the ledger Expense if integrated
+      let paymentId: string | null = null;
+      if (dto.integrateExpense && dto.cost && dto.cost > 0) {
+        const savedExpense = await manager.getRepository(Expense).save(
+          manager.getRepository(Expense).create({
+            organisationId,
+            amount: dto.cost,
+            category: 'Maintenance',
+            description: `Asset Maintenance Cost: [${asset.assetCode}] ${asset.name} - Service provider: ${dto.serviceProvider || 'N/A'}`,
+            expenseDate: maintDate,
+            status: 'verified',
+            incurredBy: userId,
+            createdBy: userId,
+            approvedBy: userId,
+            approvedAt: new Date(),
+          }),
+        );
+        paymentId = savedExpense.id;
+      }
 
-    // 3. Create maintenance record
-    const maintenance = this.maintenanceRepository.create({
-      assetId,
-      maintenanceType: dto.maintenanceType,
-      maintenanceDate: maintDate,
-      cost: dto.cost ?? null,
-      serviceProvider: dto.serviceProvider ?? null,
-      description: dto.description ?? null,
-      nextMaintenanceDate: nextMaintDate,
-      paymentId,
-      performedBy: userId,
+      // 3. Create maintenance record
+      const maint = await manager.getRepository(AssetMaintenance).save(
+        manager.getRepository(AssetMaintenance).create({
+          assetId,
+          maintenanceType: dto.maintenanceType,
+          maintenanceDate: maintDate,
+          cost: dto.cost ?? null,
+          serviceProvider: dto.serviceProvider ?? null,
+          description: dto.description ?? null,
+          nextMaintenanceDate: nextMaintDate,
+          paymentId,
+          performedBy: userId,
+        }),
+      );
+
+      // 4. Update core asset flags
+      asset.lastMaintenanceDate = maintDate;
+      asset.nextMaintenanceDate = nextMaintDate;
+      asset.status = AssetStatus.ACTIVE; // Return asset status to active upon service completion
+      await manager.getRepository(Asset).save(asset);
+      return maint;
     });
-
-    const savedMaint = await this.maintenanceRepository.save(maintenance);
-
-    // 4. Update core asset flags
-    asset.lastMaintenanceDate = maintDate;
-    asset.nextMaintenanceDate = nextMaintDate;
-    asset.status = AssetStatus.ACTIVE; // Return asset status to active upon service completion
-    await this.assetRepository.save(asset);
 
     return savedMaint;
   }
