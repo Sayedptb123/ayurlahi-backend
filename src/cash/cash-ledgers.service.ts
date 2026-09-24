@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { EntityManager } from 'typeorm';
 
-// Ledgers the patient-payment flow needs (Cash MVP plan §4), seeded per
+// Ledgers the patient-payment flow and go-live need (Cash MVP plan §4), seeded per
 // organisation and found by system_key, never by name. Seeding is separate from
 // posting and does not switch anything on: cash_module_live_from stays the gate.
 
@@ -41,6 +41,11 @@ export interface IncomeShare {
 
 @Injectable()
 export class CashLedgersService {
+  // Ledger kinds that can receive a payment made by this method.
+  static receivingKinds(paymentMethod: string): string[] {
+    return RECEIVING_KINDS[paymentMethod] ?? [];
+  }
+
   // Idempotent: creates only what's missing. A branch gets its own cash drawer;
   // an organisation with no branches gets one organisation-wide drawer.
   async seedPaymentLedgers(manager: EntityManager, organisationId: string): Promise<number> {
@@ -55,6 +60,9 @@ export class CashLedgersService {
       [null, 'bank', 'Bank', 'bank'],
       [null, 'upi', 'UPI', 'upi'],
       ...INCOME_LEDGERS.map((l): [string | null, string, string, string] => [null, 'income', l.name, l.key]),
+      // Needed by go-live's opening journal (review §7).
+      [null, 'patient_advances', 'Patient advances', 'patient_advances'],
+      [null, 'opening_balance', 'Opening balance', 'opening_balance'],
     ];
     let created = 0;
     for (const [branchId, kind, name, key] of rows) {
@@ -84,7 +92,7 @@ export class CashLedgersService {
     );
     if (!a) throw new NotFoundException('Ledger not found in this organisation');
     if (!a.is_active) throw new BadRequestException(`Ledger "${a.name}" is inactive`);
-    const allowed = RECEIVING_KINDS[paymentMethod] ?? [];
+    const allowed = CashLedgersService.receivingKinds(paymentMethod);
     if (!allowed.includes(a.kind)) {
       throw new BadRequestException(`A ${paymentMethod} payment can't be received into "${a.name}"`);
     }
