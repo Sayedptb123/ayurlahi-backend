@@ -127,6 +127,7 @@ import { NotificationCronModule } from './notifications/notification-cron.module
 import { Payout } from './payouts/entities/payout.entity';
 import { OtpVerification } from './otp/entities/otp-verification.entity';
 import { AuditModule } from './audit/audit.module';
+import { CashModule } from './cash/cash.module';
 import { AuditLog } from './audit/entities/audit-log.entity';
 import { CrmModule } from './crm/crm.module';
 import { CrmLead } from './crm/entities/crm-lead.entity';
@@ -332,6 +333,7 @@ import { ProductRequest } from './product-requests/entities/product-request.enti
     EmailModule,
     ScraperModule,
     AuditModule,
+    CashModule,
     CrmModule,
     PromotionsModule,
     LeaveModule,
