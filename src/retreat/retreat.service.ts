@@ -1354,6 +1354,10 @@ export class RetreatService {
     }
 
     async voidAdvance(clinicId: string, bookingId: string, receiptId: string, userId: string, userRole?: string) {
+        // Voiding reverses money already received: leadership only.
+        if (!['OWNER', 'ADMIN', 'MANAGER'].includes(userRole ?? '')) {
+            throw new ForbiddenException('Only owners, admins and managers can void an advance');
+        }
         return this.dataSource.transaction(async (manager) => {
             await this.lockOpenBooking(manager, clinicId, bookingId);
             const [receipt] = await manager.query(

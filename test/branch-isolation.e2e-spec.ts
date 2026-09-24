@@ -81,6 +81,8 @@ async function ensureFixture(ds: DataSource): Promise<Fixture> {
   await ds.query(`UPDATE organisation_settings SET patient_visibility = 'isolated' WHERE organisation_id = $1`, [orgId]);
   // Procurement data (orders / invoices / POs) follows the INVENTORY policy.
   await ds.query(`UPDATE organisation_settings SET inventory_policy = 'per_branch' WHERE organisation_id = $1`, [orgId]);
+  // Cash set-up is Ayurlahi-enabled per clinic; the fixture needs it for the drawer tests.
+  await ds.query(`UPDATE organisation_settings SET cash_module_enabled = true WHERE organisation_id = $1`, [orgId]);
   // Newborn assessments sit behind the postnatal capability.
   await ds.query(
     `INSERT INTO clinic_capabilities (organisation_id, has_postnatal_care)
@@ -1129,6 +1131,49 @@ describe('Branch isolation contract (real DB)', () => {
       const after = await ds.query(`SELECT count(*)::int n FROM staff_branch_assignments WHERE staff_id = $1 AND is_active AND deleted_at IS NULL`, [staff.id]);
       expect(after).toEqual(before);
       expect(await api('restrictedA').get(`/organisations/${fx.orgId}/branches/switchable`).then((r) => ids(r))).toEqual([fx.branchA]);
+    });
+  });
+
+  // ── Cash release gate (2026-09-25) ────────────────────────────────────────
+  describe('cash release controls', () => {
+    it('only owners, admins and managers can void a booking advance', async () => {
+      const booking = fx.stays.booking.A;
+      const rec = await api('owner').post(`/retreat/bookings/${booking}/advances`, { amount: 1, paymentMethod: 'cash', notes: `ZZRun-${RUN}` });
+      expect(rec.status).toBe(201);
+      const receipt = rec.body.receiptId;
+      try {
+        for (const role of ['restrictedA', 'multiAB', 'doctorA'] as Role[]) {
+          const res = await api(role).delete(`/retreat/bookings/${booking}/advances/${receipt}`);
+          expect(res.status).toBe(403);
+        }
+        const [still] = await ds.query(`SELECT deleted_at FROM booking_advance_receipts WHERE id = $1`, [receipt]);
+        expect(still.deleted_at).toBeNull();
+        expect((await api('manager').delete(`/retreat/bookings/${booking}/advances/${receipt}`)).status).toBe(200);
+      } finally {
+        const [r] = await ds.query(`SELECT deleted_at FROM booking_advance_receipts WHERE id = $1`, [receipt]);
+        if (r && !r.deleted_at) await api('owner').delete(`/retreat/bookings/${booking}/advances/${receipt}`);
+      }
+      const [gone] = await ds.query(`SELECT deleted_at FROM booking_advance_receipts WHERE id = $1`, [receipt]);
+      expect(gone.deleted_at).not.toBeNull();
+    });
+
+    it('cash set-up is refused, even to the owner, until Ayurlahi enables it', async () => {
+      const setEnabled = (on: boolean) =>
+        ds.query(`UPDATE organisation_settings SET cash_module_enabled = $2 WHERE organisation_id = $1`, [fx.orgId, on]);
+      try {
+        await setEnabled(false);
+        expect((await api('owner').get('/cash/status')).body.enabled).toBe(false);
+        expect((await api('owner').post('/cash/go-live/seed', {})).status).toBe(403);
+        expect((await api('owner').post('/cash/go-live/preview', { balances: [] })).status).toBe(403);
+        expect((await api('owner').post('/cash/go-live', { balances: [] })).status).toBe(403);
+        const [s] = await ds.query(`SELECT cash_module_live_from FROM organisation_settings WHERE organisation_id = $1`, [fx.orgId]);
+        expect(s.cash_module_live_from).toBeNull();
+      } finally {
+        await setEnabled(true);
+      }
+      expect((await api('owner').get('/cash/status')).body.enabled).toBe(true);
+      expect((await api('owner').post('/cash/go-live/preview', { balances: [] })).status).toBe(201);
+      expect((await api('manager').post('/cash/go-live/preview', { balances: [] })).status).toBe(403); // role gate unchanged
     });
   });
 });

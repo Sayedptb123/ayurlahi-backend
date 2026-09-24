@@ -588,4 +588,15 @@ describe('RetreatService.voidAdvance — advance total read-back', () => {
         await expect(service.voidAdvance('org-1', 'b1', 'r1', 'u-1', 'OWNER')).rejects.toThrow('below zero');
         expect(reverseReceipt).not.toHaveBeenCalled();
     });
+
+    it.each(['RECEPTIONIST', 'NURSE', 'DOCTOR', 'STAFF', undefined])('%s cannot void an advance (nothing written)', async (role) => {
+        const { service, reverseReceipt } = build('2000.00');
+        await expect(service.voidAdvance('org-1', 'b1', 'r1', 'u-1', role)).rejects.toThrow(ForbiddenException);
+        expect(reverseReceipt).not.toHaveBeenCalled();
+    });
+
+    it.each(['ADMIN', 'MANAGER'])('%s can void an advance', async (role) => {
+        const { service } = build('2000.00');
+        await expect(service.voidAdvance('org-1', 'b1', 'r1', 'u-1', role)).resolves.toEqual({ advancePaid: 2000 });
+    });
 });

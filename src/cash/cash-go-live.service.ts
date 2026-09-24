@@ -46,6 +46,7 @@ export interface OpeningPreview {
 }
 
 const GO_LIVE_ROLES = ['OWNER', 'ADMIN'];
+const NOT_ENABLED = 'Cash tracking has not been enabled for this clinic yet. Contact Ayurlahi support to enable it.';
 const BALANCE_KINDS = ['cash', 'bank', 'upi', 'held_by_partner'];
 const rupees = (p: number) => (p / 100).toFixed(2);
 
@@ -63,11 +64,12 @@ export class CashGoLiveService {
     const m = this.dataSource.manager;
     const [row] = await m.query(
       `SELECT to_char(s.cash_module_live_from, 'YYYY-MM-DD') AS live_from,
+              s.cash_module_enabled AS enabled,
               (SELECT count(*)::int FROM accounts a WHERE a.organisation_id = s.organisation_id) AS ledgers
          FROM organisation_settings s WHERE s.organisation_id = $1`,
       [actor.organisationId],
     );
-    return { liveFrom: row?.live_from ?? null, ledgersSeeded: (row?.ledgers ?? 0) > 0 };
+    return { liveFrom: row?.live_from ?? null, enabled: !!row?.enabled, ledgersSeeded: (row?.ledgers ?? 0) > 0 };
   }
 
   // Active ledgers a patient payment can be received into, for the picker.
@@ -96,6 +98,7 @@ export class CashGoLiveService {
 
   async seed(actor: CashActor): Promise<{ created: number }> {
     this.assertGoLiveRole(actor);
+    await this.assertEnabled(this.dataSource.manager, actor.organisationId);
     const created = await this.dataSource.transaction((m) =>
       this.ledgers.seedPaymentLedgers(m, actor.organisationId),
     );
@@ -105,6 +108,7 @@ export class CashGoLiveService {
   // Read-only: computes the opening journal without writing anything.
   async preview(actor: CashActor, balances: OpeningBalanceInput[]): Promise<OpeningPreview> {
     this.assertGoLiveRole(actor);
+    await this.assertEnabled(this.dataSource.manager, actor.organisationId);
     return this.buildOpening(this.dataSource.manager, actor.organisationId, balances);
   }
 
@@ -113,11 +117,12 @@ export class CashGoLiveService {
     return this.dataSource.transaction(async (m) => {
       // Lock the settings row so two confirmations can't both go through.
       const [settings] = await m.query(
-        `SELECT to_char(cash_module_live_from, 'YYYY-MM-DD') AS live_from
+        `SELECT to_char(cash_module_live_from, 'YYYY-MM-DD') AS live_from, cash_module_enabled AS enabled
            FROM organisation_settings WHERE organisation_id = $1 FOR UPDATE`,
         [actor.organisationId],
       );
       if (!settings) throw new BadRequestException('Organisation settings not found');
+      if (!settings.enabled) throw new ForbiddenException(NOT_ENABLED);
       if (settings.live_from) {
         throw new ConflictException(`Cash tracking is already live (since ${settings.live_from})`);
       }
@@ -256,5 +261,15 @@ export class CashGoLiveService {
     if (!GO_LIVE_ROLES.includes(actor.role ?? '')) {
       throw new ForbiddenException('Only the owner or an admin can set up cash tracking');
     }
+  }
+
+  // Rollout control: Ayurlahi enables cash tracking per clinic
+  // (organisation_settings.cash_module_enabled, no API); go-live is one-way.
+  private async assertEnabled(m: EntityManager, organisationId: string) {
+    const [s] = await m.query(
+      `SELECT cash_module_enabled AS enabled FROM organisation_settings WHERE organisation_id = $1`,
+      [organisationId],
+    );
+    if (!s?.enabled) throw new ForbiddenException(NOT_ENABLED);
   }
 }
