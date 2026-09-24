@@ -1544,25 +1544,11 @@ export class RetreatService {
         userId?: string,
         userRole?: string,
     ): Promise<void> {
-        const repo = manager ? manager.getRepository(Patient) : this.patientRepo;
-        const patient = await repo.findOne({ where: { id: patientId, organisationId: clinicId } });
-        if (!patient) {
-            throw new ForbiddenException('Patient not found in this organisation');
-        }
-
-        // ADR-004 D9/Phase 4 — a booking/admission write must not let a branch-scoped
-        // staff member reach a patient outside their visible branches, mirroring the
-        // read-path checks in PatientsService/PatientBillingService.
-        if (patient.branchId) {
-            const visibleBranchIds = await this.branchVisibilityService.resolveVisibleBranchIds(
-                userId,
-                clinicId,
-                userRole,
-            );
-            if (visibleBranchIds !== null && !visibleBranchIds.includes(patient.branchId)) {
-                throw new ForbiddenException('Patient not found in this organisation');
-            }
-        }
+        // Branch scoping v2 (G11): the patient must be in the organisation and
+        // inside the caller's branch scope — 404 otherwise, NULL-branch
+        // patients excluded for restricted staff (Q1, Q2).
+        const scope = await this.branchVisibilityService.scopeFor({ userId, role: userRole, organisationId: clinicId });
+        await this.branchVisibilityService.assertPatientAccess(scope, clinicId, patientId, manager);
     }
 
     // Single source of truth for "can this room be occupied over [start, end)".

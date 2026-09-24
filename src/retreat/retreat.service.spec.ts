@@ -1,5 +1,6 @@
 import { ForbiddenException, BadRequestException, NotFoundException, ConflictException } from '@nestjs/common';
 import { RetreatService, rangesOverlap } from './retreat.service';
+import { BranchVisibilityService } from '../branch-visibility/branch-visibility.service';
 import { RoomStatus } from './entities/room.entity';
 import { AdmissionStatus } from './entities/admission.entity';
 import { BookingStatus, RefundMethod } from './entities/room-booking.entity';
@@ -145,19 +146,25 @@ describe('RetreatService Phase 0 — isRoomBlocked', () => {
 describe('RetreatService Phase 0 — assertPatientInOrg', () => {
     let service: RetreatService;
     beforeEach(() => {
+        // Real branch-scoping service; a 'shared' org, so scope is 'all' and
+        // only the organisation lookup (through the transaction manager) decides.
+        const branchVisibility = new BranchVisibilityService(
+            { getOrCreate: jest.fn(async () => ({ patientVisibility: 'shared' })) } as any,
+            {} as any, {} as any, {} as any, {} as any,
+        );
         service = new RetreatService(
             {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any,
             {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any,
-            {} as any, // branchVisibilityService,
+            branchVisibility,
             {} as any,
             { liveFrom: jest.fn(() => Promise.resolve(null)), postReceipt: jest.fn(() => Promise.resolve(null)), reverseReceipt: jest.fn(() => Promise.resolve(null)), postTransfer: jest.fn(() => Promise.resolve(null)), postRefund: jest.fn(() => Promise.resolve(null)) } as any, // advancePosting (cash off)
         );
     });
 
-    it('throws Forbidden when the patient is not in this organisation', async () => {
+    it('404s when the patient is not in this organisation (branch scoping Q2)', async () => {
         const mgr = fakeManager({ patient: null });
         await expect((service as any).assertPatientInOrg('org-1', 'patient-x', mgr))
-            .rejects.toBeInstanceOf(ForbiddenException);
+            .rejects.toBeInstanceOf(NotFoundException);
     });
 
     it('resolves when the patient belongs to the organisation', async () => {

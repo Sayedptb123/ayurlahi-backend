@@ -36,10 +36,11 @@ export class NewbornAssessmentsController {
   @ApiQuery({ name: 'branchId', required: false, description: 'Filter by branch UUID' })
   getAssessments(
     @Param('organisationId', ParseUUIDPipe) organisationId: string,
+    @Request() req,
     @Query('patientId') patientId?: string,
     @Query('branchId') branchId?: string,
   ) {
-    return this.newbornAssessmentsService.getAssessments(organisationId, patientId, branchId);
+    return this.newbornAssessmentsService.getAssessments(req.user, organisationId, patientId, branchId);
   }
 
   @Post()
@@ -50,6 +51,7 @@ export class NewbornAssessmentsController {
     @Request() req,
   ) {
     return this.newbornAssessmentsService.createAssessment(
+      req.user,
       organisationId,
       dto,
       req.user.userId,
@@ -61,7 +63,8 @@ export class NewbornAssessmentsController {
   deleteAssessment(
     @Param('organisationId', ParseUUIDPipe) organisationId: string,
     @Param('id', ParseUUIDPipe) id: string,
+    @Request() req,
   ) {
-    return this.newbornAssessmentsService.deleteAssessment(organisationId, id);
+    return this.newbornAssessmentsService.deleteAssessment(req.user, organisationId, id);
   }
 }

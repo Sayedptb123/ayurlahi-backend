@@ -34,10 +34,11 @@ export class VitalsController {
   @ApiQuery({ name: 'branchId', required: false, description: 'Filter by branch UUID' })
   getVitals(
     @Param('organisationId', ParseUUIDPipe) organisationId: string,
+    @Request() req,
     @Query('patientId') patientId?: string,
     @Query('branchId') branchId?: string,
   ) {
-    return this.vitalsService.getVitals(organisationId, patientId, branchId);
+    return this.vitalsService.getVitals(req.user, organisationId, patientId, branchId);
   }
 
   @Post()
@@ -48,6 +49,7 @@ export class VitalsController {
     @Request() req,
   ) {
     return this.vitalsService.createVital(
+      req.user,
       organisationId,
       dto.patientId,
       dto,
@@ -60,7 +62,8 @@ export class VitalsController {
   deleteVital(
     @Param('organisationId', ParseUUIDPipe) organisationId: string,
     @Param('id', ParseUUIDPipe) id: string,
+    @Request() req,
   ) {
-    return this.vitalsService.deleteVital(organisationId, id);
+    return this.vitalsService.deleteVital(req.user, organisationId, id);
   }
 }

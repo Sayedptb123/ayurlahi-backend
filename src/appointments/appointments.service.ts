@@ -34,6 +34,11 @@ export class AppointmentsService {
     private branchVisibilityService: BranchVisibilityService,
   ) { }
 
+  // Branch scoping v2 — scope/Branch_Scoping_Remediation_Plan_2026-09-24.md.
+  private scopeFor(userId: string, userRole: string, organisationId: string | undefined) {
+    return this.branchVisibilityService.scopeFor({ userId, role: userRole, organisationId });
+  }
+
   async create(
     userId: string,
     userRole: string,
@@ -68,6 +73,12 @@ export class AppointmentsService {
     if (patient.organisationId !== clinicId) {
       throw new ForbiddenException('Patient does not belong to this clinic');
     }
+    // Branch scoping G11: the patient must be inside the caller's branch scope.
+    this.branchVisibilityService.assertBranchAccess(
+      await this.scopeFor(userId, userRole, clinicId),
+      patient.branchId,
+      'Patient not found',
+    );
 
     // Verify doctor (staff) exists and belongs to clinic
     const doctor = await this.staffRepository.findOne({
@@ -338,6 +349,12 @@ export class AppointmentsService {
           'You do not have access to this appointment',
         );
       }
+      // Branch scoping G5: 404 outside the caller's branch scope (Q1, Q2).
+      this.branchVisibilityService.assertBranchAccess(
+        await this.scopeFor(userId, userRole, organisationId),
+        appointment.branchId,
+        `Appointment with ID ${id} not found`,
+      );
     } else if (userRole !== 'SUPER_ADMIN' && userRole !== 'SUPPORT') {
       // SEC-7: unknown/missing organisationType must never read an appointment.
       throw new ForbiddenException(
@@ -364,10 +381,13 @@ export class AppointmentsService {
     }
 
     // Access control
+    const scope = await this.scopeFor(userId, userRole, organisationId);
     if (organisationType === 'CLINIC') {
       if (!organisationId || organisationId !== appointment.organisationId) {
         throw new ForbiddenException('You do not have access to this appointment');
       }
+      // Branch scoping G5: same check as reading it.
+      this.branchVisibilityService.assertBranchAccess(scope, appointment.branchId, `Appointment with ID ${id} not found`);
     } else if (userRole !== 'SUPER_ADMIN' && userRole !== 'SUPPORT') {
       // SEC-7: unknown/missing organisationType must never edit an appointment.
       throw new ForbiddenException('You do not have access to this appointment');
@@ -381,6 +401,7 @@ export class AppointmentsService {
       if (!patient || patient.organisationId !== appointment.organisationId) {
         throw new ForbiddenException('Patient does not belong to this clinic');
       }
+      this.branchVisibilityService.assertBranchAccess(scope, patient.branchId, 'Patient not found');
     }
 
     if (updateDto.doctorId && updateDto.doctorId !== appointment.doctorId) {

@@ -32,21 +32,28 @@ const ORG_NAME = 'ZZ Branch Isolation Fixture (internal — do not approve)';
 const SHARED_PHONE = '9000000777';
 const RUN = `${Date.now()}`;
 
-type Role = 'owner' | 'manager' | 'restrictedA' | 'multiAB' | 'unassigned';
-const USERS: Record<Role, { role: string; staffBranches?: ('A' | 'B')[] }> = {
-  owner: { role: 'OWNER' },
-  manager: { role: 'MANAGER' },
-  restrictedA: { role: 'RECEPTIONIST', staffBranches: ['A'] },
-  multiAB: { role: 'NURSE', staffBranches: ['A', 'B'] },
-  unassigned: { role: 'STAFF', staffBranches: [] },
+type Role = 'owner' | 'manager' | 'restrictedA' | 'doctorA' | 'multiAB' | 'unassigned';
+// `n` is a fixed per-user suffix for the (globally unique) fixture phone number.
+const USERS: Record<Role, { n: number; role: string; staffBranches?: ('A' | 'B')[] }> = {
+  owner: { n: 1, role: 'OWNER' },
+  manager: { n: 2, role: 'MANAGER' },
+  restrictedA: { n: 3, role: 'RECEPTIONIST', staffBranches: ['A'] },
+  multiAB: { n: 4, role: 'NURSE', staffBranches: ['A', 'B'] },
+  unassigned: { n: 5, role: 'STAFF', staffBranches: [] },
+  doctorA: { n: 6, role: 'DOCTOR', staffBranches: ['A'] }, // only doctors (+ leadership) may prescribe
 };
+
+type Side = 'A' | 'B';
+type PatientLinked = 'medicalRecord' | 'prescription' | 'labReport' | 'vital' | 'newborn' | 'appointment' | 'document';
 
 interface Fixture {
   orgId: string;
   branchA: string;
   branchB: string;
   userIds: Record<Role, string>;
+  doctorStaffId: string;
   patients: { A: string; B: string; NULL: string };
+  records: Record<PatientLinked, Record<Side, string>>;
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -68,6 +75,13 @@ async function ensureFixture(ds: DataSource): Promise<Fixture> {
     [orgId],
   );
   await ds.query(`UPDATE organisation_settings SET patient_visibility = 'isolated' WHERE organisation_id = $1`, [orgId]);
+  // Newborn assessments sit behind the postnatal capability.
+  await ds.query(
+    `INSERT INTO clinic_capabilities (organisation_id, has_postnatal_care)
+     SELECT $1, true WHERE NOT EXISTS (SELECT 1 FROM clinic_capabilities WHERE organisation_id = $1)`,
+    [orgId],
+  );
+  await ds.query(`UPDATE clinic_capabilities SET has_postnatal_care = true WHERE organisation_id = $1`, [orgId]);
 
   const branch = async (name: string, primary: boolean) => {
     const found = await one(`SELECT id FROM branches WHERE organisation_id = $1 AND name = $2 AND deleted_at IS NULL`, [orgId, name]);
@@ -82,15 +96,14 @@ async function ensureFixture(ds: DataSource): Promise<Fixture> {
   const branchId = { A: branchA, B: branchB };
 
   const userIds = {} as Record<Role, string>;
-  let n = 0;
+  const staffIds = {} as Record<Role, string>;
   for (const [key, spec] of Object.entries(USERS) as [Role, (typeof USERS)[Role]][]) {
-    n++;
     const email = `zz-branch-fixture-${key.toLowerCase()}@example.invalid`;
     let user = await one(`SELECT id FROM users WHERE email = $1 AND deleted_at IS NULL`, [email]);
     if (!user) {
       user = await one(
         `INSERT INTO users (first_name, last_name, email, phone) VALUES ('ZZ Fixture', $1, $2, $3) RETURNING id`,
-        [key, email, `+9900000${String(n).padStart(4, '0')}`],
+        [key, email, `+9900000${String(spec.n).padStart(4, '0')}`],
       );
     }
     userIds[key] = user.id;
@@ -107,6 +120,7 @@ async function ensureFixture(ds: DataSource): Promise<Fixture> {
           [orgId, user.id, key],
         );
       }
+      staffIds[key] = staff.id;
       for (const b of spec.staffBranches) {
         await ds.query(
           `INSERT INTO staff_branch_assignments (organisation_id, staff_id, branch_id, is_active)
@@ -133,7 +147,53 @@ async function ensureFixture(ds: DataSource): Promise<Fixture> {
     NULL: await patient('ZZBF-NULL', null),
   };
 
-  return { orgId, branchA, branchB, userIds, patients };
+  // One patient-linked record of each kind per branch, found again by a marker.
+  const doctorStaffId = staffIds.multiAB;
+  const ownerUserId = userIds.owner;
+  const record = async (findSql: string, insertSql: string, params: any[]) =>
+    ((await one(findSql, [orgId, params[1]])) ?? (await one(insertSql, params))).id as string;
+  const records = {} as Fixture['records'];
+  for (const k of ['medicalRecord', 'prescription', 'labReport', 'vital', 'newborn', 'appointment', 'document'] as PatientLinked[]) records[k] = {} as any;
+  for (const side of ['A', 'B'] as Side[]) {
+    const pid = patients[side];
+    const tag = `ZZBF-${side}`;
+    records.medicalRecord[side] = await record(
+      `SELECT id FROM medical_records WHERE organisation_id = $1 AND chief_complaint = $2 AND deleted_at IS NULL`,
+      `INSERT INTO medical_records (organisation_id, chief_complaint, patient_id, doctor_id, visit_date, diagnosis, treatment)
+       VALUES ($1, $2, $3, $4, '2026-01-01', 'fixture', 'fixture') RETURNING id`,
+      [orgId, tag, pid, doctorStaffId]);
+    records.prescription[side] = await record(
+      `SELECT id FROM prescriptions WHERE organisation_id = $1 AND diagnosis = $2 AND deleted_at IS NULL`,
+      `INSERT INTO prescriptions (organisation_id, diagnosis, patient_id, doctor_id, prescription_date)
+       VALUES ($1, $2, $3, $4, '2026-01-01') RETURNING id`,
+      [orgId, tag, pid, doctorStaffId]);
+    records.labReport[side] = await record(
+      `SELECT id FROM lab_reports WHERE organisation_id = $1 AND report_number = $2 AND deleted_at IS NULL`,
+      `INSERT INTO lab_reports (organisation_id, report_number, patient_id, doctor_id, order_date)
+       VALUES ($1, $2, $3, $4, '2026-01-01') RETURNING id`,
+      [orgId, tag, pid, doctorStaffId]);
+    records.vital[side] = await record(
+      `SELECT id FROM vitals WHERE organisation_id = $1 AND notes = $2 AND deleted_at IS NULL`,
+      `INSERT INTO vitals (organisation_id, notes, patient_id, recorded_by) VALUES ($1, $2, $3, $4) RETURNING id`,
+      [orgId, tag, pid, ownerUserId]);
+    records.newborn[side] = await record(
+      `SELECT id FROM newborn_assessments WHERE "organisationId" = $1 AND notes = $2 AND deleted_at IS NULL`,
+      `INSERT INTO newborn_assessments ("organisationId", notes, "patientId", "assessedBy", "assessmentTime", "assessmentType")
+       VALUES ($1, $2, $3, $4, now(), 'general') RETURNING id`,
+      [orgId, tag, pid, ownerUserId]);
+    records.appointment[side] = await record(
+      `SELECT id FROM appointments WHERE organisation_id = $1 AND notes = $2 AND deleted_at IS NULL`,
+      `INSERT INTO appointments (organisation_id, notes, patient_id, doctor_id, appointment_date, appointment_time, branch_id)
+       VALUES ($1, $2, $3, $4, '2027-01-01', '10:00', $5) RETURNING id`,
+      [orgId, tag, pid, doctorStaffId, branchId[side]]);
+    records.document[side] = await record(
+      `SELECT id FROM documents WHERE organisation_id = $1 AND name = $2 AND deleted_at IS NULL`,
+      `INSERT INTO documents (organisation_id, name, related_type, related_id, file_name, file_path)
+       VALUES ($1, $2, 'patient', $3, 'fixture.pdf', 'fixtures/fixture.pdf') RETURNING id`,
+      [orgId, tag, pid]);
+  }
+
+  return { orgId, branchA, branchB, userIds, doctorStaffId, patients, records };
 }
 
 // Every request crosses to the staging DB (Mumbai); the 5 s default is too tight.
@@ -145,6 +205,7 @@ describe('Branch isolation contract (real DB)', () => {
   let fx: Fixture;
   const tokens = {} as Record<Role, string>;
   const createdPatientIds: string[] = [];
+  const createdLinked: { table: string; id: string }[] = [];
 
   const api = (role: Role) => {
     const auth = { Authorization: `Bearer ${tokens[role]}` };
@@ -190,6 +251,9 @@ describe('Branch isolation contract (real DB)', () => {
   }, 60000);
 
   afterAll(async () => {
+    for (const { table, id } of createdLinked) {
+      await ds.query(`UPDATE ${table} SET deleted_at = now() WHERE id = $1 AND deleted_at IS NULL`, [id]);
+    }
     if (createdPatientIds.length) {
       await ds.query(`UPDATE patients SET deleted_at = now() WHERE id = ANY($1) AND deleted_at IS NULL`, [createdPatientIds]);
     }
@@ -259,10 +323,10 @@ describe('Branch isolation contract (real DB)', () => {
       expect(ids(await api('restrictedA').get(`/patients?limit=100&branchId=${fx.branchB}`))).not.toContain(fx.patients.B);
       expect(ids(await api('restrictedA').get('/patients?limit=100'))).toContain(fx.patients.A);
     });
-    test.failing('[Q1, Phase 2] restricted list hides NULL-branch patients', async () => {
+    it('[Q1] restricted list hides NULL-branch patients', async () => {
       expect(ids(await api('restrictedA').get('/patients?limit=100'))).not.toContain(fx.patients.NULL);
     });
-    test.failing('[Q1, Phase 2] unassigned user sees no patients at all', async () => {
+    it('[Q1] unassigned user sees no patients at all', async () => {
       expect(ids(await api('unassigned').get('/patients?limit=100'))).toEqual([]);
     });
     it('multi-branch user sees both branches; switcher narrows', async () => {
@@ -283,20 +347,20 @@ describe('Branch isolation contract (real DB)', () => {
       const res = await api('restrictedA').get(`/patients/${fx.patients.B}`);
       expect(res.status).not.toBe(200);
     });
-    test.failing('[Q2, Phase 2] …and gets 404, not 403', async () => {
+    it('[Q2] …and gets 404, not 403', async () => {
       expect((await api('restrictedA').get(`/patients/${fx.patients.B}`)).status).toBe(404);
     });
 
     // Sends the patient's own current lastName, so even a wrongly-accepted
     // update changes nothing.
-    test.failing("[G4, Phase 2] restricted user cannot update another branch's patient", async () => {
+    it("[G4] restricted user cannot update another branch's patient", async () => {
       const res = await api('restrictedA').patch(`/patients/${fx.patients.B}`, { lastName: 'ZZBF-B' });
       expect(res.status).toBe(404);
     });
 
-    it("restricted user cannot delete another branch's patient (row survives)", async () => {
+    it("restricted user cannot delete another branch's patient (404, row survives)", async () => {
       const res = await api('restrictedA').delete(`/patients/${fx.patients.B}`);
-      expect(res.status).not.toBe(200);
+      expect(res.status).toBe(404);
       const [row] = await ds.query(`SELECT deleted_at FROM patients WHERE id = $1`, [fx.patients.B]);
       expect(row.deleted_at).toBeNull();
     });
@@ -311,6 +375,13 @@ describe('Branch isolation contract (real DB)', () => {
       if (res.body?.id) createdPatientIds.push(res.body.id);
       expect(res.body?.branchId).toBe(fx.branchA);
     });
+    it('restricted user can move a patient only into a branch they can use', async () => {
+      const res = await api('restrictedA').patch(`/patients/${fx.patients.A}`, { branchId: fx.branchB });
+      expect(res.status).toBe(403);
+      const [row] = await ds.query(`SELECT branch_id FROM patients WHERE id = $1`, [fx.patients.A]);
+      expect(row.branch_id).toBe(fx.branchA);
+    });
+
     it('restricted user can create a patient in their own branch', async () => {
       const res = await api('restrictedA').post('/patients', { firstName: 'ZZOwnBranch', lastName: RUN, branchId: fx.branchA });
       if (res.body?.id) createdPatientIds.push(res.body.id);
@@ -321,8 +392,121 @@ describe('Branch isolation contract (real DB)', () => {
     it('possible-matches never reveals another branch', async () => {
       expect(ids(await api('restrictedA').get(`/patients/possible-matches?phone=${SHARED_PHONE}`))).not.toContain(fx.patients.B);
     });
-    test.failing('[Q1, Phase 2] possible-matches hides NULL-branch patients from restricted users', async () => {
+    it('[Q1] possible-matches hides NULL-branch patients from restricted users', async () => {
       expect(ids(await api('restrictedA').get(`/patients/possible-matches?phone=${SHARED_PHONE}`))).not.toContain(fx.patients.NULL);
+    });
+  });
+  // ── Patient-linked records (Phase 2: G1, G5, G11, G13) ────────────────────
+  const today = '2026-09-24';
+  const runDate = () => new Date(Date.UTC(2028, 0, 1) + (Number(RUN) % 3000) * 86400000).toISOString().slice(0, 10);
+  const LINKED: {
+    key: PatientLinked;
+    base: () => string;
+    listKey?: 'data' | 'array';
+    detail: boolean;
+    actor?: Role; // branch-A-restricted caller allowed to write this kind
+    patch?: (side: Side) => any;
+    create: (patientId: string) => any;
+  }[] = [
+    { key: 'medicalRecord', base: () => '/medical-records', detail: true,
+      patch: (side) => ({ chiefComplaint: `ZZBF-${side}` }),
+      create: (patientId) => ({ patientId, doctorId: fx.doctorStaffId, visitDate: today, chiefComplaint: `ZZRun-${RUN}`, diagnosis: 'x', treatment: 'x' }) },
+    { key: 'prescription', base: () => '/prescriptions', detail: true, actor: 'doctorA',
+      patch: (side) => ({ diagnosis: `ZZBF-${side}` }),
+      create: (patientId) => ({ patientId, doctorId: fx.doctorStaffId, prescriptionDate: today, diagnosis: `ZZRun-${RUN}`, items: [{ medicineName: 'x' }] }) },
+    { key: 'labReport', base: () => '/lab-reports', detail: true,
+      patch: (side) => ({ reportNumber: `ZZBF-${side}` }),
+      create: (patientId) => ({ patientId, doctorId: fx.doctorStaffId, orderDate: today, reportNumber: `ZZRun-${RUN}-${patientId.slice(0, 4)}`, tests: [{ testName: 'x' }] }) },
+    { key: 'appointment', base: () => '/appointments', detail: true,
+      patch: (side) => ({ notes: `ZZBF-${side}` }),
+      // A fresh slot per run so a doctor double-booking check can't interfere.
+      create: (patientId) => ({ patientId, doctorId: fx.doctorStaffId, appointmentDate: runDate(), appointmentTime: '11:00' }) },
+    { key: 'vital', base: () => `/organisations/${fx.orgId}/vitals`, detail: false,
+      create: (patientId) => ({ patientId, recordedAt: new Date().toISOString(), notes: `ZZRun-${RUN}` }) },
+    { key: 'newborn', base: () => `/organisations/${fx.orgId}/newborn-assessments`, detail: false,
+      create: (patientId) => ({ patientId, assessmentTime: new Date().toISOString(), assessmentType: 'general', notes: `ZZRun-${RUN}` }) },
+  ];
+  const TABLE: Record<string, string> = {
+    medicalRecord: 'medical_records', prescription: 'prescriptions', labReport: 'lab_reports',
+    appointment: 'appointments', vital: 'vitals', newborn: 'newborn_assessments', document: 'documents',
+  };
+
+  for (const r of LINKED) {
+    describe(`${r.key} (patient-linked)`, () => {
+      const rec = (side: Side) => fx.records[r.key][side];
+
+      it('restricted list: own branch only, also when branchId / patientId point at Branch B', async () => {
+        const own = ids(await api(r.actor ?? 'restrictedA').get(`${r.base()}?limit=100`));
+        expect(own).toContain(rec('A'));
+        expect(own).not.toContain(rec('B'));
+        expect(ids(await api(r.actor ?? 'restrictedA').get(`${r.base()}?limit=100&branchId=${fx.branchB}`))).toEqual([]);
+        expect(ids(await api(r.actor ?? 'restrictedA').get(`${r.base()}?limit=100&patientId=${fx.patients.B}`))).toEqual([]);
+      });
+      it('owner and multi-branch user see both branches', async () => {
+        expect(ids(await api('owner').get(`${r.base()}?limit=100`))).toEqual(expect.arrayContaining([rec('A'), rec('B')]));
+        expect(ids(await api('multiAB').get(`${r.base()}?limit=100`))).toEqual(expect.arrayContaining([rec('A'), rec('B')]));
+      });
+      it('unassigned user sees none of them', async () => {
+        const list = ids(await api('unassigned').get(`${r.base()}?limit=100`));
+        expect(list).not.toContain(rec('A'));
+        expect(list).not.toContain(rec('B'));
+      });
+      if (r.detail) {
+        it('restricted user: Branch B record by id → 404 (read, update, delete); row survives', async () => {
+          const who = r.actor ?? 'restrictedA';
+          expect((await api(who).get(`${r.base()}/${rec('B')}`)).status).toBe(404);
+          expect((await api(who).patch(`${r.base()}/${rec('B')}`, r.patch!('B'))).status).toBe(404);
+          expect((await api(who).delete(`${r.base()}/${rec('B')}`)).status).toBe(404);
+          const [row] = await ds.query(`SELECT deleted_at FROM ${TABLE[r.key]} WHERE id = $1`, [rec('B')]);
+          expect(row.deleted_at).toBeNull();
+        });
+        it('restricted user can read their own branch record', async () => {
+          expect((await api(r.actor ?? 'restrictedA').get(`${r.base()}/${rec('A')}`)).status).toBe(200);
+        });
+      } else {
+        it('restricted user: delete Branch B record by id → 404; row survives', async () => {
+          expect((await api('restrictedA').delete(`${r.base()}/${rec('B')}`)).status).toBe(404);
+          const [row] = await ds.query(`SELECT deleted_at FROM ${TABLE[r.key]} WHERE id = $1`, [rec('B')]);
+          expect(row.deleted_at).toBeNull();
+        });
+      }
+      it("[G11] restricted user cannot create against Branch B's (or a NULL-branch) patient", async () => {
+        expect((await api(r.actor ?? 'restrictedA').post(r.base(), r.create(fx.patients.B))).status).toBe(404);
+        expect((await api(r.actor ?? 'restrictedA').post(r.base(), r.create(fx.patients.NULL))).status).toBe(404);
+      });
+      it('restricted user can create against their own branch patient', async () => {
+        const res = await api(r.actor ?? 'restrictedA').post(r.base(), r.create(fx.patients.A));
+        if (res.body?.id) createdLinked.push({ table: TABLE[r.key], id: res.body.id });
+        expect(res.status).toBe(201);
+      });
+    });
+  }
+
+  describe('patient documents (G13)', () => {
+    const base = () => `/organisations/${fx.orgId}/documents`;
+    const doc = (side: Side) => fx.records.document[side];
+    it("restricted user: list excludes Branch B's patient documents", async () => {
+      const list = ids(await api('restrictedA').get(`${base()}?limit=100`));
+      expect(list).toContain(doc('A'));
+      expect(list).not.toContain(doc('B'));
+    });
+    it('restricted user: Branch B document by id / by patient → 404; delete refused', async () => {
+      expect((await api('restrictedA').get(`${base()}/${doc('B')}`)).status).toBe(404);
+      expect((await api('restrictedA').get(`${base()}/related/patient/${fx.patients.B}`)).status).toBe(404);
+      expect((await api('restrictedA').patch(`${base()}/${doc('B')}`, { name: 'ZZBF-B' })).status).toBe(404);
+      expect((await api('restrictedA').delete(`${base()}/${doc('B')}`)).status).toBe(404);
+      const [row] = await ds.query(`SELECT deleted_at FROM documents WHERE id = $1`, [doc('B')]);
+      expect(row.deleted_at).toBeNull();
+    });
+    it("restricted user cannot attach a document to Branch B's patient", async () => {
+      const res = await api('restrictedA').post(base(), {
+        relatedType: 'patient', relatedId: fx.patients.B, name: `ZZRun-${RUN}`, fileName: 'x.pdf', filePath: 'x/x.pdf',
+      });
+      if (res.body?.id) createdLinked.push({ table: 'documents', id: res.body.id });
+      expect(res.status).toBe(404);
+    });
+    it('owner sees both', async () => {
+      expect(ids(await api('owner').get(`${base()}?limit=100`))).toEqual(expect.arrayContaining([doc('A'), doc('B')]));
     });
   });
 });

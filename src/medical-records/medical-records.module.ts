@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { BranchVisibilityModule } from '../branch-visibility/branch-visibility.module';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { MedicalRecordsController } from './medical-records.controller';
 import { MedicalRecordsService } from './medical-records.service';
@@ -10,6 +11,7 @@ import { Appointment } from '../appointments/entities/appointment.entity';
 @Module({
   imports: [
     TypeOrmModule.forFeature([MedicalRecord, Patient, Staff, Appointment]),
+    BranchVisibilityModule,
   ],
   controllers: [MedicalRecordsController],
   providers: [MedicalRecordsService],

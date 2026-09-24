@@ -13,6 +13,7 @@ import { Patient } from '../patients/entities/patient.entity';
 import { Staff } from '../staff/entities/staff.entity';
 import { Appointment } from '../appointments/entities/appointment.entity';
 import { CreateLabReportDto } from './dto/create-lab-report.dto';
+import { BranchVisibilityService } from '../branch-visibility/branch-visibility.service';
 import { UpdateLabReportDto } from './dto/update-lab-report.dto';
 import { GetLabReportsDto } from './dto/get-lab-reports.dto';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -31,7 +32,31 @@ export class LabReportsService {
     @InjectRepository(Appointment)
     private appointmentsRepository: Repository<Appointment>,
     private notificationsService: NotificationsService,
+    private branchVisibilityService: BranchVisibilityService,
   ) {}
+
+  // A lab report belongs to its patient's branch (branch scoping G1/G11 —
+  // scope/Branch_Scoping_Remediation_Plan_2026-09-24.md).
+  private scopeFor(userId: string, userRole: string, organisationId: string | undefined) {
+    return this.branchVisibilityService.scopeFor({ userId, role: userRole, organisationId });
+  }
+
+  // Edits act on the record's patient: that patient (and any new patient the
+  // record is moved to) must be inside the caller's branch scope; 404 otherwise.
+  private async assertRecordPatientAccess(
+    userId: string,
+    userRole: string,
+    organisationId: string,
+    patientId: string,
+    notFoundMessage: string,
+  ) {
+    const scope = await this.scopeFor(userId, userRole, organisationId);
+    try {
+      await this.branchVisibilityService.assertPatientAccess(scope, organisationId, patientId);
+    } catch {
+      throw new NotFoundException(notFoundMessage);
+    }
+  }
 
   async create(
     userId: string,
@@ -74,6 +99,11 @@ export class LabReportsService {
     if (patient.organisationId !== clinicId) {
       throw new ForbiddenException('Patient does not belong to this clinic');
     }
+    this.branchVisibilityService.assertBranchAccess(
+      await this.scopeFor(userId, userRole, clinicId),
+      patient.branchId,
+      'Patient not found',
+    );
 
     const doctor = await this.staffRepository.findOne({
       where: { id: createDto.doctorId },
@@ -175,6 +205,7 @@ export class LabReportsService {
       .leftJoinAndSelect('labReport.appointment', 'appointment')
       .leftJoinAndSelect('labReport.tests', 'tests');
 
+    const scope = await this.scopeFor(userId, userRole, organisationId);
     if (organisationType === 'CLINIC') {
       if (!organisationId) {
         return { data: [], total: 0, page, limit, totalPages: 0 };
@@ -182,6 +213,7 @@ export class LabReportsService {
       queryBuilder.where('labReport.organisationId = :organisationId', {
         organisationId,
       });
+      this.branchVisibilityService.applyPatientBranchScope(queryBuilder, 'patient', scope);
     }
 
     queryBuilder.andWhere('labReport.deletedAt IS NULL');
@@ -204,9 +236,7 @@ export class LabReportsService {
       queryBuilder.andWhere('labReport.status = :status', { status });
     }
 
-    if (branchId) {
-      queryBuilder.andWhere('patient.branchId = :branchId', { branchId });
-    }
+    this.branchVisibilityService.narrowToSelectedBranch(queryBuilder, 'patient.branchId', branchId, scope);
 
     if (startDate && endDate) {
       queryBuilder.andWhere(
@@ -252,6 +282,11 @@ export class LabReportsService {
           'You do not have access to this lab report',
         );
       }
+      this.branchVisibilityService.assertBranchAccess(
+        await this.scopeFor(userId, userRole, organisationId),
+        labReport.patient?.branchId,
+        `Lab report with ID ${id} not found`,
+      );
     } else if (userRole !== 'SUPER_ADMIN' && userRole !== 'SUPPORT') {
       // SEC-7: unknown/missing organisationType must never read a lab report.
       throw new ForbiddenException(
@@ -282,6 +317,7 @@ export class LabReportsService {
           'You do not have access to this lab report',
         );
       }
+      await this.assertRecordPatientAccess(userId, userRole, organisationId, labReport.patientId, `Lab report with ID ${id} not found`);
     } else if (userRole !== 'SUPER_ADMIN' && userRole !== 'SUPPORT') {
       // SEC-7: unknown/missing organisationType must never edit a lab report.
       throw new ForbiddenException(
@@ -313,6 +349,7 @@ export class LabReportsService {
       if (!patient || patient.organisationId !== labReport.organisationId) {
         throw new ForbiddenException('Patient does not belong to this clinic');
       }
+      await this.assertRecordPatientAccess(userId, userRole, labReport.organisationId, patient.id, 'Patient not found');
     }
 
     if (updateDto.doctorId && updateDto.doctorId !== labReport.doctorId) {

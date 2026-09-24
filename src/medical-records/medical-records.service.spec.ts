@@ -1,3 +1,4 @@
+import { unrestrictedBranchVisibilityMock } from '../branch-visibility/testing/branch-visibility.mock';
 import { ForbiddenException } from '@nestjs/common';
 import { MedicalRecordsService } from './medical-records.service';
 
@@ -23,6 +24,7 @@ const makeService = () => {
     {} as any, // patientsRepository
     {} as any, // staffRepository
     {} as any, // appointmentsRepository
+    unrestrictedBranchVisibilityMock(),
   );
   return { service, medicalRecordsRepository };
 };

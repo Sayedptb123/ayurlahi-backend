@@ -217,6 +217,12 @@ export class PatientBillingService {
       if (patient.organisationId !== clinicId) {
         throw new ForbiddenException('Patient does not belong to this clinic');
       }
+      // Branch scoping G11: the patient must be inside the caller's branch scope.
+      this.branchVisibilityService.assertBranchAccess(
+        await this.branchVisibilityService.scopeFor({ userId, role: userRole, organisationId: clinicId }),
+        patient.branchId,
+        'Patient not found',
+      );
     }
 
     if (createDto.appointmentId) {

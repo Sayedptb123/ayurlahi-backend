@@ -37,6 +37,8 @@ const nextParam = (prefix: string) => `${prefix}_${++scopeParamSeq}`;
 // Without this, resolveVisibleBranchIds would fail-closed on the missing staff
 // row and lock the org's own owner out of their org's data.
 const ORG_WIDE_ROLES = new Set(['OWNER', 'ADMIN', 'MANAGER']);
+// Ayurlahi platform roles act across organisations and are never branch-scoped.
+const PLATFORM_ROLES = new Set(['SUPER_ADMIN', 'SUPPORT']);
 
 // ADR-004 D9/D2 — the single place that answers "which branches can this user
 // see patient/booking/bill data for". Every query that needs branch-level
@@ -66,6 +68,7 @@ export class BranchVisibilityService {
   async scopeFor(user: BranchScopeUser): Promise<BranchScope> {
     const { userId, role, organisationId } = user;
     if (!organisationId) return { kind: 'all' };
+    if (role && PLATFORM_ROLES.has(role)) return { kind: 'all' };
     const settings = await this.organisationSettingsService.getOrCreate(organisationId);
     if (settings.patientVisibility !== PatientVisibility.ISOLATED) return { kind: 'all' };
     if (role && ORG_WIDE_ROLES.has(role)) return { kind: 'all' };
@@ -82,6 +85,17 @@ export class BranchVisibilityService {
       select: ['id'],
     });
     return { kind: 'branches', ids: live.map((b) => b.id) };
+  }
+
+  // For routes that take the organisation from the URL
+  // (organisations/:organisationId/...): the JWT role only describes the
+  // caller's current organisation, so a different URL organisation is refused
+  // rather than scoped with the wrong role. Platform roles pass.
+  async scopeForOrganisation(user: BranchScopeUser, organisationId: string): Promise<BranchScope> {
+    if (user.organisationId !== organisationId && !(user.role && PLATFORM_ROLES.has(user.role))) {
+      throw new ForbiddenException('Not available for this organisation');
+    }
+    return this.scopeFor({ ...user, organisationId });
   }
 
   // Restrict a query to the scope. For a restricted user NULL-branch rows are

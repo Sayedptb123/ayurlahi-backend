@@ -29,6 +29,7 @@ export class DocumentsController {
     @Request() req,
   ) {
     return this.documentsService.create(
+      req.user,
       organisationId,
       createDto,
       req.user?.userId,
@@ -39,8 +40,9 @@ export class DocumentsController {
   findAll(
     @Param('organisationId') organisationId: string,
     @Query() query: GetDocumentsDto,
+    @Request() req,
   ) {
-    return this.documentsService.findAll(organisationId, query);
+    return this.documentsService.findAll(req.user, organisationId, query);
   }
 
   @Get('related/:relatedType/:relatedId')
@@ -48,8 +50,10 @@ export class DocumentsController {
     @Param('organisationId') organisationId: string,
     @Param('relatedType') relatedType: string,
     @Param('relatedId') relatedId: string,
+    @Request() req,
   ) {
     return this.documentsService.getByRelated(
+      req.user,
       organisationId,
       relatedType,
       relatedId,
@@ -60,8 +64,9 @@ export class DocumentsController {
   findOne(
     @Param('organisationId') organisationId: string,
     @Param('id') id: string,
+    @Request() req,
   ) {
-    return this.documentsService.findOne(id, organisationId);
+    return this.documentsService.findOne(req.user, id, organisationId);
   }
 
   @Patch(':id')
@@ -72,6 +77,7 @@ export class DocumentsController {
     @Request() req,
   ) {
     return this.documentsService.update(
+      req.user,
       id,
       organisationId,
       updateDto,
@@ -86,6 +92,7 @@ export class DocumentsController {
     @Request() req,
   ) {
     return this.documentsService.verifyDocument(
+      req.user,
       id,
       organisationId,
       req.user?.userId,
@@ -96,8 +103,9 @@ export class DocumentsController {
   remove(
     @Param('organisationId') organisationId: string,
     @Param('id') id: string,
+    @Request() req,
   ) {
-    return this.documentsService.remove(id, organisationId);
+    return this.documentsService.remove(req.user, id, organisationId);
   }
 
   @Post('check-expired')

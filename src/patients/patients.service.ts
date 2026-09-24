@@ -12,7 +12,7 @@ import { Branch } from '../branches/entities/branch.entity';
 import { CreatePatientDto } from './dto/create-patient.dto';
 import { UpdatePatientDto } from './dto/update-patient.dto';
 import { GetPatientsDto } from './dto/get-patients.dto';
-import { BranchVisibilityService } from '../branch-visibility/branch-visibility.service';
+import { BranchScope, BranchVisibilityService } from '../branch-visibility/branch-visibility.service';
 import { AuditService } from '../audit/audit.service';
 import type { OrgType } from '../audit/audit.types';
 import type { AuthAuditContext } from '../auth/auth.service';
@@ -168,35 +168,22 @@ export class PatientsService {
   // Organisation filter + ADR-004 D9/Phase 4 branch-level visibility. Shared
   // by the list, the possible-match lookup and promote-by-id so all three
   // agree on exactly which patients a caller can see.
+  // Branch scoping v2 (scope/Branch_Scoping_Remediation_Plan_2026-09-24.md):
+  // organisation filter + the shared branch scope. Restricted users no longer
+  // see NULL-branch patients in an organisation that has branches (Q1).
+  // Returns the scope so callers can apply the switcher on top of it.
   private async applyVisibility(
     queryBuilder: SelectQueryBuilder<Patient>,
     userId: string | undefined,
     organisationId: string,
     userRole: string | undefined,
-  ): Promise<void> {
+  ): Promise<BranchScope> {
     queryBuilder.where('patient.organisationId = :organisationId', {
       organisationId,
     });
-
-    // Branch-level visibility, additive on top of the organisation filter
-    // above, never a replacement for it.
-    const visibleBranchIds = await this.branchVisibilityService.resolveVisibleBranchIds(
-      userId,
-      organisationId,
-      userRole,
-    );
-    if (visibleBranchIds !== null) {
-      if (visibleBranchIds.length > 0) {
-        queryBuilder.andWhere(
-          '(patient.branchId IS NULL OR patient.branchId IN (:...visibleBranchIds))',
-          { visibleBranchIds },
-        );
-      } else {
-        // No active branch assignment at all — only organisation-wide
-        // (NULL branch) records are visible. Fail closed, not open.
-        queryBuilder.andWhere('patient.branchId IS NULL');
-      }
-    }
+    const scope = await this.branchVisibilityService.scopeFor({ userId, role: userRole, organisationId });
+    this.branchVisibilityService.applyBranchScope(queryBuilder, 'patient.branchId', scope);
+    return scope;
   }
 
   // Patients the caller can see that share this exact phone number. Phone is
@@ -238,10 +225,8 @@ export class PatientsService {
         'branch.id',
         'branch.name',
       ]);
-    await this.applyVisibility(queryBuilder, userId, organisationId, userRole);
-    if (branchId) {
-      queryBuilder.andWhere('patient.branchId = :branchId', { branchId });
-    }
+    const scope = await this.applyVisibility(queryBuilder, userId, organisationId, userRole);
+    this.branchVisibilityService.narrowToSelectedBranch(queryBuilder, 'patient.branchId', branchId, scope);
     queryBuilder
       .andWhere('patient.phone = :phone', { phone: trimmed })
       .orderBy('patient.createdAt', 'DESC')
@@ -291,7 +276,7 @@ export class PatientsService {
       if (!organisationId) {
         return { data: [], total: 0, page, limit, totalPages: 0 };
       }
-      await this.applyVisibility(queryBuilder, userId, organisationId, userRole);
+      const scope = await this.applyVisibility(queryBuilder, userId, organisationId, userRole);
 
       // Branch switcher (personal view filter) — ANDed on top of the visibility
       // filter above, so it can only narrow further, never broaden it. Strict
@@ -299,9 +284,7 @@ export class PatientsService {
       // specific branch means only that branch's own records, not org-wide
       // ones too. (The visibility filter above still uses OR-NULL — that's
       // access control, not a view preference, and stays unchanged.)
-      if (branchId) {
-        queryBuilder.andWhere('patient.branchId = :selectedBranchId', { selectedBranchId: branchId });
-      }
+      this.branchVisibilityService.narrowToSelectedBranch(queryBuilder, 'patient.branchId', branchId, scope);
     }
 
     if (search) {
@@ -358,18 +341,14 @@ export class PatientsService {
         throw new ForbiddenException('You do not have access to this patient');
       }
 
-      // ADR-004 D9/Phase 4 — branch-level visibility, additive on top of the
-      // organisation check above.
-      if (patient.branchId) {
-        const visibleBranchIds = await this.branchVisibilityService.resolveVisibleBranchIds(
-          userId,
-          organisationId,
-          userRole,
-        );
-        if (visibleBranchIds !== null && !visibleBranchIds.includes(patient.branchId)) {
-          throw new ForbiddenException('You do not have access to this patient');
-        }
-      }
+      // Branch scope, additive on top of the organisation check above. 404,
+      // not 403, so ids can't be probed across branches (Q2); NULL-branch
+      // patients are outside a restricted scope (Q1).
+      this.branchVisibilityService.assertBranchAccess(
+        await this.branchVisibilityService.scopeFor({ userId, role: userRole, organisationId }),
+        patient.branchId,
+        `Patient with ID ${id} not found`,
+      );
     }
 
     // Placed after authorization succeeds -- a denied lookup isn't a
@@ -407,10 +386,13 @@ export class PatientsService {
     if (!patient) {
       throw new NotFoundException(`Patient with ID ${id} not found`);
     }
+    // Branch scope for the edit itself (G4) and for any branch move below.
+    const scope = await this.branchVisibilityService.scopeFor({ userId, role: userRole, organisationId });
     if (organisationType !== 'AYURLAHI_TEAM') {
       if (!organisationId || organisationId !== patient.organisationId) {
         throw new ForbiddenException('You do not have access to this patient');
       }
+      this.branchVisibilityService.assertBranchAccess(scope, patient.branchId, `Patient with ID ${id} not found`);
     }
 
     // Check patientCode uniqueness if patientId (code) is being updated
@@ -461,14 +443,15 @@ export class PatientsService {
       patient.fileNumber = updateDto.fileNumber;
     }
     if (updateDto.branchId !== undefined && updateDto.branchId !== patient.branchId) {
-      const branch = await this.branchesRepository.findOne({
-        where: { id: updateDto.branchId, organisationId: patient.organisationId },
-      });
-      if (!branch) {
-        throw new NotFoundException('Branch not found in this organisation');
-      }
-      track('branchId', patient.branchId, updateDto.branchId);
-      patient.branchId = updateDto.branchId;
+      // Moving a patient: the target must be a live, approved branch the
+      // caller may use; never NULL in an organisation that has branches.
+      const targetBranchId = await this.branchVisibilityService.resolveWriteBranch(
+        scope,
+        patient.organisationId,
+        { requested: updateDto.branchId },
+      );
+      track('branchId', patient.branchId, targetBranchId);
+      patient.branchId = targetBranchId;
     }
     if (updateDto.dateOfBirth !== undefined) {
       const newDateOfBirth = updateDto.dateOfBirth ? new Date(updateDto.dateOfBirth) : null;

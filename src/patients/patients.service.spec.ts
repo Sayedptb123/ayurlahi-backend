@@ -56,7 +56,15 @@ const makeService = (overrides: {
     },
   };
   const branchesRepository: any = { findOne: jest.fn(() => Promise.resolve({ id: 'branch-2' })) };
-  const branchVisibilityService: any = { resolveVisibleBranchIds: jest.fn(() => Promise.resolve(null)) };
+  // Branch scoping v2 surface; 'all' scope by default (org-wide caller).
+  const branchVisibilityService: any = {
+    resolveVisibleBranchIds: jest.fn(() => Promise.resolve(null)),
+    scopeFor: jest.fn(() => Promise.resolve({ kind: 'all' })),
+    applyBranchScope: jest.fn(),
+    narrowToSelectedBranch: jest.fn(),
+    assertBranchAccess: jest.fn(),
+    resolveWriteBranch: jest.fn((_scope: any, _org: any, opts: any) => Promise.resolve(opts.requested)),
+  };
   const auditService: any = { record: overrides.auditRecord ?? jest.fn(() => Promise.resolve()) };
 
   const service = new PatientsService(
@@ -188,16 +196,14 @@ describe('PatientsService — shared phone numbers', () => {
       getMany: jest.fn(() => Promise.resolve([{ id: 'p-1' }])),
     };
     patientsRepository.createQueryBuilder.mockReturnValue(qb);
-    branchVisibilityService.resolveVisibleBranchIds.mockResolvedValue(['branch-b']);
+    const scope = { kind: 'branches', ids: ['branch-b'] };
+    branchVisibilityService.scopeFor.mockResolvedValue(scope);
 
     await expect(
       service.findVisibleByPhone('u-1', 'RECEPTIONIST', 'org-1', 'CLINIC', ' 6238154525 '),
     ).resolves.toEqual([{ id: 'p-1' }]);
     expect(qb.where).toHaveBeenCalledWith('patient.organisationId = :organisationId', { organisationId: 'org-1' });
-    expect(qb.andWhere).toHaveBeenCalledWith(
-      '(patient.branchId IS NULL OR patient.branchId IN (:...visibleBranchIds))',
-      { visibleBranchIds: ['branch-b'] },
-    );
+    expect(branchVisibilityService.applyBranchScope).toHaveBeenCalledWith(qb, 'patient.branchId', scope);
     expect(qb.andWhere).toHaveBeenCalledWith('patient.phone = :phone', { phone: '6238154525' });
   });
 });

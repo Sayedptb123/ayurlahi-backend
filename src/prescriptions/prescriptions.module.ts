@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { BranchVisibilityModule } from '../branch-visibility/branch-visibility.module';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { PrescriptionsController } from './prescriptions.controller';
 import { PrescriptionsService } from './prescriptions.service';
@@ -18,6 +19,7 @@ import { AuditModule } from '../audit/audit.module';
       Staff,
       Appointment,
     ]),
+    BranchVisibilityModule,
     AuditModule,
   ],
   controllers: [PrescriptionsController],

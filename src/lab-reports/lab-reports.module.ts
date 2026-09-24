@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { BranchVisibilityModule } from '../branch-visibility/branch-visibility.module';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { LabReportsController } from './lab-reports.controller';
 import { LabReportsService } from './lab-reports.service';
@@ -12,6 +13,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
 @Module({
   imports: [
     TypeOrmModule.forFeature([LabReport, LabTest, Patient, Staff, Appointment]),
+    BranchVisibilityModule,
     NotificationsModule,
   ],
   controllers: [LabReportsController],

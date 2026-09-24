@@ -15,6 +15,7 @@ import { Patient } from '../patients/entities/patient.entity';
 import { Staff } from '../staff/entities/staff.entity';
 import { Appointment } from '../appointments/entities/appointment.entity';
 import { CreatePrescriptionDto } from './dto/create-prescription.dto';
+import { BranchVisibilityService } from '../branch-visibility/branch-visibility.service';
 import { UpdatePrescriptionDto } from './dto/update-prescription.dto';
 import { GetPrescriptionsDto } from './dto/get-prescriptions.dto';
 import { AuditService } from '../audit/audit.service';
@@ -40,7 +41,31 @@ export class PrescriptionsService {
     @InjectRepository(Appointment)
     private appointmentsRepository: Repository<Appointment>,
     private auditService: AuditService,
+    private branchVisibilityService: BranchVisibilityService,
   ) {}
+
+  // A prescription belongs to its patient's branch (branch scoping G1/G11 —
+  // scope/Branch_Scoping_Remediation_Plan_2026-09-24.md).
+  private scopeFor(userId: string, userRole: string, organisationId: string | undefined) {
+    return this.branchVisibilityService.scopeFor({ userId, role: userRole, organisationId });
+  }
+
+  // Edits act on the record's patient: that patient (and any new patient the
+  // record is moved to) must be inside the caller's branch scope; 404 otherwise.
+  private async assertRecordPatientAccess(
+    userId: string,
+    userRole: string,
+    organisationId: string,
+    patientId: string,
+    notFoundMessage: string,
+  ) {
+    const scope = await this.scopeFor(userId, userRole, organisationId);
+    try {
+      await this.branchVisibilityService.assertPatientAccess(scope, organisationId, patientId);
+    } catch {
+      throw new NotFoundException(notFoundMessage);
+    }
+  }
 
   async create(
     userId: string,
@@ -79,6 +104,11 @@ export class PrescriptionsService {
     if (patient.organisationId !== clinicId) {
       throw new ForbiddenException('Patient does not belong to this clinic');
     }
+    this.branchVisibilityService.assertBranchAccess(
+      await this.scopeFor(userId, userRole, clinicId),
+      patient.branchId,
+      'Patient not found',
+    );
 
     const doctor = await this.staffRepository.findOne({
       where: { id: createDto.doctorId },
@@ -190,6 +220,7 @@ export class PrescriptionsService {
       .leftJoinAndSelect('prescription.appointment', 'appointment')
       .leftJoinAndSelect('prescription.items', 'items');
 
+    const scope = await this.scopeFor(userId, userRole, organisationId);
     if (organisationType === 'CLINIC') {
       if (!organisationId) {
         return { data: [], total: 0, page, limit, totalPages: 0 };
@@ -197,6 +228,7 @@ export class PrescriptionsService {
       queryBuilder.where('prescription.organisationId = :organisationId', {
         organisationId,
       });
+      this.branchVisibilityService.applyPatientBranchScope(queryBuilder, 'patient', scope);
     }
 
     queryBuilder.andWhere('prescription.deletedAt IS NULL');
@@ -219,9 +251,7 @@ export class PrescriptionsService {
       queryBuilder.andWhere('prescription.status = :status', { status });
     }
 
-    if (branchId) {
-      queryBuilder.andWhere('patient.branchId = :branchId', { branchId });
-    }
+    this.branchVisibilityService.narrowToSelectedBranch(queryBuilder, 'patient.branchId', branchId, scope);
 
     if (startDate && endDate) {
       queryBuilder.andWhere(
@@ -272,6 +302,11 @@ export class PrescriptionsService {
           'You do not have access to this prescription',
         );
       }
+      this.branchVisibilityService.assertBranchAccess(
+        await this.scopeFor(userId, userRole, organisationId),
+        prescription.patient?.branchId,
+        `Prescription with ID ${id} not found`,
+      );
     } else if (userRole !== 'SUPER_ADMIN' && userRole !== 'SUPPORT') {
       // SEC-7: unknown/missing organisationType must never read a prescription.
       throw new ForbiddenException(
@@ -323,6 +358,7 @@ export class PrescriptionsService {
           'You do not have access to this prescription',
         );
       }
+      await this.assertRecordPatientAccess(userId, userRole, organisationId, prescription.patientId, `Prescription with ID ${id} not found`);
     } else if (userRole !== 'SUPER_ADMIN' && userRole !== 'SUPPORT') {
       // SEC-7: unknown/missing organisationType must never edit a prescription.
       throw new ForbiddenException(
@@ -337,6 +373,7 @@ export class PrescriptionsService {
       if (!patient || patient.organisationId !== prescription.organisationId) {
         throw new ForbiddenException('Patient does not belong to this clinic');
       }
+      await this.assertRecordPatientAccess(userId, userRole, prescription.organisationId, patient.id, 'Patient not found');
     }
 
     if (updateDto.doctorId && updateDto.doctorId !== prescription.doctorId) {

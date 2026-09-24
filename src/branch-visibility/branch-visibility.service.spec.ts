@@ -48,6 +48,17 @@ describe('BranchVisibilityService.scopeFor', () => {
     expect(await make({ liveBranches: [] }).service.scopeFor(restrictedA)).toEqual({ kind: 'all' });
   });
 
+  it('is all for Ayurlahi platform roles', async () => {
+    expect(await make({ assignments: [] }).service.scopeFor({ ...restrictedA, role: 'SUPER_ADMIN' })).toEqual({ kind: 'all' });
+    expect(await make({ assignments: [] }).service.scopeFor({ ...restrictedA, role: 'SUPPORT' })).toEqual({ kind: 'all' });
+  });
+
+  it('scopeForOrganisation refuses a URL organisation other than the caller\'s (platform roles pass)', async () => {
+    await expect(make().service.scopeForOrganisation(restrictedA, 'other-org')).rejects.toThrow(ForbiddenException);
+    await expect(make({ assignments: [A] }).service.scopeForOrganisation(restrictedA, 'org')).resolves.toEqual({ kind: 'branches', ids: [A] });
+    await expect(make().service.scopeForOrganisation({ ...restrictedA, role: 'SUPER_ADMIN' }, 'other-org')).resolves.toEqual({ kind: 'all' });
+  });
+
   it('is the live assigned branches for restricted staff, empty when unassigned or no staff row', async () => {
     expect(await make({ assignments: [A] }).service.scopeFor(restrictedA)).toEqual({ kind: 'branches', ids: [A] });
     expect(await make({ assignments: [] }).service.scopeFor(restrictedA)).toEqual({ kind: 'branches', ids: [] });

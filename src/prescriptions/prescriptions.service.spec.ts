@@ -1,3 +1,4 @@
+import { unrestrictedBranchVisibilityMock } from '../branch-visibility/testing/branch-visibility.mock';
 import { PrescriptionsService } from './prescriptions.service';
 import { Prescription, PrescriptionStatus } from './entities/prescription.entity';
 import { PrescriptionItem } from './entities/prescription-item.entity';
@@ -59,7 +60,7 @@ const makeService = (overrides: {
 
   const service = new PrescriptionsService(
     prescriptionsRepository, prescriptionItemsRepository, patientsRepository,
-    staffRepository, appointmentsRepository, auditService,
+    staffRepository, appointmentsRepository, auditService, unrestrictedBranchVisibilityMock(),
   );
   return { service, prescriptionsRepository, prescriptionItemsRepository, auditService, managerSoftDelete, managerSave };
 };
