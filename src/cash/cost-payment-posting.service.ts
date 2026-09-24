@@ -34,8 +34,8 @@ export class CostPaymentPostingService {
   }
 
   // Checks a paid-from ledger chosen on the form, whether or not the module is live.
-  async checkPaidFrom(manager: EntityManager, organisationId: string, accountId?: string | null) {
-    if (accountId) await this.ledgers.checkReceivingAccount(manager, organisationId, accountId, 'hospital');
+  async checkPaidFrom(manager: EntityManager, organisationId: string, accountId: string | null | undefined, costBranchId: string | null) {
+    if (accountId) await this.ledgers.checkReceivingAccount(manager, organisationId, accountId, 'hospital', costBranchId);
   }
 
   async post(manager: EntityManager, c: CostPayment, actor: { userId: string; role?: string | null }): Promise<PostedVoucher | null> {
@@ -50,7 +50,7 @@ export class CostPaymentPostingService {
     if (!c.paidFromAccountId) {
       throw new BadRequestException('Choose which cash drawer, bank or UPI account this was paid from');
     }
-    await this.ledgers.checkReceivingAccount(manager, c.organisationId, c.paidFromAccountId, 'hospital');
+    await this.ledgers.checkReceivingAccount(manager, c.organisationId, c.paidFromAccountId, 'hospital', c.branchId ?? null);
 
     const key = expenseLedgerKey(c.category);
     const [expense] = await manager.query(

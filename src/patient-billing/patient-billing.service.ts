@@ -380,7 +380,7 @@ export class PatientBillingService {
       const saved = await manager.save(PatientBill, bill);
       if (paidAmount > 0) {
         await this.patientPaymentPosting.checkReceivingAccount(
-          manager, saved.organisationId, createDto.receivedIntoAccountId, createDto.paymentMethod!,
+          manager, saved.organisationId, createDto.receivedIntoAccountId, createDto.paymentMethod!, saved.branchId,
         );
         const payment = await manager.save(
           PatientBillPayment,
@@ -779,7 +779,7 @@ export class PatientBillingService {
       }
 
       await this.patientPaymentPosting.checkReceivingAccount(
-        manager, bill.organisationId, paymentDto.receivedIntoAccountId, paymentDto.paymentMethod,
+        manager, bill.organisationId, paymentDto.receivedIntoAccountId, paymentDto.paymentMethod, bill.branchId,
       );
       const payment = await payRepo.save(
         payRepo.create({

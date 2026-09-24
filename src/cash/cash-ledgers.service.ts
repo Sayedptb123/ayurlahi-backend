@@ -100,18 +100,27 @@ export class CashLedgersService {
 
   // The ledger a patient payment was received into: must belong to the
   // organisation, be active, and suit the payment method.
+  // recordBranchId: the branch of the bill / booking / cost being paid
+  // (branch scoping G7). A branch's own ledger (its cash drawer) can only take
+  // money for that branch's records; organisation-wide ledgers (bank, UPI,
+  // partners — branch_id NULL) serve every branch. Required, so every caller
+  // has to say which record the money belongs to.
   async checkReceivingAccount(
     manager: EntityManager,
     organisationId: string,
     accountId: string,
     paymentMethod: string,
+    recordBranchId: string | null,
   ): Promise<void> {
     const [a] = await manager.query(
-      `SELECT kind, name, is_active FROM accounts WHERE id = $1 AND organisation_id = $2`,
+      `SELECT kind, name, is_active, branch_id FROM accounts WHERE id = $1 AND organisation_id = $2`,
       [accountId, organisationId],
     );
     if (!a) throw new NotFoundException('Ledger not found in this organisation');
     if (!a.is_active) throw new BadRequestException(`Ledger "${a.name}" is inactive`);
+    if (a.branch_id && recordBranchId && a.branch_id !== recordBranchId) {
+      throw new BadRequestException(`"${a.name}" belongs to another branch`);
+    }
     const allowed = CashLedgersService.receivingKinds(paymentMethod);
     if (!allowed.includes(a.kind)) {
       throw new BadRequestException(`A ${paymentMethod} payment can't be received into "${a.name}"`);

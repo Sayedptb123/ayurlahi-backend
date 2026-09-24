@@ -353,7 +353,7 @@ describe('PatientBillingService — Receipt Vouchers for patient payments (cash 
     const { service, managerSave, paymentPosting, billsRepository } = makeService();
     await createBill(service, { paidAmount: 400, paymentMethod: PaymentMethod.CASH, receivedIntoAccountId: 'acc-1' });
     expect(billsRepository.manager.transaction).toHaveBeenCalledTimes(1);
-    expect(paymentPosting.checkReceivingAccount).toHaveBeenCalledWith(expect.anything(), 'org-1', 'acc-1', 'cash');
+    expect(paymentPosting.checkReceivingAccount).toHaveBeenCalledWith(expect.anything(), 'org-1', 'acc-1', 'cash', null); // + the bill's branch (G7)
     const [payment] = paymentSaves(managerSave);
     expect(payment).toMatchObject({ receivedIntoAccountId: 'acc-1', source: 'counter' });
     expect(paymentPosting.post).toHaveBeenCalledTimes(1);

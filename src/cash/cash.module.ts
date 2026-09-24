@@ -1,3 +1,4 @@
+import { BranchVisibilityModule } from '../branch-visibility/branch-visibility.module';
 import { Module } from '@nestjs/common';
 import { AuditModule } from '../audit/audit.module';
 import { VoucherPostingService } from './voucher-posting.service';
@@ -12,7 +13,7 @@ import { CashController } from './cash.controller';
 // Foundation only for now: the posting service other modules call inside
 // their own transactions. Accounts, day close, screens and reports follow.
 @Module({
-  imports: [AuditModule],
+  imports: [AuditModule, BranchVisibilityModule],
   controllers: [CashController],
   providers: [VoucherPostingService, CashLedgersService, PatientPaymentPostingService, CashGoLiveService, BookingAdvancePostingService, CostPaymentPostingService],
   exports: [VoucherPostingService, CashLedgersService, PatientPaymentPostingService, BookingAdvancePostingService, CostPaymentPostingService],

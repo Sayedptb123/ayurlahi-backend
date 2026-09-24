@@ -150,7 +150,7 @@ export class BillsService {
         });
         if (prior) return prior;
       }
-      await this.costPosting.checkPaidFrom(manager, bill.organisationId, logDto.paidFromAccountId);
+      await this.costPosting.checkPaidFrom(manager, bill.organisationId, logDto.paidFromAccountId, bill.branchId ?? null);
 
       const savedExpense = await manager.getRepository(Expense).save(
         manager.getRepository(Expense).create({

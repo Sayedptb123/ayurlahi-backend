@@ -22,7 +22,7 @@ describe('CostPaymentPostingService', () => {
 
   it('posts Dr expense / Cr paid-from, dated today, sourced from the payment; paid-from must be hospital cash/bank/UPI', async () => {
     await svc.post(manager, base, { userId: 'u' });
-    expect(ledgers.checkReceivingAccount).toHaveBeenLastCalledWith(manager, 'o', 'bank', 'hospital');
+    expect(ledgers.checkReceivingAccount).toHaveBeenLastCalledWith(manager, 'o', 'bank', 'hospital', 'br'); // + the record's branch (G7)
     expect(posted[0]).toMatchObject({ voucherType: 'payment', voucherDate: '2026-09-24', originalDate: null, sourceType: 'bill_payment', sourceId: 'bp1',
       lines: [{ accountId: 'exp-util', debit: 5000, branchId: 'br' }, { accountId: 'bank', credit: 5000, branchId: 'br' }] });
   });

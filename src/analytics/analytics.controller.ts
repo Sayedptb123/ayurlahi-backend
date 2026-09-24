@@ -1,3 +1,4 @@
+import { BranchVisibilityService } from '../branch-visibility/branch-visibility.service';
 import {
   Controller,
   Get,
@@ -15,7 +16,22 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 @Controller('analytics')
 @UseGuards(JwtAuthGuard)
 export class AnalyticsController {
-  constructor(private readonly analyticsService: AnalyticsService) { }
+  constructor(
+    private readonly analyticsService: AnalyticsService,
+    private readonly branchVisibility: BranchVisibilityService,
+  ) {}
+
+  // Branch scoping G9 (scope/Branch_Scoping_Remediation_Plan_2026-09-24.md):
+  // clinic analytics aggregate the whole organisation, so a branch-restricted
+  // user (isolated org) must not receive them — the app only offers Analytics
+  // to managers and above. Branch-filtered analytics for restricted users are
+  // Phase 9. Owners / admins / managers and shared-visibility orgs unchanged.
+  private async assertOrganisationWideAnalytics(req: any) {
+    const scope = await this.branchVisibility.scopeFor(req.user);
+    if (scope.kind !== 'all') {
+      throw new ForbiddenException('Clinic analytics are available to owners, admins and managers');
+    }
+  }
 
   @Get('dashboard')
   async getDashboardStats(
@@ -43,6 +59,7 @@ export class AnalyticsController {
     @Query('startDate') startDate?: string,
     @Query('endDate') endDate?: string,
   ) {
+    await this.assertOrganisationWideAnalytics(req);
     const organisationId = req.user.organisationId;
     if (!organisationId) {
       throw new ForbiddenException('No organisation associated with this account');
@@ -57,6 +74,7 @@ export class AnalyticsController {
     @Query('startDate') startDate?: string,
     @Query('endDate') endDate?: string,
   ) {
+    await this.assertOrganisationWideAnalytics(req);
     const organisationId = req.user.organisationId;
     if (!organisationId) {
       throw new ForbiddenException('No organisation associated with this account');
@@ -91,6 +109,7 @@ export class AnalyticsController {
   // Phase 24B.4 — inventory health for the caller's own clinic.
   @Get('inventory-health')
   async getInventoryHealth(@Request() req) {
+    await this.assertOrganisationWideAnalytics(req);
     const organisationId = req.user.organisationId;
     if (!organisationId) {
       throw new ForbiddenException('No organisation associated with this account');
@@ -101,6 +120,7 @@ export class AnalyticsController {
   // Phase 24B.3 — supplier performance (lead-time + price variance), own clinic.
   @Get('supplier-performance')
   async getSupplierPerformance(@Request() req) {
+    await this.assertOrganisationWideAnalytics(req);
     const organisationId = req.user.organisationId;
     if (!organisationId) {
       throw new ForbiddenException('No organisation associated with this account');
@@ -115,6 +135,7 @@ export class AnalyticsController {
     @Query('startDate') startDate?: string,
     @Query('endDate') endDate?: string,
   ) {
+    await this.assertOrganisationWideAnalytics(req);
     const organisationId = req.user.organisationId;
     if (!organisationId) {
       throw new ForbiddenException('No organisation associated with this account');
@@ -129,6 +150,7 @@ export class AnalyticsController {
     @Query('startDate') startDate?: string,
     @Query('endDate') endDate?: string,
   ) {
+    await this.assertOrganisationWideAnalytics(req);
     const organisationId = req.user.organisationId;
     if (!organisationId) {
       throw new ForbiddenException('No organisation associated with this account');

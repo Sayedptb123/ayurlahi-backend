@@ -35,7 +35,7 @@ describe('BookingAdvancePostingService', () => {
 
   it('refund: Dr Patient advances / Cr paid-from; bank transfer must come from a bank ledger', async () => {
     await svc.postRefund(manager, { organisationId: 'o', bookingId: 'b', branchId: null, amount: 800, method: 'BANK_TRANSFER', paidFromAccountId: 'bank' }, actor);
-    expect(ledgers.checkReceivingAccount).toHaveBeenLastCalledWith(manager, 'o', 'bank', 'bank_transfer');
+    expect(ledgers.checkReceivingAccount).toHaveBeenLastCalledWith(manager, 'o', 'bank', 'bank_transfer', null); // + the record's branch (G7)
     expect(posted[0]).toMatchObject({ voucherType: 'payment', sourceType: 'booking_refund', lines: [{ accountId: 'pa', debit: 800 }, { accountId: 'bank', credit: 800 }] });
   });
 

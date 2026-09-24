@@ -172,19 +172,19 @@ export const BRANCH_OWNED_AREAS: BranchOwnedArea[] = [
   {
     prefix: '/cash/receiving-ledgers',
     anchor: 'own',
-    routes: { 'GET /cash/receiving-ledgers': gap(5, 'G7') },
+    routes: { 'GET /cash/receiving-ledgers': covered }, // + posting re-checks drawer vs record branch
   },
   {
     prefix: '/analytics',
     anchor: 'none',
     routes: {
-      'GET /analytics/clinic': gap(5, 'G9'),
-      'GET /analytics/procurement': gap(5, 'G9'),
-      'GET /analytics/procurement/base': gap(5, 'G9'),
-      'GET /analytics/spend-summary': gap(5, 'G9'),
-      'GET /analytics/inventory-health': gap(5, 'G9'),
-      'GET /analytics/supplier-performance': gap(5, 'G9'),
-      'GET /analytics/postnatal-occupancy': gap(5, 'G9'),
+      'GET /analytics/clinic': covered, // restricted → 403; branch-filtered view is Phase 9
+      'GET /analytics/procurement': covered, // restricted → 403; branch-filtered view is Phase 9
+      'GET /analytics/procurement/base': orgWide('Ayurlahi team / org admin only (existing role gate)'),
+      'GET /analytics/spend-summary': covered, // restricted → 403; branch-filtered view is Phase 9
+      'GET /analytics/inventory-health': covered, // restricted → 403; branch-filtered view is Phase 9
+      'GET /analytics/supplier-performance': covered, // restricted → 403; branch-filtered view is Phase 9
+      'GET /analytics/postnatal-occupancy': covered, // restricted → 403; branch-filtered view is Phase 9
       'GET /analytics/dashboard': orgWide('Ayurlahi team dashboard'),
       'GET /analytics/telemetry': orgWide('Ayurlahi team'),
       'GET /analytics/feature-usage/by-org': orgWide('Ayurlahi team'),

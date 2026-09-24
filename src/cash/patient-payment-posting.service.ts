@@ -43,9 +43,10 @@ export class PatientPaymentPostingService {
     organisationId: string,
     accountId: string | null | undefined,
     paymentMethod: string,
+    billBranchId: string | null,
   ): Promise<void> {
     if (accountId) {
-      await this.ledgers.checkReceivingAccount(manager, organisationId, accountId, paymentMethod);
+      await this.ledgers.checkReceivingAccount(manager, organisationId, accountId, paymentMethod, billBranchId);
     }
   }
 
@@ -67,7 +68,7 @@ export class PatientPaymentPostingService {
       throw new BadRequestException('Choose where this payment was received (cash drawer, bank, UPI or partner)');
     }
     await this.ledgers.checkReceivingAccount(
-      manager, payment.organisationId, payment.receivedIntoAccountId, payment.paymentMethod,
+      manager, payment.organisationId, payment.receivedIntoAccountId, payment.paymentMethod, bill.branchId,
     );
 
     const paise = Math.round(parseFloat(String(payment.amount)) * 100);

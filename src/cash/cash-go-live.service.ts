@@ -1,3 +1,4 @@
+import { BranchVisibilityService } from '../branch-visibility/branch-visibility.service';
 import {
   BadRequestException,
   ConflictException,
@@ -54,6 +55,7 @@ export class CashGoLiveService {
     private readonly dataSource: DataSource,
     private readonly ledgers: CashLedgersService,
     private readonly posting: VoucherPostingService,
+    private readonly branchVisibility: BranchVisibilityService,
   ) {}
 
   async status(actor: CashActor) {
@@ -70,8 +72,13 @@ export class CashGoLiveService {
 
   // Active ledgers a patient payment can be received into, for the picker.
   // The backend still validates the choice when the payment is saved.
-  async receivingLedgers(actor: CashActor, paymentMethod?: string) {
+  // Branch scoping G7: a branch-restricted user only ever sees their own
+  // branches' ledgers (plus organisation-wide ones: bank, UPI, partners), and
+  // when the form says which record is being paid (branchId), only that
+  // branch's drawers — the server re-checks the choice on posting anyway.
+  async receivingLedgers(actor: CashActor, paymentMethod?: string, branchId?: string) {
     this.assertClinic(actor);
+    const scope = await this.branchVisibility.scopeFor(actor);
     const rows: Array<{ id: string; name: string; kind: string; branch_id: string | null }> =
       await this.dataSource.manager.query(
         `SELECT id, name, kind, branch_id FROM accounts
@@ -82,6 +89,8 @@ export class CashGoLiveService {
     const allowed = paymentMethod ? CashLedgersService.receivingKinds(paymentMethod) : BALANCE_KINDS;
     return rows
       .filter((r) => allowed.includes(r.kind))
+      .filter((r) => !r.branch_id || scope.kind === 'all' || scope.ids.includes(r.branch_id))
+      .filter((r) => !r.branch_id || !branchId || r.branch_id === branchId)
       .map((r) => ({ id: r.id, name: r.name, kind: r.kind, branchId: r.branch_id }));
   }
 

@@ -28,8 +28,12 @@ export class CashController {
 
   // Ledgers a payment can be received into, filtered by payment method.
   @Get('receiving-ledgers')
-  receivingLedgers(@Request() req, @Query('paymentMethod') paymentMethod?: string) {
-    return this.goLive.receivingLedgers(actor(req), paymentMethod);
+  receivingLedgers(
+    @Request() req,
+    @Query('paymentMethod') paymentMethod?: string,
+    @Query('branchId') branchId?: string,
+  ) {
+    return this.goLive.receivingLedgers(actor(req), paymentMethod, branchId);
   }
 
   @Post('go-live/seed')

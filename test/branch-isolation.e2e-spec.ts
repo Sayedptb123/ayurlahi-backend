@@ -732,4 +732,80 @@ describe('Branch isolation contract (real DB)', () => {
       expect((await u.post(`/organisations/${fx.orgId}/duty-types`, { name: `ZZRun-${RUN}`, startTime: '09:00:00', endTime: '17:00:00', branchId: fx.branchB })).status).toBe(403);
     });
   });
+  // ── Phase 5: cash drawers (G7) + clinic analytics (G9) ────────────────────
+  describe('cash drawers (G7)', () => {
+    const drawer: Record<Side, string> = {} as any;
+    beforeAll(async () => {
+      await api('owner').post('/cash/go-live/seed', {}); // idempotent: one cash drawer per branch
+      for (const side of ['A', 'B'] as Side[]) {
+        const branch = side === 'A' ? fx.branchA : fx.branchB;
+        const [row] = await ds.query(`SELECT id FROM accounts WHERE organisation_id = $1 AND system_key = $2`, [fx.orgId, `cash_drawer:${branch}`]);
+        drawer[side] = row.id;
+      }
+    });
+    const ledgers = async (role: Role, branchId?: string) =>
+      ids(await api(role).get(`/cash/receiving-ledgers?paymentMethod=cash${branchId ? `&branchId=${branchId}` : ''}`));
+
+    it("picker: restricted user never sees another branch's drawer, even when asking for that branch", async () => {
+      const own = await ledgers('restrictedA');
+      expect(own).toContain(drawer.A);
+      expect(own).not.toContain(drawer.B);
+      expect(await ledgers('restrictedA', fx.branchB)).not.toContain(drawer.B);
+    });
+    it('picker: multi-branch user sees both, narrowed by the record branch; unassigned sees neither', async () => {
+      expect(await ledgers('multiAB')).toEqual(expect.arrayContaining([drawer.A, drawer.B]));
+      const onlyA = await ledgers('multiAB', fx.branchA);
+      expect(onlyA).toContain(drawer.A);
+      expect(onlyA).not.toContain(drawer.B);
+      const none = await ledgers('unassigned');
+      expect(none).not.toContain(drawer.A);
+      expect(none).not.toContain(drawer.B);
+    });
+    it('picker: owner sees both; the record branch narrows to that drawer', async () => {
+      expect(await ledgers('owner')).toEqual(expect.arrayContaining([drawer.A, drawer.B]));
+      expect(await ledgers('owner', fx.branchB)).not.toContain(drawer.A);
+    });
+    it("posting: a Branch-A bill can't be paid into Branch B's drawer (create + record payment); nothing written", async () => {
+      const item = [{ itemType: 'consultation', itemName: `ZZCash-${RUN}`, unitPrice: 10 }];
+      const bad = await api('restrictedA').post('/patient-billing', {
+        patientId: fx.patients.A, billDate: '2026-09-24', items: item, paidAmount: 1, paymentMethod: 'cash', receivedIntoAccountId: drawer.B,
+      });
+      if (bad.body?.id) createdLinked.push({ table: 'patient_bills', id: bad.body.id });
+      expect(bad.status).toBe(400);
+      const before = (await ds.query(`SELECT paid_amount FROM patient_bills WHERE id = $1`, [fx.stays.bill.A]))[0];
+      expect((await api('restrictedA').post(`/patient-billing/${fx.stays.bill.A}/payment`, { amount: 1, paymentMethod: 'cash', receivedIntoAccountId: drawer.B })).status).toBe(400);
+      expect((await ds.query(`SELECT paid_amount FROM patient_bills WHERE id = $1`, [fx.stays.bill.A]))[0]).toEqual(before);
+      const [{ n }] = await ds.query(`SELECT count(*)::int n FROM patient_bill_payments WHERE received_into_account_id = $1`, [drawer.B]);
+      expect(n).toBe(0);
+    });
+    it("posting: a Branch-A bill paid into Branch A's drawer is accepted", async () => {
+      const ok = await api('restrictedA').post('/patient-billing', {
+        patientId: fx.patients.A, billDate: '2026-09-24', items: [{ itemType: 'consultation', itemName: `ZZCash-${RUN}`, unitPrice: 10 }],
+        paidAmount: 1, paymentMethod: 'cash', receivedIntoAccountId: drawer.A,
+      });
+      if (ok.body?.id) createdLinked.push({ table: 'patient_bills', id: ok.body.id });
+      expect(ok.status).toBe(201);
+    });
+  });
+
+  describe('clinic analytics (G9)', () => {
+    const ROUTES = ['/analytics/clinic', '/analytics/procurement', '/analytics/inventory-health',
+      '/analytics/supplier-performance', '/analytics/spend-summary', '/analytics/postnatal-occupancy'];
+    it('branch-restricted, multi-branch and unassigned users get 403 — with or without branchId', async () => {
+      for (const role of ['restrictedA', 'multiAB', 'unassigned'] as Role[]) {
+        for (const route of ROUTES) {
+          expect([role, route, (await api(role).get(route)).status]).toEqual([role, route, 403]);
+          expect([role, route, (await api(role).get(`${route}?branchId=${fx.branchA}`)).status]).toEqual([role, route, 403]);
+        }
+      }
+    }, 120000); // 36 paced requests
+    it("owner and manager get organisation-wide totals that match the database", async () => {
+      const [{ n }] = await ds.query(`SELECT count(*)::int n FROM patients WHERE organisation_id = $1 AND deleted_at IS NULL`, [fx.orgId]);
+      for (const role of ['owner', 'manager'] as Role[]) {
+        const res = await api(role).get('/analytics/clinic');
+        expect(res.status).toBe(200);
+        expect(res.body.totalPatients).toBe(n);
+      }
+    });
+  });
 });

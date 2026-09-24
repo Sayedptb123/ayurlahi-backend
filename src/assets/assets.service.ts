@@ -240,7 +240,7 @@ export class AssetsService {
         });
         if (prior) return prior;
       }
-      await this.costPosting.checkPaidFrom(manager, organisationId, dto.paidFromAccountId);
+      await this.costPosting.checkPaidFrom(manager, organisationId, dto.paidFromAccountId, asset.branchId ?? null);
 
       // 2. Create the ledger Expense if integrated
       let paymentId: string | null = null;

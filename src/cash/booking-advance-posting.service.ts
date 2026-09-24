@@ -64,7 +64,7 @@ export class BookingAdvancePostingService {
     if (!receipt.receivedIntoAccountId) {
       throw new BadRequestException('Choose where this advance was received (cash drawer, bank, UPI or partner)');
     }
-    await this.ledgers.checkReceivingAccount(manager, receipt.organisationId, receipt.receivedIntoAccountId, receipt.paymentMethod);
+    await this.ledgers.checkReceivingAccount(manager, receipt.organisationId, receipt.receivedIntoAccountId, receipt.paymentMethod, booking.branchId);
     const advances = await this.patientAdvancesLedger(manager, receipt.organisationId);
     const amount = paiseOf(receipt.amount) / 100;
 
@@ -139,7 +139,7 @@ export class BookingAdvancePostingService {
     }
     const method = REFUND_METHOD[r.method];
     if (!method) throw new BadRequestException(`A refund by "${r.method}" can't be recorded once cash tracking is live`);
-    await this.ledgers.checkReceivingAccount(manager, r.organisationId, r.paidFromAccountId, method);
+    await this.ledgers.checkReceivingAccount(manager, r.organisationId, r.paidFromAccountId, method, r.branchId);
     const advances = await this.patientAdvancesLedger(manager, r.organisationId);
     return this.posting.post(manager, {
       organisationId: r.organisationId,

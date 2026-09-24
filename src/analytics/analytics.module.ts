@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { BranchVisibilityModule } from '../branch-visibility/branch-visibility.module';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AnalyticsController } from './analytics.controller';
 import { AnalyticsService } from './analytics.service';
@@ -30,6 +31,7 @@ import { OrganisationUser } from '../organisation-users/entities/organisation-us
       PurchaseOrder, PurchaseOrderItem, OrderItem, InventoryItem, StockMovement,
       Admission, Room, RoomBooking, OrganisationUser,
     ]),
+    BranchVisibilityModule,
   ],
   controllers: [AnalyticsController],
   providers: [AnalyticsService],
