@@ -62,7 +62,7 @@ const makeService = (overrides: {
   const service = new PatientsService(
     patientsRepository, branchesRepository, branchVisibilityService, auditService,
   );
-  return { service, patientsRepository, auditService };
+  return { service, patientsRepository, auditService, branchVisibilityService };
 };
 
 describe('PatientsService.create — audit event', () => {
@@ -151,5 +151,53 @@ describe('PatientsService.remove — critical transaction + view/delete pair', (
       service.remove('p-1', 'u-1', 'OWNER', 'org-1', 'CLINIC'),
     ).rejects.toThrow('audit write failed');
     expect(managerUpdate).toHaveBeenCalledWith('p-1');
+  });
+});
+
+// Phone is a contact attribute, not identity -- see
+// scope/patient-phone-non-unique-and-matching.md.
+describe('PatientsService — shared phone numbers', () => {
+  it('create() saves a patient whose phone another patient already has', async () => {
+    const { service, patientsRepository } = makeService({
+      findOnePatient: { ...patient, id: 'p-other', phone: '6238154525' },
+    });
+    await expect(
+      service.create('u-1', 'RECEPTIONIST', 'org-1', 'CLINIC', {
+        firstName: 'A', lastName: 'B', phone: '6238154525',
+      } as any),
+    ).resolves.toMatchObject({ phone: '6238154525' });
+    expect(patientsRepository.save).toHaveBeenCalled();
+  });
+
+  it('findVisibleByPhone() returns nothing for non-CLINIC callers or a blank phone', async () => {
+    const { service, patientsRepository } = makeService();
+    await expect(service.findVisibleByPhone('u-1', 'SUPER_ADMIN', 'org-t', 'AYURLAHI_TEAM', '6238154525')).resolves.toEqual([]);
+    await expect(service.findVisibleByPhone('u-1', 'OWNER', 'org-1', 'CLINIC', '   ')).resolves.toEqual([]);
+    expect(patientsRepository.createQueryBuilder).not.toHaveBeenCalled();
+  });
+
+  it('findVisibleByPhone() applies org + branch visibility and an exact trimmed phone match', async () => {
+    const { service, patientsRepository, branchVisibilityService } = makeService();
+    const qb: any = {
+      leftJoin: jest.fn().mockReturnThis(),
+      select: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      take: jest.fn().mockReturnThis(),
+      getMany: jest.fn(() => Promise.resolve([{ id: 'p-1' }])),
+    };
+    patientsRepository.createQueryBuilder.mockReturnValue(qb);
+    branchVisibilityService.resolveVisibleBranchIds.mockResolvedValue(['branch-b']);
+
+    await expect(
+      service.findVisibleByPhone('u-1', 'RECEPTIONIST', 'org-1', 'CLINIC', ' 6238154525 '),
+    ).resolves.toEqual([{ id: 'p-1' }]);
+    expect(qb.where).toHaveBeenCalledWith('patient.organisationId = :organisationId', { organisationId: 'org-1' });
+    expect(qb.andWhere).toHaveBeenCalledWith(
+      '(patient.branchId IS NULL OR patient.branchId IN (:...visibleBranchIds))',
+      { visibleBranchIds: ['branch-b'] },
+    );
+    expect(qb.andWhere).toHaveBeenCalledWith('patient.phone = :phone', { phone: '6238154525' });
   });
 });

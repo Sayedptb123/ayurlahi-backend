@@ -90,17 +90,11 @@ export class PatientsService {
       patientCode = await this.generateNextPatientCode(clinicId as string);
     }
 
-    // Duplicate phone check — phone must be unique per organisation
-    if (createDto.phone) {
-      const phoneConflict = await this.patientsRepository.findOne({
-        where: { organisationId: clinicId as string, phone: createDto.phone },
-      });
-      if (phoneConflict) {
-        throw new ConflictException(
-          `A patient with phone number ${createDto.phone} is already registered (${phoneConflict.firstName} ${phoneConflict.lastName}). Search for them before registering a new record.`,
-        );
-      }
-    }
+    // No phone uniqueness check: families share phones, so several patients
+    // may legitimately have the same number. Duplicate hints come from
+    // findVisibleByPhone() (GET /patients/possible-matches), which respects
+    // branch visibility -- this used to 409 org-wide and leak the other
+    // branch's patient name. See scope/patient-phone-non-unique-and-matching.md.
 
     // If motherPatientId is supplied, verify it belongs to the same org (no cross-org linking)
     if (createDto.motherPatientId) {
@@ -161,11 +155,6 @@ export class PatientsService {
       return saved;
     } catch (err: any) {
       if (err?.code === '23505') {
-        if (err?.constraint?.includes('phone')) {
-          throw new ConflictException(
-            `A patient with this phone number is already registered in your clinic. Search for them before registering a new record.`,
-          );
-        }
         if (err?.constraint?.includes('patient_code') || err?.constraint?.includes('patientcode')) {
           throw new ConflictException(
             `Patient ID ${patientCode} already exists in this clinic`,
