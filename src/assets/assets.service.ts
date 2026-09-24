@@ -248,6 +248,7 @@ export class AssetsService {
         const savedExpense = await manager.getRepository(Expense).save(
           manager.getRepository(Expense).create({
             organisationId,
+            branchId: asset.branchId ?? null,
             amount: dto.cost,
             category: 'Maintenance',
             description: `Asset Maintenance Cost: [${asset.assetCode}] ${asset.name} - Service provider: ${dto.serviceProvider || 'N/A'}`,

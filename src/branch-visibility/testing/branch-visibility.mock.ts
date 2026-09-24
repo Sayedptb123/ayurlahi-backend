@@ -6,6 +6,8 @@
 export const unrestrictedBranchVisibilityMock = (): any => ({
   scopeFor: jest.fn(async () => ({ kind: 'all' })),
   scopeForOrganisation: jest.fn(async () => ({ kind: 'all' })),
+  inventoryScopeFor: jest.fn(async () => ({ kind: 'all' })),
+  branchFindCondition: jest.fn(() => undefined),
   applyBranchScope: jest.fn((qb: any) => qb),
   applyPatientBranchScope: jest.fn((qb: any) => qb),
   narrowToSelectedBranch: jest.fn((qb: any) => qb),

@@ -79,15 +79,21 @@ export class PurchaseOrdersService {
     return await this.poRepository.save(po);
   }
 
-  async findAll(organisationId: string): Promise<PurchaseOrder[]> {
+  // Branch scoping (Phase 8 / S4): the inventory-policy scope, then the
+  // switcher — the same scope receiving already used (T26).
+  async findAll(organisationId: string, user: { userId?: string; role?: string } = {}, branchId?: string): Promise<PurchaseOrder[]> {
+    const branchCond = this.branchVisibilityService.branchFindCondition(
+      await this.branchVisibilityService.inventoryScopeFor({ ...user, organisationId }),
+      branchId,
+    );
     return await this.poRepository.find({
-      where: { organisationId },
+      where: { organisationId, ...(branchCond ? { branchId: branchCond } : {}) },
       relations: ['supplier', 'items'],
       order: { createdAt: 'DESC' },
     });
   }
 
-  async findOne(organisationId: string, id: string): Promise<PurchaseOrder> {
+  async findOne(organisationId: string, id: string, user?: { userId?: string; role?: string }): Promise<PurchaseOrder> {
     const po = await this.poRepository.findOne({
       where: { id, organisationId },
       relations: ['supplier', 'items', 'items.item', 'items.itemMaster'],
@@ -95,6 +101,15 @@ export class PurchaseOrdersService {
 
     if (!po) {
       throw new NotFoundException(`Purchase Order with ID ${id} not found`);
+    }
+    // Callers acting for a user (the controller) get the branch check; the
+    // internal callers (receiving, which does its own T26 check) pass none.
+    if (user) {
+      this.branchVisibilityService.assertBranchAccess(
+        await this.branchVisibilityService.inventoryScopeFor({ ...user, organisationId }),
+        po.branchId,
+        `Purchase Order with ID ${id} not found`,
+      );
     }
 
     return po;

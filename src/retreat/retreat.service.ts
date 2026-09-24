@@ -378,12 +378,15 @@ export class RetreatService {
         return none;
     }
 
-    async getRooms(clinicId: string, branchId?: string) {
+    async getRooms(clinicId: string, branchId?: string, user: { userId?: string; role?: string } = {}) {
         const where: any = { organisationId: clinicId };
-        // Branch switcher (personal view filter) — rooms are a physical asset
-        // (D14), not part of the patientVisibility policy, so a strict match
-        // is correct here (no BranchVisibilityService involved).
-        if (branchId) where.branchId = branchId;
+        // Branch scoping (Phase 8): the caller's branch scope first, then the
+        // switcher — a branch-restricted user is never offered another
+        // branch's room (bookings / check-in already refuse them, G10).
+        const branchCond = this.branchVisibilityService.branchFindCondition(
+            await this.scopeFor(user.userId, user.role, clinicId), branchId,
+        );
+        if (branchCond) where.branchId = branchCond;
         const rooms = await this.roomRepo.find({
             where,
             relations: ['roomCategory'],
@@ -399,7 +402,7 @@ export class RetreatService {
     // Rooms that are free for the given date range — reuses the unified conflict
     // check (admissions + bookings + maintenance). Powers the date-aware room
     // selector in the booking form, so reception only sees what they can book.
-    async getAvailableRooms(clinicId: string, checkInDate: string, checkOutDate: string, branchId?: string) {
+    async getAvailableRooms(clinicId: string, checkInDate: string, checkOutDate: string, branchId?: string, user: { userId?: string; role?: string } = {}) {
         const checkIn = new Date(checkInDate);
         const checkOut = new Date(checkOutDate);
         if (isNaN(checkIn.getTime()) || isNaN(checkOut.getTime())) {
@@ -410,10 +413,11 @@ export class RetreatService {
         }
 
         const where: any = { organisationId: clinicId };
-        // Branch switcher (personal view filter) — same strict-match pattern as
-        // getRooms() above; rooms are D14, not D15, so this narrows the search
-        // rather than enforcing ownership.
-        if (branchId) where.branchId = branchId;
+        // Same rule as getRooms(): branch scope, then the switcher.
+        const branchCond = this.branchVisibilityService.branchFindCondition(
+            await this.scopeFor(user.userId, user.role, clinicId), branchId,
+        );
+        if (branchCond) where.branchId = branchCond;
         const rooms = await this.roomRepo.find({
             where,
             relations: ['roomCategory'],
@@ -1390,7 +1394,7 @@ export class RetreatService {
         await this.bookingRepo.softDelete({ id: bookingId });
     }
 
-    async checkAvailability(clinicId: string, dto: CheckAvailabilityDto) {
+    async checkAvailability(clinicId: string, dto: CheckAvailabilityDto, user: { userId?: string; role?: string } = {}) {
         const { roomId, checkInDate, checkOutDate, excludeBookingId } = dto;
 
         const checkIn = new Date(checkInDate);
@@ -1399,6 +1403,7 @@ export class RetreatService {
         // Read-only path: no lock needed. Resolve the room then run the unified check.
         const room = await this.roomRepo.findOne({ where: { id: roomId, organisationId: clinicId } });
         if (!room) throw new NotFoundException('Room not found');
+        await this.assertCatalogRowAccess(clinicId, room.branchId, user, 'Room not found');
 
         const block = await this.isRoomBlocked(this.dataSource.manager, room, checkIn, checkOut, excludeBookingId);
 
@@ -1413,7 +1418,7 @@ export class RetreatService {
 
     async getCalendarData(clinicId: string, startDate: string, endDate: string, userId?: string, userRole?: string) {
         const bookings = await this.getBookings(clinicId, userId, { startDate, endDate }, userRole);
-        const rooms = await this.getRooms(clinicId);
+        const rooms = await this.getRooms(clinicId, undefined, { userId, role: userRole });
 
         // Get current admissions (occupied rooms)
         const admissions = await this.getAdmissions(clinicId, userId, undefined, userRole);

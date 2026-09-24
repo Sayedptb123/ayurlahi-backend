@@ -35,10 +35,12 @@ export class InvoicesController {
   // Must come before @Get(':id') — otherwise Nest/Express would match
   // "summary" as the :id param.
   @Get('summary')
-  async getSummary(@Request() req) {
+  async getSummary(@Request() req, @Query('branchId') branchId?: string) {
     return this.invoicesService.getSummary(
       req.user.organisationId,
       req.user.organisationType,
+      req.user,
+      branchId,
     );
   }
 

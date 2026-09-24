@@ -6,9 +6,15 @@ import {
     Min,
     Max,
     MaxLength,
+    IsUUID,
 } from 'class-validator';
 
 export class CreateExpenseDto {
+    // Requested branch (the switcher's); validated server-side, never trusted.
+    @IsOptional()
+    @IsUUID()
+    branchId?: string;
+
     @IsNumber()
     @Min(0)
     // DB column is DECIMAL(10,2): 99,999,999.99 max — validate at DTO so client

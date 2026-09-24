@@ -8,6 +8,7 @@ import {
   Delete,
   UseGuards,
   Request,
+  Query,
 } from '@nestjs/common';
 import { PurchaseOrdersService } from './purchase-orders.service';
 import {
@@ -39,16 +40,21 @@ export class PurchaseOrdersController {
   }
 
   @Get()
-  findAll(@Param('organisationId') organisationId: string) {
-    return this.poService.findAll(organisationId);
+  findAll(
+    @Param('organisationId') organisationId: string,
+    @Request() req,
+    @Query('branchId') branchId?: string,
+  ) {
+    return this.poService.findAll(organisationId, req.user, branchId);
   }
 
   @Get(':id')
   findOne(
     @Param('organisationId') organisationId: string,
     @Param('id') id: string,
+    @Request() req,
   ) {
-    return this.poService.findOne(organisationId, id);
+    return this.poService.findOne(organisationId, id, req.user);
   }
 
   @Patch(':id')
@@ -67,10 +73,12 @@ export class PurchaseOrdersController {
 
   @Delete(':id')
   @Roles(UserRole.CLINIC, UserRole.MANUFACTURER, UserRole.ADMIN)
-  remove(
+  async remove(
     @Param('organisationId') organisationId: string,
     @Param('id') id: string,
+    @Request() req,
   ) {
+    await this.poService.findOne(organisationId, id, req.user); // 404 outside the caller's branch scope
     return this.poService.remove(organisationId, id);
   }
 }

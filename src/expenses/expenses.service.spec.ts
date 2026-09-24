@@ -1,3 +1,4 @@
+import { unrestrictedBranchVisibilityMock } from '../branch-visibility/testing/branch-visibility.mock';
 import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { validate } from 'class-validator';
 import { plainToInstance } from 'class-transformer';
@@ -65,6 +66,7 @@ describe('ExpensesService (Step 1 Controls)', () => {
             mockExpenseRepo,
             mockOrgUserRepo,
             mockNotificationsService,
+            unrestrictedBranchVisibilityMock(),
         );
     });
 

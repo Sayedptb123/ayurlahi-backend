@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { BranchVisibilityModule } from '../branch-visibility/branch-visibility.module';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { BillsService } from './bills.service';
 import { BillsController } from './bills.controller';
@@ -12,6 +13,7 @@ import { CashModule } from '../cash/cash.module';
 @Module({
   imports: [
     TypeOrmModule.forFeature([RecurringBill, BillPayment, Expense, OrganisationUser]),
+    BranchVisibilityModule,
     CashModule,
     NotificationsModule,
   ],

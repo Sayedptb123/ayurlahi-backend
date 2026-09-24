@@ -100,7 +100,7 @@ export class RetreatController {
     @Get('rooms')
     getRooms(@Request() req, @Query('branchId') branchId?: string) {
         const clinicId = req.user.organisationId;
-        return this.retreatService.getRooms(clinicId, branchId);
+        return this.retreatService.getRooms(clinicId, branchId, req.user);
     }
 
     @Get('today')
@@ -117,7 +117,7 @@ export class RetreatController {
         @Query('branchId') branchId?: string,
     ) {
         const clinicId = req.user.organisationId;
-        return this.retreatService.getAvailableRooms(clinicId, checkInDate, checkOutDate, branchId);
+        return this.retreatService.getAvailableRooms(clinicId, checkInDate, checkOutDate, branchId, req.user);
     }
 
     @Post('rooms')
@@ -337,7 +337,7 @@ export class RetreatController {
     @Post('bookings/check-availability')
     checkAvailability(@Request() req, @Body() dto: CheckAvailabilityDto) {
         const clinicId = req.user.organisationId;
-        return this.retreatService.checkAvailability(clinicId, dto);
+        return this.retreatService.checkAvailability(clinicId, dto, req.user);
     }
 
     @Get('export')

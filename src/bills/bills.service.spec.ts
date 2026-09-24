@@ -1,3 +1,4 @@
+import { unrestrictedBranchVisibilityMock } from '../branch-visibility/testing/branch-visibility.mock';
 import { BillsService } from './bills.service';
 import { Expense } from '../expenses/entities/expense.entity';
 import { BillPayment } from './entities/bill-payment.entity';
@@ -41,7 +42,7 @@ describe('BillsService — recurring-bill writes are atomic', () => {
       checkPaidFrom: jest.fn(() => Promise.resolve()),
       post: jest.fn(() => Promise.resolve(null)),
     };
-    const service = new BillsService(billRepo, outside, outside, outside, { sendToUsers: jest.fn(() => Promise.resolve()) } as any, costPosting as any);
+    const service = new BillsService(billRepo, outside, outside, outside, { sendToUsers: jest.fn(() => Promise.resolve()) } as any, costPosting as any, unrestrictedBranchVisibilityMock());
     jest.spyOn(service as any, 'getBranchLabel').mockResolvedValue('');
     const notify = jest.spyOn(service as any, 'notifyOrg').mockImplementation(() => undefined);
     const savedRows: any[] = [];
@@ -113,7 +114,7 @@ describe('BillsService — cash posting (Cash MVP §5 R6)', () => {
     };
     const outside: any = { save: jest.fn(), create: (x: any) => x, find: jest.fn(() => Promise.resolve([])) };
     const costPosting = { liveFrom: jest.fn(() => Promise.resolve(opts.live ?? null)), checkPaidFrom: jest.fn(() => Promise.resolve()), post: jest.fn(() => Promise.resolve({ id: 'v' })) };
-    const service = new BillsService(billRepo, outside, outside, outside, { sendToUsers: jest.fn(() => Promise.resolve()) } as any, costPosting as any);
+    const service = new BillsService(billRepo, outside, outside, outside, { sendToUsers: jest.fn(() => Promise.resolve()) } as any, costPosting as any, unrestrictedBranchVisibilityMock());
     jest.spyOn(service as any, 'getBranchLabel').mockResolvedValue('');
     const notify = jest.spyOn(service as any, 'notifyOrg').mockImplementation(() => undefined);
     return { service, saved, costPosting, notify };

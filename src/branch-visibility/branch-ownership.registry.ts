@@ -117,7 +117,7 @@ export const BRANCH_OWNED_AREAS: BranchOwnedArea[] = [
       'GET /retreat/bookings': covered,
       'GET /retreat/bookings/:id': covered,
       'GET /retreat/bookings/calendar': covered,
-      'POST /retreat/bookings/check-availability': gap(8, 'rooms-picker'),
+      'POST /retreat/bookings/check-availability': covered,
       'POST /retreat/bookings': covered,
       'PATCH /retreat/bookings/:id': covered,
       'DELETE /retreat/bookings/:id': covered,
@@ -161,12 +161,12 @@ export const BRANCH_OWNED_AREAS: BranchOwnedArea[] = [
     prefix: '/retreat/rooms',
     anchor: 'own',
     routes: {
-      'GET /retreat/rooms': catalog,
+      'GET /retreat/rooms': covered,
       'POST /retreat/rooms': covered, // G10 write branch
       'PATCH /retreat/rooms/:id': covered,
       'DELETE /retreat/rooms/:id': covered,
       'GET /retreat/rooms/resolve-price': catalog,
-      'GET /retreat/rooms/available': gap(8, 'rooms-picker'),
+      'GET /retreat/rooms/available': covered,
     },
   },
   {
@@ -201,22 +201,22 @@ export const BRANCH_OWNED_AREAS: BranchOwnedArea[] = [
     prefix: '/expenses',
     anchor: 'own',
     routes: {
-      'GET /expenses': gap(8, 'S2'),
-      'GET /expenses/:id': gap(8, 'S2'),
-      'POST /expenses': gap(8, 'S2'),
-      'PATCH /expenses/:id': gap(8, 'S2'),
-      'DELETE /expenses/:id': gap(8, 'S2'),
+      'GET /expenses': covered,
+      'GET /expenses/:id': covered,
+      'POST /expenses': covered,
+      'PATCH /expenses/:id': reviewed(8), // same assertExpenseAccess as GET
+      'DELETE /expenses/:id': reviewed(8),
     },
   },
   {
     prefix: '/organisations/:organisationId/purchase-orders',
     anchor: 'own',
     routes: {
-      'GET /organisations/:organisationId/purchase-orders': gap(8, 'S4'),
-      'GET /organisations/:organisationId/purchase-orders/:id': gap(8, 'S4'),
+      'GET /organisations/:organisationId/purchase-orders': covered,
+      'GET /organisations/:organisationId/purchase-orders/:id': covered,
       'POST /organisations/:organisationId/purchase-orders': reviewed(8),
       'PATCH /organisations/:organisationId/purchase-orders/:id': reviewed(8),
-      'DELETE /organisations/:organisationId/purchase-orders/:id': gap(8, 'S4'),
+      'DELETE /organisations/:organisationId/purchase-orders/:id': reviewed(8), // gated by findOne
     },
   },
   {
@@ -226,9 +226,10 @@ export const BRANCH_OWNED_AREAS: BranchOwnedArea[] = [
   },
 ];
 
-// Clinic orders/invoices (S3) are scoped by the inventory policy, and most
-// /orders routes are the manufacturer's fulfilment workflow — tracked in the
-// plan (§1d) rather than route-by-route here until Phase 8.
+// Clinic orders / invoices (S3, Phase 8) follow the inventory-policy scope:
+// list + detail (every clinic order action loads through findOne) + create
+// validation — contract-tested in the suite. Most other /orders routes are
+// the manufacturer's fulfilment workflow, so they aren't listed route-by-route.
 
 export const registryRouteKeys = (): Map<string, { area: BranchOwnedArea; status: RouteStatus }> => {
   const map = new Map<string, { area: BranchOwnedArea; status: RouteStatus }>();

@@ -1,3 +1,4 @@
+import { unrestrictedBranchVisibilityMock } from '../branch-visibility/testing/branch-visibility.mock';
 import { ForbiddenException } from '@nestjs/common';
 import { InvoicesService } from './invoices.service';
 
@@ -46,6 +47,7 @@ const makeService = (rows: any[] = []) => {
     {} as any, // usersRepository
     {} as any, // orgUserRepository
     {} as any, // notificationsService
+    unrestrictedBranchVisibilityMock(),
   );
   return { service, qb, orderItemsRepository };
 };

@@ -1,3 +1,4 @@
+import { BranchVisibilityModule } from '../branch-visibility/branch-visibility.module';
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { OrdersController } from './orders.controller';
@@ -19,6 +20,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
 @Module({
   imports: [
     TypeOrmModule.forFeature([Order, OrderItem, ManufacturerExternalOrderAccess, OrderReplacement, Product, User, OrganisationUser, Invoice, Dispute, Branch]),
+    BranchVisibilityModule,
     InventoryModule,
     NotificationsModule,
   ],

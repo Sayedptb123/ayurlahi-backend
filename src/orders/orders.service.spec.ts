@@ -1,3 +1,4 @@
+import { unrestrictedBranchVisibilityMock } from '../branch-visibility/testing/branch-visibility.mock';
 import { ForbiddenException, BadRequestException } from '@nestjs/common';
 import { OrdersService } from './orders.service';
 import { Order } from './entities/order.entity';
@@ -54,6 +55,7 @@ const makeService = (rows: any[]) => {
     noop() as any, // branchesRepository
     {} as any, // inventoryService
     {} as any, // notificationsService
+    unrestrictedBranchVisibilityMock(),
   );
   return { service, ordersRepository };
 };
@@ -297,7 +299,7 @@ const makeWriteService = (order: any, inventoryService: any = {}) => {
     {} as any, // disputesRepository
     branchesRepository as any,
     inventoryService as any,
-    notificationsService as any,
+    notificationsService as any, unrestrictedBranchVisibilityMock()
   );
   jest.spyOn(service, 'findOne').mockResolvedValue(order);
   return { service, ordersRepository, productsRepository, invoicesRepository };
@@ -596,7 +598,7 @@ const makeCorrectionService = (fixtures: ReturnType<typeof makeCorrectionFixture
     {} as any, // disputesRepository
     {} as any, // branchesRepository
     {} as any, // inventoryService
-    notificationsService as any,
+    notificationsService as any, unrestrictedBranchVisibilityMock()
   );
 
   return { service, orderRepo, itemRepo, invoiceRepo, productRepo };
@@ -634,7 +636,7 @@ describe('OrdersService — T24 commission rate (5%, not 0.05%)', () => {
     it('site #1 — lockAndSnapshotOrderItems (order creation): Rs 10,000 item -> Rs 500 commission', async () => {
         const service = new OrdersService(
             {} as any, {} as any, {} as any, {} as any, {} as any, {} as any,
-            {} as any, {} as any, {} as any, {} as any, {} as any, {} as any,
+            {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, unrestrictedBranchVisibilityMock()
         );
         const fakeManager: any = {
             getRepository: jest.fn(() => ({
@@ -699,6 +701,7 @@ describe('OrdersService — T24 commission rate (5%, not 0.05%)', () => {
             {} as any, // branchesRepository
             {} as any, // inventoryService
             {} as any, // notificationsService
+    unrestrictedBranchVisibilityMock(),
         );
         jest.spyOn(service, 'findOne').mockResolvedValue(order);
 
@@ -740,6 +743,7 @@ describe('OrdersService — T24 commission rate (5%, not 0.05%)', () => {
             {} as any, // branchesRepository
             {} as any, // inventoryService
             {} as any, // notificationsService
+    unrestrictedBranchVisibilityMock(),
         );
         jest.spyOn(service, 'findOne').mockResolvedValue(order);
 

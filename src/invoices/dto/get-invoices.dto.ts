@@ -9,6 +9,11 @@ export enum InvoiceStatus {
 }
 
 export class GetInvoicesDto {
+  // Branch switcher (clinic callers) — follows the invoice's order branch.
+  @IsOptional()
+  @IsUUID()
+  branchId?: string;
+
   @IsOptional()
   @Type(() => Number)
   @IsInt()

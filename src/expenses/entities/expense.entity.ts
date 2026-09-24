@@ -19,6 +19,11 @@ export class Expense {
     @Column({ type: 'uuid', name: 'organisation_id' })
     organisationId: string;
 
+    // Branch scoping (Phase 8 / S2): the column existed but was never mapped,
+    // so every expense was saved with no branch.
+    @Column({ type: 'uuid', nullable: true, name: 'branch_id' })
+    branchId: string | null;
+
     @Column({ type: 'decimal', precision: 12, scale: 2, name: 'amount' })
     amount: number;
 

@@ -1,3 +1,4 @@
+import { BranchVisibilityService } from '../branch-visibility/branch-visibility.service';
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In, IsNull } from 'typeorm';
@@ -28,14 +29,19 @@ export class BillsService {
     private orgUserRepo: Repository<OrganisationUser>,
     private notificationsService: NotificationsService,
     private costPosting: CostPaymentPostingService,
+    private branchVisibilityService: BranchVisibilityService,
   ) {}
 
   // --- CRUD Schedules ---
 
   async create(createDto: CreateRecurringBillDto, reqUser: RequestUser) {
+    // Branch scoping G10: the requested branch is validated, never trusted.
+    const branchId = await this.branchVisibilityService.resolveWriteBranch(
+      await this.branchVisibilityService.scopeFor(reqUser), reqUser.organisationId, { requested: createDto.branchId },
+    );
     const bill = this.billRepo.create({
       organisationId: reqUser.organisationId,
-      branchId: createDto.branchId ?? null,
+      branchId,
       category: createDto.category,
       billName: createDto.billName,
       billType: createDto.billType,
@@ -155,6 +161,7 @@ export class BillsService {
       const savedExpense = await manager.getRepository(Expense).save(
         manager.getRepository(Expense).create({
           organisationId: bill.organisationId,
+          branchId: bill.branchId ?? null,
           amount: logDto.paidAmount,
           category: bill.category,
           description: `Bill Payment: ${bill.billName} - Period ${logDto.billPeriodStart || 'N/A'} to ${logDto.billPeriodEnd || 'N/A'}${logDto.billNumber ? ` (Ref: ${logDto.billNumber})` : ''}`,
@@ -279,6 +286,7 @@ export class BillsService {
             const savedExpense = await manager.getRepository(Expense).save(
               manager.getRepository(Expense).create({
                 organisationId: bill.organisationId,
+                branchId: bill.branchId ?? null,
                 amount: expenseAmount,
                 category: bill.category,
                 description: `Auto-generated: ${bill.billName} (Schedule)`,

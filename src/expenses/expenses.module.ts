@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { BranchVisibilityModule } from '../branch-visibility/branch-visibility.module';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ExpensesService } from './expenses.service';
 import { ExpensesController } from './expenses.controller';
@@ -8,7 +9,8 @@ import { OrganisationUser } from '../organisation-users/entities/organisation-us
 import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
-    imports: [TypeOrmModule.forFeature([Expense, User, OrganisationUser]), NotificationsModule],
+    imports: [TypeOrmModule.forFeature([Expense, User, OrganisationUser]),
+    BranchVisibilityModule, NotificationsModule],
     controllers: [ExpensesController],
     providers: [ExpensesService],
     exports: [ExpensesService],

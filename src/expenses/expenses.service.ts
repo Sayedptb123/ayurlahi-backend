@@ -1,3 +1,4 @@
+import { BranchVisibilityService } from '../branch-visibility/branch-visibility.service';
 import { Injectable, NotFoundException, ForbiddenException, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In, IsNull } from 'typeorm';
@@ -16,6 +17,7 @@ export interface GetExpensesQuery {
     category?: string;
     startDate?: string;
     endDate?: string;
+    branchId?: string; // branch switcher — narrows after scope
 }
 
 // flagged → verified is the Expenses screen's "Mark as Verified" action.
@@ -33,7 +35,19 @@ export class ExpensesService {
         @InjectRepository(OrganisationUser)
         private orgUserRepository: Repository<OrganisationUser>,
         private notificationsService: NotificationsService,
+        private branchVisibilityService: BranchVisibilityService,
     ) { }
+
+    // Branch scoping (Phase 8 / S2): expenses are open to all clinic members,
+    // so they follow the full rule — scope for reads, 404 on single records,
+    // trusted branch on create. scope/Branch_Scoping_Remediation_Plan_2026-09-24.md.
+    private scopeOf(reqUser: RequestUser) {
+        return this.branchVisibilityService.scopeFor(reqUser);
+    }
+
+    private async assertExpenseAccess(reqUser: RequestUser, expense: Expense, id: string) {
+        this.branchVisibilityService.assertBranchAccess(await this.scopeOf(reqUser), expense.branchId, `Expense with ID ${id} not found`);
+    }
 
     async create(createExpenseDto: CreateExpenseDto, reqUser: RequestUser) {
         const orgId = reqUser.organisationId;
@@ -41,8 +55,12 @@ export class ExpensesService {
             throw new Error('User must belong to an organization to create expenses');
         }
 
+        const branchId = await this.branchVisibilityService.resolveWriteBranch(
+            await this.scopeOf(reqUser), orgId, { requested: createExpenseDto.branchId },
+        );
         const expense = this.expenseRepository.create({
             organisationId: orgId,
+            branchId,
             amount: createExpenseDto.amount,
             category: createExpenseDto.category,
             description: createExpenseDto.description,
@@ -81,6 +99,8 @@ export class ExpensesService {
         const skip = (page - 1) * limit;
 
         const where: any = { organisationId, deletedAt: IsNull() };
+        const branchCond = this.branchVisibilityService.branchFindCondition(await this.scopeOf(reqUser), query.branchId);
+        if (branchCond) where.branchId = branchCond;
         if (status) where.status = status;
         if (category) where.category = category;
 
@@ -111,6 +131,7 @@ export class ExpensesService {
         if (!expense) {
             throw new NotFoundException(`Expense with ID ${id} not found`);
         }
+        await this.assertExpenseAccess(reqUser, expense, id);
 
         return this.formatExpense(expense);
     }
@@ -125,6 +146,7 @@ export class ExpensesService {
             where: { id, organisationId: reqUser.organisationId, deletedAt: IsNull() },
         });
         if (!expense) throw new NotFoundException(`Expense with ID ${id} not found`);
+        await this.assertExpenseAccess(reqUser, expense, id);
 
         const previousStatus = expense.status;
         const nextStatus = updateExpenseDto.status ?? previousStatus;
@@ -207,6 +229,7 @@ export class ExpensesService {
             where: { id, organisationId: reqUser.organisationId, deletedAt: IsNull() },
         });
         if (!expense) throw new NotFoundException(`Expense with ID ${id} not found`);
+        await this.assertExpenseAccess(reqUser, expense, id);
         // Only a pending (undecided) expense can be withdrawn. Verified and
         // flagged ones stay on record so reports and the audit trail hold.
         if (expense.status !== 'pending') {

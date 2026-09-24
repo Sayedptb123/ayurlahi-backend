@@ -1,3 +1,4 @@
+import { BranchVisibilityService } from '../branch-visibility/branch-visibility.service';
 import {
   Injectable,
   NotFoundException,
@@ -76,6 +77,7 @@ export class OrdersService {
     private branchesRepository: Repository<Branch>,
     private inventoryService: InventoryService,
     private notificationsService: NotificationsService,
+    private branchVisibilityService: BranchVisibilityService,
   ) { }
 
   // ADR-005 Step 3 (§6) — the one place the pre-Step-1 legacy-order
@@ -161,6 +163,10 @@ export class OrdersService {
     if (organisationType === 'CLINIC') {
       if (organisationId) {
         queryBuilder.andWhere('order.organisation_id = :orgId', { orgId: organisationId });
+        // Branch scoping (Phase 8 / S3): inventory-policy scope, then the switcher.
+        const scope = await this.branchVisibilityService.inventoryScopeFor({ userId, role: userRole, organisationId });
+        this.branchVisibilityService.applyBranchScope(queryBuilder, 'order.branchId', scope);
+        this.branchVisibilityService.narrowToSelectedBranch(queryBuilder, 'order.branchId', query.branchId, scope);
       } else {
         return { data: [], pagination: { page, limit, total: 0, totalPages: 0 } };
       }
@@ -237,6 +243,13 @@ export class OrdersService {
       if (!organisationId || organisationId !== order.organisationId) {
         throw new ForbiddenException('You do not have access to this order');
       }
+      // Branch scoping (Phase 8 / S3): 404 outside the caller's inventory
+      // branch scope — covers every order action that loads through findOne.
+      this.branchVisibilityService.assertBranchAccess(
+        await this.branchVisibilityService.inventoryScopeFor({ userId, role: userRole, organisationId }),
+        order.branchId,
+        `Order with ID ${id} not found`,
+      );
     } else if (organisationType === 'MANUFACTURER') {
       if (!organisationId) {
         throw new ForbiddenException('You do not have access to this order');
@@ -292,12 +305,17 @@ export class OrdersService {
     throw new Error('Failed to generate a unique order number after 3 attempts');
   }
 
-  async create(userId: string, createOrderDto: CreateOrderDto, organisationType?: string, organisationId?: string) {
+  async create(userId: string, createOrderDto: CreateOrderDto, organisationType?: string, organisationId?: string, userRole?: string) {
     if (organisationType !== 'CLINIC' || !organisationId) {
       throw new ForbiddenException('Only clinic users can create orders');
     }
 
     const clinicId = organisationId;
+    const orderBranchId = await this.branchVisibilityService.resolveWriteBranch(
+      await this.branchVisibilityService.inventoryScopeFor({ userId, role: userRole, organisationId: clinicId }),
+      clinicId,
+      { requested: createOrderDto.branchId },
+    );
     const clinic = await this.ordersRepository.manager
       .getRepository('organisations')
       .findOne({ where: { id: clinicId } });
@@ -334,7 +352,8 @@ export class OrdersService {
         },
         // ADR-005 — captured for future inventory-branch wiring; not yet
         // consumed anywhere (see the entity's own comment).
-        branchId: createOrderDto.branchId ?? null,
+        // Branch scoping G10: validated against the caller's inventory scope (above).
+        branchId: orderBranchId,
         notes: createOrderDto.notes || null,
         items: orderItems as OrderItem[],
       } as any) as unknown as Order;

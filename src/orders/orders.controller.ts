@@ -96,7 +96,7 @@ export class OrdersController {
 
   @Post()
   async create(@Request() req, @Body() createOrderDto: CreateOrderDto) {
-    return this.ordersService.create(req.user.userId, createOrderDto, req.user.organisationType, req.user.organisationId);
+    return this.ordersService.create(req.user.userId, createOrderDto, req.user.organisationType, req.user.organisationId, req.user.role);
   }
 
   @Post(':id/reorder')

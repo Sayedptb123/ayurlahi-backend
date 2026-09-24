@@ -57,6 +57,7 @@ interface Fixture {
   records: Record<PatientLinked, Record<Side, string>>;
   stays: Record<Stay, Record<Side, string>>;
   enquiries: { A: string; B: string; NULL: string };
+  procurement: { order: Record<'A' | 'B' | 'NULL', string>; invoice: Record<Side, string>; po: Record<Side, string>; expense: Record<'A' | 'B' | 'NULL', string> };
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -78,6 +79,8 @@ async function ensureFixture(ds: DataSource): Promise<Fixture> {
     [orgId],
   );
   await ds.query(`UPDATE organisation_settings SET patient_visibility = 'isolated' WHERE organisation_id = $1`, [orgId]);
+  // Procurement data (orders / invoices / POs) follows the INVENTORY policy.
+  await ds.query(`UPDATE organisation_settings SET inventory_policy = 'per_branch' WHERE organisation_id = $1`, [orgId]);
   // Newborn assessments sit behind the postnatal capability.
   await ds.query(
     `INSERT INTO clinic_capabilities (organisation_id, has_postnatal_care)
@@ -245,7 +248,37 @@ async function ensureFixture(ds: DataSource): Promise<Fixture> {
     NULL: await enquiry('ZZBF-ENQ-NULL', null),
   };
 
-  return { orgId, branchA, branchB, userIds, doctorStaffId, patients, records, stays, enquiries };
+  // Procurement + expenses: one row per branch (+ NULL where Q1 matters).
+  const [supplier] = await ds.query(`SELECT id FROM suppliers WHERE organisation_id = $1 AND name = 'ZZBF Supplier'`, [orgId]);
+  const supplierId = supplier?.id ?? (await one(`INSERT INTO suppliers (organisation_id, name) VALUES ($1, 'ZZBF Supplier') RETURNING id`, [orgId])).id;
+  const order = (tag: string, branch: string | null) => record(
+    `SELECT id FROM orders WHERE organisation_id = $1 AND order_number = $2`,
+    `INSERT INTO orders (organisation_id, order_number, subtotal, total_amount, source, branch_id) VALUES ($1, $2, 1, 1, 'app', $3) RETURNING id`,
+    [orgId, tag, branch]);
+  const expense = (tag: string, branch: string | null) => record(
+    `SELECT id FROM expenses WHERE organisation_id = $1 AND description = $2 AND deleted_at IS NULL`,
+    `INSERT INTO expenses (organisation_id, description, amount, expense_date, created_by, category, status, branch_id)
+     VALUES ($1, $2, 1, '2026-09-01', $3, 'operations', 'pending', $4) RETURNING id`,
+    [orgId, tag, userIds.owner, branch]);
+  const procurement = {
+    order: { A: await order('ZZBF-ORD-A', branchA), B: await order('ZZBF-ORD-B', branchB), NULL: await order('ZZBF-ORD-NULL', null) },
+    invoice: {} as Record<Side, string>,
+    po: {} as Record<Side, string>,
+    expense: { A: await expense('ZZBF-EXP-A', branchA), B: await expense('ZZBF-EXP-B', branchB), NULL: await expense('ZZBF-EXP-NULL', null) },
+  };
+  for (const side of ['A', 'B'] as Side[]) {
+    procurement.invoice[side] = (
+      (await one(`SELECT id FROM invoices WHERE "invoiceNumber" = $1`, [`ZZBF-INV-${side}`])) ??
+      (await one(`INSERT INTO invoices ("invoiceNumber", "orderId", "invoiceDate", "totalAmount", "clinicDetails", items, subtotal, "gstAmount", "shippingCharges", "platformFee")
+                  VALUES ($1, $2, '2026-09-01', 1, '{}', '[]', 1, 0, 0, 0) RETURNING id`, [`ZZBF-INV-${side}`, procurement.order[side]]))
+    ).id;
+    procurement.po[side] = await record(
+      `SELECT id FROM purchase_orders WHERE organisation_id = $1 AND po_number = $2`,
+      `INSERT INTO purchase_orders (organisation_id, po_number, supplier_id, branch_id) VALUES ($1, $2, $3, $4) RETURNING id`,
+      [orgId, `ZZBF-PO-${side}`, supplierId, branchId[side]]);
+  }
+
+  return { orgId, branchA, branchB, userIds, doctorStaffId, patients, records, stays, enquiries, procurement };
 }
 
 // Every request crosses to the staging DB (Mumbai); the 5 s default is too tight.
@@ -880,6 +913,102 @@ describe('Branch isolation contract (real DB)', () => {
       if (ok.body?.id) createdLinked.push({ table: 'booking_enquiries', id: ok.body.id });
       expect(ok.body.branchId).toBe(fx.branchA);
       expect((await api('multiAB').post('/retreat/enquiries', { contactName: name, phone: '9000000998', channel: 'PHONE' })).status).toBe(400);
+    });
+  });
+  // ── Phase 8: switcher consistency (expenses, orders, invoices, POs, rooms) ─
+  describe('switcher consistency (Phase 8)', () => {
+    const P = () => fx.procurement;
+    const listIds = async (role: Role, url: string) => ids(await api(role).get(url));
+
+    it('expenses: restricted sees own branch only (no B, no NULL); owner sees all, switcher narrows', async () => {
+      const own = await listIds('restrictedA', '/expenses?limit=100');
+      expect(own).toContain(P().expense.A);
+      expect(own).not.toContain(P().expense.B);
+      expect(own).not.toContain(P().expense.NULL);
+      expect(await listIds('restrictedA', `/expenses?limit=100&branchId=${fx.branchB}`)).toEqual([]);
+      expect(await listIds('owner', '/expenses?limit=100')).toEqual(expect.arrayContaining([P().expense.A, P().expense.B, P().expense.NULL]));
+      const onlyB = await listIds('owner', `/expenses?limit=100&branchId=${fx.branchB}`);
+      expect(onlyB).toContain(P().expense.B);
+      expect(onlyB).not.toContain(P().expense.A);
+    });
+    it('expenses: Branch B expense by id → 404; create in another branch → 403; no branch → own branch', async () => {
+      expect((await api('restrictedA').get(`/expenses/${P().expense.B}`)).status).toBe(404);
+      const base = { amount: 1, category: 'operations', description: `ZZRun-${RUN}`, date: '2026-09-24' };
+      expect((await api('restrictedA').post('/expenses', { ...base, branchId: fx.branchB })).status).toBe(403);
+      const ok = await api('restrictedA').post('/expenses', base);
+      if (ok.body?.id) createdLinked.push({ table: 'expenses', id: ok.body.id });
+      expect(ok.status).toBe(201);
+      expect(ok.body.branchId).toBe(fx.branchA);
+    });
+
+    it('clinic orders: restricted sees own branch only; order B by id → 404; multi-branch narrows by switcher', async () => {
+      const own = await listIds('restrictedA', '/orders?limit=100');
+      expect(own).toContain(P().order.A);
+      expect(own).not.toContain(P().order.B);
+      expect(own).not.toContain(P().order.NULL);
+      expect(await listIds('restrictedA', `/orders?limit=100&branchId=${fx.branchB}`)).toEqual([]);
+      expect((await api('restrictedA').get(`/orders/${P().order.B}`)).status).toBe(404);
+      const onlyA = await listIds('multiAB', `/orders?limit=100&branchId=${fx.branchA}`);
+      expect(onlyA).toContain(P().order.A);
+      expect(onlyA).not.toContain(P().order.B);
+      expect(await listIds('owner', '/orders?limit=100')).toEqual(expect.arrayContaining([P().order.A, P().order.B, P().order.NULL]));
+    });
+
+    it("invoices follow their order's branch — list, detail and the summary totals", async () => {
+      const own = await listIds('restrictedA', '/invoices?limit=100');
+      expect(own).toContain(P().invoice.A);
+      expect(own).not.toContain(P().invoice.B);
+      expect((await api('restrictedA').get(`/invoices/${P().invoice.B}`)).status).toBe(404);
+      // Totals: restricted A's summary counts only Branch A's invoice; owner's counts both.
+      const count = (b: any) => Number(b.pendingCount) + Number(b.paidCount) + Number(b.overdueCount);
+      const a = (await api('restrictedA').get('/invoices/summary')).body;
+      const all = (await api('owner').get('/invoices/summary')).body;
+      const onlyB = (await api('owner').get(`/invoices/summary?branchId=${fx.branchB}`)).body;
+      expect(count(a)).toBe(1);
+      expect(count(all)).toBe(2);
+      expect(count(onlyB)).toBe(1);
+    });
+
+    it('purchase orders: list and detail follow the branch scope', async () => {
+      const base = `/organisations/${fx.orgId}/purchase-orders`;
+      const own = await listIds('restrictedA', base);
+      expect(own).toContain(P().po.A);
+      expect(own).not.toContain(P().po.B);
+      expect(await listIds('restrictedA', `${base}?branchId=${fx.branchB}`)).toEqual([]);
+      expect((await api('restrictedA').get(`${base}/${P().po.B}`)).status).toBe(404);
+      expect(await listIds('owner', base)).toEqual(expect.arrayContaining([P().po.A, P().po.B]));
+    });
+
+    it("rooms picker: restricted never gets another branch's rooms; owner's switcher narrows", async () => {
+      const own = await listIds('restrictedA', '/retreat/rooms');
+      expect(own).toContain(fx.stays.room.A);
+      expect(own).not.toContain(fx.stays.room.B);
+      const avail = await listIds('restrictedA', `/retreat/rooms/available?checkInDate=2033-01-01&checkOutDate=2033-01-02&branchId=${fx.branchB}`);
+      expect(avail).not.toContain(fx.stays.freeRoom.B);
+      const ownerB = await listIds('owner', `/retreat/rooms?branchId=${fx.branchB}`);
+      expect(ownerB).toContain(fx.stays.room.B);
+      expect(ownerB).not.toContain(fx.stays.room.A);
+      expect((await api('restrictedA').post('/retreat/bookings/check-availability', {
+        roomId: fx.stays.freeRoom.B, checkInDate: '2033-01-01', checkOutDate: '2033-01-02',
+      })).status).toBe(404);
+    });
+
+    it("dashboard tiles: today's appointments follow the switcher (counts)", async () => {
+      const today = new Date().toISOString().slice(0, 10);
+      const created: string[] = [];
+      for (const side of ['A', 'B'] as Side[]) {
+        const [row] = await ds.query(
+          `INSERT INTO appointments (organisation_id, notes, patient_id, doctor_id, appointment_date, appointment_time, branch_id)
+           VALUES ($1, $2, $3, $4, $5, '23:59', $6) RETURNING id`,
+          [fx.orgId, `ZZRun-${RUN}`, fx.patients[side], fx.doctorStaffId, today, side === 'A' ? fx.branchA : fx.branchB]);
+        created.push(row.id);
+        createdLinked.push({ table: 'appointments', id: row.id });
+      }
+      const n = async (role: Role, q: string) => ids(await api(role).get(`/appointments?appointmentDate=${today}&limit=100${q}`)).filter((id) => created.includes(id)).length;
+      expect(await n('owner', '')).toBe(2);
+      expect(await n('owner', `&branchId=${fx.branchA}`)).toBe(1);
+      expect(await n('restrictedA', '')).toBe(1);
+      expect(await n('restrictedA', `&branchId=${fx.branchB}`)).toBe(0);
     });
   });
 });

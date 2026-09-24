@@ -1,3 +1,4 @@
+import { BranchVisibilityService } from '../branch-visibility/branch-visibility.service';
 import {
   Injectable,
   NotFoundException,
@@ -29,6 +30,7 @@ export class InvoicesService {
     @InjectRepository(OrganisationUser)
     private orgUserRepository: Repository<OrganisationUser>,
     private notificationsService: NotificationsService,
+    private branchVisibilityService: BranchVisibilityService,
   ) {}
 
   async findAll(
@@ -58,6 +60,10 @@ export class InvoicesService {
         return { data: [], pagination: { page, limit, total: 0, totalPages: 0 } };
       }
       queryBuilder.andWhere('order.organisation_id = :orgId', { orgId: organisationId });
+      // Branch scoping (Phase 8 / S3): an invoice follows its order's branch.
+      const scope = await this.branchVisibilityService.inventoryScopeFor({ userId, role: userRole, organisationId });
+      this.branchVisibilityService.applyBranchScope(queryBuilder, 'order.branchId', scope);
+      this.branchVisibilityService.narrowToSelectedBranch(queryBuilder, 'order.branchId', query.branchId, scope);
     } else if (organisationType === 'MANUFACTURER') {
       if (!organisationId) {
         return { data: [], pagination: { page, limit, total: 0, totalPages: 0 } };
@@ -104,7 +110,7 @@ export class InvoicesService {
   // wrong past the first page. Mirrors applyStatusFilter's isPaid/dueDate
   // logic exactly, so these totals never disagree with what the status
   // tabs actually show.
-  async getSummary(organisationId?: string, organisationType?: string) {
+  async getSummary(organisationId?: string, organisationType?: string, user: { userId?: string; role?: string } = {}, branchId?: string) {
     const zero = {
       totalOutstanding: 0,
       totalPaid: 0,
@@ -122,6 +128,10 @@ export class InvoicesService {
     if (organisationType === 'CLINIC') {
       if (!organisationId) return zero;
       queryBuilder.andWhere('order.organisation_id = :orgId', { orgId: organisationId });
+      // Branch scoping (Phase 8 / S3): totals over the caller's branches only.
+      const scope = await this.branchVisibilityService.inventoryScopeFor({ ...user, organisationId });
+      this.branchVisibilityService.applyBranchScope(queryBuilder, 'order.branchId', scope);
+      this.branchVisibilityService.narrowToSelectedBranch(queryBuilder, 'order.branchId', branchId, scope);
     } else if (organisationType === 'MANUFACTURER') {
       if (!organisationId) return zero;
       queryBuilder.andWhere(
@@ -196,6 +206,13 @@ export class InvoicesService {
     }
 
     await this.assertCanAccess(invoice, organisationId, organisationType);
+    if (organisationType === 'CLINIC') {
+      this.branchVisibilityService.assertBranchAccess(
+        await this.branchVisibilityService.inventoryScopeFor({ userId, role: userRole, organisationId }),
+        invoice.order?.branchId,
+        `Invoice with ID ${id} not found`,
+      );
+    }
     await this.attachOrderIdentity([invoice]);
 
     return {

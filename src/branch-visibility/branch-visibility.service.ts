@@ -87,6 +87,26 @@ export class BranchVisibilityService {
     return { kind: 'branches', ids: live.map((b) => b.id) };
   }
 
+  // Same contract as scopeFor, but gated on the organisation's INVENTORY policy
+  // (ADR-005) — for procurement data: clinic orders, invoices, purchase orders.
+  // An org's patient and inventory visibility are independent decisions.
+  async inventoryScopeFor(user: BranchScopeUser): Promise<BranchScope> {
+    const { userId, role, organisationId } = user;
+    if (!organisationId) return { kind: 'all' };
+    if (role && (PLATFORM_ROLES.has(role) || ORG_WIDE_ROLES.has(role))) return { kind: 'all' };
+    const settings = await this.organisationSettingsService.getOrCreate(organisationId);
+    if (settings.inventoryPolicy !== InventoryPolicy.PER_BRANCH) return { kind: 'all' };
+    const branchCount = await this.branchesRepository.count({ where: { organisationId, deletedAt: IsNull() } });
+    if (branchCount === 0) return { kind: 'all' };
+    const assigned = (await this.resolveViaAssignments(userId, organisationId, role)) ?? [];
+    if (assigned.length === 0) return { kind: 'branches', ids: [] };
+    const live = await this.branchesRepository.find({
+      where: { id: In(assigned), organisationId, deletedAt: IsNull() },
+      select: ['id'],
+    });
+    return { kind: 'branches', ids: live.map((b) => b.id) };
+  }
+
   // For routes that take the organisation from the URL
   // (organisations/:organisationId/...): the JWT role only describes the
   // caller's current organisation, so a different URL organisation is refused

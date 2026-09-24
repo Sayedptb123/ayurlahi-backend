@@ -1,8 +1,13 @@
-import { IsOptional, IsInt, IsEnum, Min } from 'class-validator';
+import { IsOptional, IsInt, IsEnum, Min , IsUUID } from 'class-validator';
 import { Type } from 'class-transformer';
 import { OrderStatus, OrderSource } from '../entities/order.entity';
 
 export class GetOrdersDto {
+  // Branch switcher (clinic callers) — narrows after the inventory branch scope.
+  @IsOptional()
+  @IsUUID()
+  branchId?: string;
+
   @IsOptional()
   @Type(() => Number)
   @IsInt()
