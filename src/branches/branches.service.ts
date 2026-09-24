@@ -21,6 +21,7 @@ import { GetBranchesDto } from './dto/get-branches.dto';
 import { GetPendingBranchesDto } from './dto/get-pending-branches.dto';
 import { NotificationsService } from '../notifications/notifications.service';
 import { OrganisationSettingsService } from '../organisation-settings/organisation-settings.service';
+import { BranchVisibilityService } from '../branch-visibility/branch-visibility.service';
 import {
   PatientVisibility,
   StaffPolicy,
@@ -37,6 +38,7 @@ export class BranchesService {
     private readonly dataSource: DataSource,
     private readonly notificationsService: NotificationsService,
     private readonly organisationSettingsService: OrganisationSettingsService,
+    private readonly branchVisibilityService: BranchVisibilityService,
   ) {}
 
   private async getOrgOwnerIds(organisationId: string): Promise<string[]> {
@@ -312,6 +314,41 @@ export class BranchesService {
       .addOrderBy('branch.createdAt', 'DESC')
       .getManyAndCount();
 
+    return { data, total };
+  }
+
+  // Branches the caller may pick in the branch switcher: only those whose
+  // data they can actually see. Org-wide roles, and every user in a
+  // patient-visibility 'shared' org, get all branches; branch-restricted
+  // staff in an 'isolated' org get only their active assignments (none at
+  // all if unassigned -- same fail-closed rule as the data queries).
+  // Unpaginated: the switcher needs the complete list.
+  async findSwitchable(
+    organisationId: string,
+    userId: string | undefined,
+    role: string | undefined,
+  ): Promise<{ data: Branch[]; total: number }> {
+    const visibleBranchIds = await this.branchVisibilityService.resolveVisibleBranchIds(
+      userId,
+      organisationId,
+      role,
+    );
+    if (visibleBranchIds !== null && visibleBranchIds.length === 0) {
+      return { data: [], total: 0 };
+    }
+
+    const queryBuilder = this.branchesRepository
+      .createQueryBuilder('branch')
+      .where('branch.organisationId = :organisationId', { organisationId })
+      .andWhere('branch.deletedAt IS NULL');
+    if (visibleBranchIds !== null) {
+      queryBuilder.andWhere('branch.id IN (:...visibleBranchIds)', { visibleBranchIds });
+    }
+
+    const [data, total] = await queryBuilder
+      .orderBy('branch.isPrimary', 'DESC')
+      .addOrderBy('branch.createdAt', 'DESC')
+      .getManyAndCount();
     return { data, total };
   }
 

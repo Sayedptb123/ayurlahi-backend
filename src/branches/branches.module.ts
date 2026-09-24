@@ -8,6 +8,7 @@ import { OrganisationUser } from '../organisation-users/entities/organisation-us
 import { NotificationsModule } from '../notifications/notifications.module';
 import { OrganisationSettingsModule } from '../organisation-settings/organisation-settings.module';
 import { StaffBranchAssignmentsModule } from '../staff-branch-assignments/staff-branch-assignments.module';
+import { BranchVisibilityModule } from '../branch-visibility/branch-visibility.module';
 
 @Module({
   imports: [
@@ -15,6 +16,7 @@ import { StaffBranchAssignmentsModule } from '../staff-branch-assignments/staff-
     NotificationsModule,
     OrganisationSettingsModule,
     StaffBranchAssignmentsModule,
+    BranchVisibilityModule,
   ],
   controllers: [BranchesController, BranchesAdminController],
   providers: [BranchesService],

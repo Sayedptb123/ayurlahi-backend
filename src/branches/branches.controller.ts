@@ -9,6 +9,7 @@ import {
   Query,
   UseGuards,
   Request,
+  ForbiddenException,
 } from '@nestjs/common';
 import { BranchesService } from './branches.service';
 import { CreateBranchDto } from './dto/create-branch.dto';
@@ -42,6 +43,24 @@ export class BranchesController {
     @Query() query: GetBranchesDto,
   ) {
     return this.branchesService.findAll(organisationId, query);
+  }
+
+  // Branches for the caller's branch switcher -- only those they can see.
+  // The role in the JWT belongs to the caller's current organisation, so
+  // this answers only for that organisation.
+  @Get('switchable')
+  findSwitchable(
+    @Param('organisationId') organisationId: string,
+    @Request() req,
+  ) {
+    if (organisationId !== req.user?.organisationId) {
+      throw new ForbiddenException('Branch switcher is only available for your current organisation');
+    }
+    return this.branchesService.findSwitchable(
+      organisationId,
+      req.user?.userId,
+      req.user?.role,
+    );
   }
 
   @Get('primary')
