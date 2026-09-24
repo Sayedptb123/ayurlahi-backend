@@ -59,13 +59,19 @@ export class PatientsController {
   // Visible patients sharing an exact phone number -- duplicate hints for the
   // registration and booking-promotion flows. Declared before ':id'.
   @Get('possible-matches')
-  findPossibleMatches(@Request() req, @Query('phone') phone: string) {
+  findPossibleMatches(
+    @Request() req,
+    @Query('phone') phone: string,
+    @Query('branchId', new ParseUUIDPipe({ optional: true })) branchId?: string,
+  ) {
     return this.patientsService.findVisibleByPhone(
       req.user.userId,
       req.user.role,
       req.user.organisationId,
       req.user.organisationType,
       phone,
+      undefined,
+      branchId,
     );
   }
 

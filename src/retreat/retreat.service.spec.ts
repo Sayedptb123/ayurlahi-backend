@@ -465,7 +465,7 @@ describe('RetreatService.promoteEnquiry — audit event (second patient-creation
     });
 
     it('does not audit a creation when linking a patient the receptionist chose', async () => {
-        const { service, managerRecord } = makeService({ visiblePatient: { id: 'existing-p' } });
+        const { service, managerRecord } = makeService({ visiblePatient: { id: 'existing-p', branchId: 'branch-1' } });
         await service.promoteEnquiry('org-1', 'bk-1', 'u-1', { patientId: 'existing-p' });
         expect(managerRecord).toHaveLength(0);
     });
@@ -505,7 +505,7 @@ describe('RetreatService.promoteEnquiry — never auto-links by phone', () => {
         const { service, manager, patientsService } = makeService({ phoneMatches: [{ id: 'p-a' }, { id: 'p-b' }] });
         await expect(service.promoteEnquiry('org-1', 'bk-1', 'u-1', { role: 'RECEPTIONIST' }))
             .rejects.toBeInstanceOf(ConflictException);
-        expect(patientsService.findVisibleByPhone).toHaveBeenCalledWith('u-1', 'RECEPTIONIST', 'org-1', 'CLINIC', '9999999999', manager);
+        expect(patientsService.findVisibleByPhone).toHaveBeenCalledWith('u-1', 'RECEPTIONIST', 'org-1', 'CLINIC', '9999999999', manager, 'branch-1');
         expect(manager.save).not.toHaveBeenCalled();
     });
 
@@ -525,11 +525,18 @@ describe('RetreatService.promoteEnquiry — never auto-links by phone', () => {
     });
 
     it('links the chosen patient when it is visible to the caller', async () => {
-        const { service, manager, patientsService } = makeService({ visiblePatient: { id: 'p-a' } });
+        const { service, manager, patientsService } = makeService({ visiblePatient: { id: 'p-a', branchId: 'branch-1' } });
         const saved: any = await service.promoteEnquiry('org-1', 'bk-1', 'u-1', { role: 'RECEPTIONIST', patientId: 'p-a' });
         expect(patientsService.findVisibleById).toHaveBeenCalledWith('u-1', 'RECEPTIONIST', 'org-1', 'p-a', manager);
         expect(manager.create).not.toHaveBeenCalled();
         expect(saved.patientId).toBe('p-a');
+    });
+
+    it("refuses a visible patient registered at a different branch from the booking's", async () => {
+        const { service, manager } = makeService({ visiblePatient: { id: 'p-main', branchId: 'branch-main' } });
+        await expect(service.promoteEnquiry('org-1', 'bk-1', 'u-1', { patientId: 'p-main' }))
+            .rejects.toBeInstanceOf(BadRequestException);
+        expect(manager.save).not.toHaveBeenCalled();
     });
 
     it('404s when the chosen patient is in another org or a branch the caller cannot see', async () => {

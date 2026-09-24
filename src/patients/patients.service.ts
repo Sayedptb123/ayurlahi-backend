@@ -201,9 +201,10 @@ export class PatientsService {
 
   // Patients the caller can see that share this exact phone number. Phone is
   // a contact attribute, not identity: this only ever returns candidates for
-  // a human to choose from, never a patient to link automatically. Branch
-  // switcher deliberately not applied -- hints cover everything the caller
-  // may see. Non-CLINIC callers get nothing (deny by default).
+  // a human to choose from, never a patient to link automatically. A patient
+  // belongs to one branch, so a branchId narrows candidates to that branch
+  // (strict, like the list's switcher filter). Non-CLINIC callers get
+  // nothing (deny by default).
   async findVisibleByPhone(
     userId: string | undefined,
     userRole: string | undefined,
@@ -211,6 +212,7 @@ export class PatientsService {
     organisationType: string | undefined,
     phone: string | undefined,
     manager?: EntityManager,
+    branchId?: string | null,
   ): Promise<Patient[]> {
     const trimmed = phone?.trim();
     if (organisationType !== 'CLINIC' || !organisationId || !trimmed) return [];
@@ -237,6 +239,9 @@ export class PatientsService {
         'branch.name',
       ]);
     await this.applyVisibility(queryBuilder, userId, organisationId, userRole);
+    if (branchId) {
+      queryBuilder.andWhere('patient.branchId = :branchId', { branchId });
+    }
     queryBuilder
       .andWhere('patient.phone = :phone', { phone: trimmed })
       .orderBy('patient.createdAt', 'DESC')

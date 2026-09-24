@@ -1804,11 +1804,17 @@ export class RetreatService {
                     performedBy, opts.role, clinicId, opts.patientId, manager,
                 );
                 if (!chosen) throw new NotFoundException('Patient not found');
+                // A patient belongs to one branch: a branch's booking links
+                // only that branch's patients.
+                if (booking.branchId && chosen.branchId !== booking.branchId) {
+                    throw new BadRequestException('Patient is registered at another branch');
+                }
                 booking.patientId = chosen.id;
             } else {
                 if (!opts.createNew) {
                     const matches = await this.patientsService.findVisibleByPhone(
                         performedBy, opts.role, clinicId, 'CLINIC', booking.enquiry.phone, manager,
+                        booking.branchId,
                     );
                     if (matches.length > 0) {
                         throw new ConflictException(
