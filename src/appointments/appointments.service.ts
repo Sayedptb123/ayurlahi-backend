@@ -239,31 +239,13 @@ export class AppointmentsService {
         orgId: organisationId,
       });
 
-      // ADR-004 D9/Phase 4 — branch-level visibility, additive on top of the
-      // organisation filter above, never a replacement for it. Was previously
-      // missed here (appointments predates the four-table Phase 4 rollout).
-      const visibleBranchIds = await this.branchVisibilityService.resolveVisibleBranchIds(
-        userId,
-        organisationId,
-        userRole,
-      );
-      if (visibleBranchIds !== null) {
-        if (visibleBranchIds.length > 0) {
-          queryBuilder.andWhere(
-            '(appointment.branchId IS NULL OR appointment.branchId IN (:...visibleBranchIds))',
-            { visibleBranchIds },
-          );
-        } else {
-          queryBuilder.andWhere('appointment.branchId IS NULL');
-        }
-      }
-
-      // Branch switcher (personal view filter) — ANDed on top of the visibility
-      // filter above, so it can only narrow further, never broaden it. Strict
-      // match: "All Locations" is the combined view.
-      if (query.branchId) {
-        queryBuilder.andWhere('appointment.branchId = :selectedBranchId', { selectedBranchId: query.branchId });
-      }
+      // Branch scoping v2: shared scope (Q1 — NULL-branch appointments are
+      // not visible to restricted staff), then the switcher, which only
+      // narrows. (Found in the pre-deploy review: this list was still on the
+      // old OR-NULL rule.)
+      const scope = await this.scopeFor(userId, userRole, organisationId);
+      this.branchVisibilityService.applyBranchScope(queryBuilder, 'appointment.branchId', scope);
+      this.branchVisibilityService.narrowToSelectedBranch(queryBuilder, 'appointment.branchId', query.branchId, scope);
     }
 
     // Filters

@@ -187,8 +187,7 @@ export class RetreatService {
         if (data.isActive !== undefined) category.isActive = data.isActive;
         // ADR-004 D15 — this is also how a legacy NULL-branch row gets resolved.
         if (data.branchId !== undefined && data.branchId !== category.branchId) {
-            await this.assertBranchOwnership(clinicId, data.branchId, user);
-            category.branchId = data.branchId;
+            category.branchId = (await this.assertBranchOwnership(clinicId, data.branchId, user)) as string;
         }
         return this.categoryRepo.save(category);
     }
@@ -615,7 +614,8 @@ export class RetreatService {
         await this.assertCatalogRowAccess(clinicId, pkg.branchId, user, 'Package not found');
         // ADR-004 D15 — this is also how a legacy NULL-branch row gets resolved.
         if (data.branchId !== undefined && data.branchId !== pkg.branchId) {
-            if (data.branchId) await this.assertBranchOwnership(clinicId, data.branchId, user);
+            // Validated branch (an explicit null resolves like any missing branch — R3).
+            data = { ...data, branchId: await this.assertBranchOwnership(clinicId, data.branchId, user) } as any;
         }
         Object.assign(pkg, data);
         return this.packageRepo.save(pkg);

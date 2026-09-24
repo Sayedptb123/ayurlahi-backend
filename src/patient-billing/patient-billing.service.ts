@@ -627,8 +627,10 @@ export class PatientBillingService {
     }
 
     // Moving a bill: only into a live, approved branch the caller may use.
-    if (updateDto.branchId && updateDto.branchId !== bill.branchId) {
-      await this.branchVisibilityService.resolveWriteBranch(scope, bill.organisationId, { requested: updateDto.branchId });
+    // (incl. an explicit null: never NULL in a branched org — pre-deploy review R2)
+    let movedBranchId: string | null | undefined;
+    if (updateDto.branchId !== undefined && updateDto.branchId !== bill.branchId) {
+      movedBranchId = await this.branchVisibilityService.resolveWriteBranch(scope, bill.organisationId, { requested: updateDto.branchId });
     }
 
     // Paid amount and the payment-derived statuses (partial/paid) come only from
@@ -707,7 +709,7 @@ export class PatientBillingService {
     if (updateDto.bookingId !== undefined) bill.bookingId = updateDto.bookingId;
     if (updateDto.admissionId !== undefined)
       bill.admissionId = updateDto.admissionId;
-    if (updateDto.branchId !== undefined) bill.branchId = updateDto.branchId;
+    if (movedBranchId !== undefined) bill.branchId = movedBranchId;
     if (updateDto.billDate !== undefined)
       bill.billDate = new Date(updateDto.billDate);
     if (updateDto.dueDate !== undefined)

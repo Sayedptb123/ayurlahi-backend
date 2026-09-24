@@ -1100,4 +1100,35 @@ describe('Branch isolation contract (real DB)', () => {
       expect(res.status).not.toBe(200); // rejected as a bad date, not executed as SQL
     });
   });
+  // ── Pre-deploy review findings (R1, R2, R4) ───────────────────────────────
+  describe('pre-deploy review regressions', () => {
+    it('R1: a NULL-branch appointment is not in a restricted user\'s appointment list (Q1)', async () => {
+      const [row] = await ds.query(
+        `INSERT INTO appointments (organisation_id, notes, patient_id, doctor_id, appointment_date, appointment_time, branch_id)
+         VALUES ($1, $2, $3, $4, '2034-01-01', '09:00', NULL) RETURNING id`,
+        [fx.orgId, `ZZRun-${RUN}`, fx.patients.NULL, fx.doctorStaffId]);
+      createdLinked.push({ table: 'appointments', id: row.id });
+      expect(ids(await api('restrictedA').get('/appointments?limit=100'))).not.toContain(row.id);
+      expect(ids(await api('owner').get('/appointments?limit=100'))).toContain(row.id);
+    });
+
+    it('R2: a bill\'s branch cannot be nulled (multi-branch → 400, single-branch → stays in its branch)', async () => {
+      const bill = fx.stays.bill.A;
+      expect((await api('multiAB').patch(`/patient-billing/${bill}`, { branchId: null })).status).toBe(400);
+      await api('restrictedA').patch(`/patient-billing/${bill}`, { branchId: null });
+      const [row] = await ds.query(`SELECT branch_id FROM patient_bills WHERE id = $1`, [bill]);
+      expect(row.branch_id).toBe(fx.branchA);
+    });
+
+    it('R4: branch-restricted staff cannot change branch assignments (their own or anyone\'s)', async () => {
+      const [staff] = await ds.query(`SELECT id FROM staff WHERE user_id = $1 AND organisation_id = $2`, [fx.userIds.restrictedA, fx.orgId]);
+      const before = await ds.query(`SELECT count(*)::int n FROM staff_branch_assignments WHERE staff_id = $1 AND is_active AND deleted_at IS NULL`, [staff.id]);
+      const res = await api('restrictedA').post(`/organisations/${fx.orgId}/staff-branch-assignments`, { staffId: staff.id, branchId: fx.branchB });
+      if (res.body?.id) await ds.query(`UPDATE staff_branch_assignments SET is_active = false, deleted_at = now() WHERE id = $1`, [res.body.id]);
+      expect(res.status).toBe(403);
+      const after = await ds.query(`SELECT count(*)::int n FROM staff_branch_assignments WHERE staff_id = $1 AND is_active AND deleted_at IS NULL`, [staff.id]);
+      expect(after).toEqual(before);
+      expect(await api('restrictedA').get(`/organisations/${fx.orgId}/branches/switchable`).then((r) => ids(r))).toEqual([fx.branchA]);
+    });
+  });
 });

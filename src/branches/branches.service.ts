@@ -328,12 +328,10 @@ export class BranchesService {
     userId: string | undefined,
     role: string | undefined,
   ): Promise<{ data: Branch[]; total: number }> {
-    const visibleBranchIds = await this.branchVisibilityService.resolveVisibleBranchIds(
-      userId,
-      organisationId,
-      role,
-    );
-    if (visibleBranchIds !== null && visibleBranchIds.length === 0) {
+    // Same scope as every data query (live assigned branches; platform and
+    // org-wide roles see all).
+    const scope = await this.branchVisibilityService.scopeFor({ userId, role, organisationId });
+    if (scope.kind === 'branches' && scope.ids.length === 0) {
       return { data: [], total: 0 };
     }
 
@@ -341,8 +339,8 @@ export class BranchesService {
       .createQueryBuilder('branch')
       .where('branch.organisationId = :organisationId', { organisationId })
       .andWhere('branch.deletedAt IS NULL');
-    if (visibleBranchIds !== null) {
-      queryBuilder.andWhere('branch.id IN (:...visibleBranchIds)', { visibleBranchIds });
+    if (scope.kind === 'branches') {
+      queryBuilder.andWhere('branch.id IN (:...visibleBranchIds)', { visibleBranchIds: scope.ids });
     }
 
     const [data, total] = await queryBuilder
