@@ -54,7 +54,7 @@ export const BRANCH_OWNED_AREAS: BranchOwnedArea[] = [
     prefix: '/appointments',
     anchor: 'own',
     routes: {
-      'GET /appointments': reviewed(3),
+      'GET /appointments': covered,
       'GET /appointments/:id': covered,
       'PATCH /appointments/:id': covered,
       'DELETE /appointments/:id': covered,
@@ -65,14 +65,15 @@ export const BRANCH_OWNED_AREAS: BranchOwnedArea[] = [
     prefix: '/patient-billing',
     anchor: 'own',
     routes: {
-      'GET /patient-billing': reviewed(3),
-      'GET /patient-billing/:id': reviewed(3),
-      'PATCH /patient-billing/:id': gap(3, 'G6'),
-      'DELETE /patient-billing/:id': reviewed(3),
-      'POST /patient-billing': gap(4, 'G10'), // G11 fixed in Phase 2 (reviewed, contract test in Phase 3)
-      'POST /patient-billing/:id/payment': reviewed(3),
-      'GET /patient-billing/:id/payments': reviewed(3),
-      'DELETE /patient-billing/:id/payments/:paymentId': reviewed(3),
+      'GET /patient-billing': covered,
+      'GET /patient-billing/:id': covered,
+      'PATCH /patient-billing/:id': covered,
+      'DELETE /patient-billing/:id': covered,
+      'POST /patient-billing': gap(4, 'G10'), // G11 covered; requested branchId not yet validated
+      'POST /patient-billing/:id/payment': covered,
+      'GET /patient-billing/:id/payments': covered,
+      'DELETE /patient-billing/:id/payments/:paymentId': reviewed(3), // same findOne check as payment
+
     },
   },
   ...(['medical-records', 'prescriptions', 'lab-reports'] as const).map((r) => ({
@@ -113,33 +114,33 @@ export const BRANCH_OWNED_AREAS: BranchOwnedArea[] = [
     prefix: '/retreat/bookings',
     anchor: 'own',
     routes: {
-      'GET /retreat/bookings': reviewed(3),
-      'GET /retreat/bookings/:id': reviewed(3),
-      'GET /retreat/bookings/calendar': reviewed(3),
+      'GET /retreat/bookings': covered,
+      'GET /retreat/bookings/:id': covered,
+      'GET /retreat/bookings/calendar': covered,
       'POST /retreat/bookings/check-availability': gap(8, 'rooms-picker'),
       'POST /retreat/bookings': gap(4, 'G10'),
-      'PATCH /retreat/bookings/:id': gap(3, 'G2'),
-      'DELETE /retreat/bookings/:id': gap(3, 'G2'),
-      'DELETE /retreat/bookings/:id/remove': gap(3, 'G2'),
-      'PATCH /retreat/bookings/:id/refund': gap(3, 'G2'),
-      'GET /retreat/bookings/:id/advances': gap(3, 'G2'),
-      'POST /retreat/bookings/:id/advances': gap(3, 'G2'),
-      'DELETE /retreat/bookings/:id/advances/:receiptId': gap(3, 'G2'),
-      'POST /retreat/bookings/:id/promote': gap(3, 'G2'),
+      'PATCH /retreat/bookings/:id': covered, // + new room's branch: G10, Phase 4
+      'DELETE /retreat/bookings/:id': covered,
+      'DELETE /retreat/bookings/:id/remove': covered,
+      'PATCH /retreat/bookings/:id/refund': covered,
+      'GET /retreat/bookings/:id/advances': covered,
+      'POST /retreat/bookings/:id/advances': covered,
+      'DELETE /retreat/bookings/:id/advances/:receiptId': covered,
+      'POST /retreat/bookings/:id/promote': covered,
     },
   },
   {
     prefix: '/retreat/admissions',
     anchor: 'own',
     routes: {
-      'GET /retreat/admissions': reviewed(3),
-      'GET /retreat/admissions/stats': reviewed(3),
-      'GET /retreat/admissions/:id': reviewed(3),
+      'GET /retreat/admissions': covered,
+      'GET /retreat/admissions/stats': reviewed(3), // same branchFindCondition as the list
+      'GET /retreat/admissions/:id': covered,
       // Patient check was already present (audit's G11 claim here was wrong);
       // now on the shared 404 rule. Remaining: room/booking branch (G10).
       'POST /retreat/admissions': gap(4, 'G10'),
-      'POST /retreat/admissions/:id/discharge': gap(3, 'G3'),
-      'PATCH /retreat/admissions/:id/delivery': gap(3, 'G3'),
+      'POST /retreat/admissions/:id/discharge': covered,
+      'PATCH /retreat/admissions/:id/delivery': covered,
     },
   },
   {
@@ -156,7 +157,7 @@ export const BRANCH_OWNED_AREAS: BranchOwnedArea[] = [
   {
     prefix: '/retreat/today',
     anchor: 'own',
-    routes: { 'GET /retreat/today': reviewed(3) },
+    routes: { 'GET /retreat/today': reviewed(3) }, // same branchFindCondition as the lists
   },
   {
     prefix: '/retreat/rooms',

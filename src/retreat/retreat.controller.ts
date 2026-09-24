@@ -27,6 +27,9 @@ import { SetRoomPricingOverrideDto, GetRoomPricingOverridesDto } from './dto/roo
 import { BookingStatus } from './entities/room-booking.entity';
 import { EnquiryStatus } from './entities/booking-enquiry.entity';
 
+// Branch scoping G2/G3: every action on one booking / admission first calls
+// assertBookingAccess / assertAdmissionAccess (404 outside the caller's
+// branch scope) — scope/Branch_Scoping_Remediation_Plan_2026-09-24.md.
 @Controller('retreat')
 @UseGuards(JwtAuthGuard, ModuleGuard)
 @RequireModule('booking')
@@ -202,8 +205,9 @@ export class RetreatController {
     }
 
     @Post('bookings/:id/promote')
-    promoteEnquiry(@Request() req, @Param('id') id: string, @Body() dto: PromoteBookingDto) {
+    async promoteEnquiry(@Request() req, @Param('id') id: string, @Body() dto: PromoteBookingDto) {
         const clinicId = req.user.organisationId;
+        await this.retreatService.assertBookingAccess(clinicId, id, req.user);
         return this.retreatService.promoteEnquiry(clinicId, id, req.user.userId, {
             role: req.user.role,
             patientId: dto?.patientId,
@@ -212,15 +216,17 @@ export class RetreatController {
     }
 
     @Post('admissions/:id/discharge')
-    discharge(@Request() req, @Param('id') id: string) {
+    async discharge(@Request() req, @Param('id') id: string) {
         const clinicId = req.user.organisationId;
+        await this.retreatService.assertAdmissionAccess(clinicId, id, req.user);
         return this.retreatService.discharge(clinicId, id);
     }
 
     // Mark Delivery Occurred — set/clear the admission's actual delivery date.
     @Patch('admissions/:id/delivery')
-    recordDelivery(@Request() req, @Param('id') id: string, @Body('actualDeliveryDate') actualDeliveryDate: string | null) {
+    async recordDelivery(@Request() req, @Param('id') id: string, @Body('actualDeliveryDate') actualDeliveryDate: string | null) {
         const clinicId = req.user.organisationId;
+        await this.retreatService.assertAdmissionAccess(clinicId, id, req.user);
         return this.retreatService.recordDelivery(clinicId, id, actualDeliveryDate ?? null);
     }
 
@@ -279,41 +285,48 @@ export class RetreatController {
     }
 
     @Patch('bookings/:id')
-    updateBooking(@Request() req, @Param('id') id: string, @Body() dto: UpdateBookingDto) {
+    async updateBooking(@Request() req, @Param('id') id: string, @Body() dto: UpdateBookingDto) {
         const clinicId = req.user.organisationId;
+        await this.retreatService.assertBookingAccess(clinicId, id, req.user);
         return this.retreatService.updateBooking(clinicId, id, dto);
     }
 
     @Delete('bookings/:id')
-    cancelBooking(@Request() req, @Param('id') id: string) {
+    async cancelBooking(@Request() req, @Param('id') id: string) {
         const clinicId = req.user.organisationId;
+        await this.retreatService.assertBookingAccess(clinicId, id, req.user);
         return this.retreatService.cancelBooking(clinicId, id);
     }
 
     @Delete('bookings/:id/remove')
-    removeBooking(@Request() req, @Param('id') id: string) {
+    async removeBooking(@Request() req, @Param('id') id: string) {
+        await this.retreatService.assertBookingAccess(req.user.organisationId, id, req.user);
         return this.retreatService.removeBooking(req.user.organisationId, id);
     }
 
     // Booking advances (cash MVP batch 1): each advance is a receipt row.
     @Get('bookings/:id/advances')
-    listAdvances(@Request() req, @Param('id', ParseUUIDPipe) id: string) {
+    async listAdvances(@Request() req, @Param('id', ParseUUIDPipe) id: string) {
+        await this.retreatService.assertBookingAccess(req.user.organisationId, id, req.user);
         return this.retreatService.listAdvances(req.user.organisationId, id);
     }
 
     @Post('bookings/:id/advances')
-    recordAdvance(@Request() req, @Param('id', ParseUUIDPipe) id: string, @Body() dto: RecordAdvanceDto) {
+    async recordAdvance(@Request() req, @Param('id', ParseUUIDPipe) id: string, @Body() dto: RecordAdvanceDto) {
+        await this.retreatService.assertBookingAccess(req.user.organisationId, id, req.user);
         return this.retreatService.recordAdvance(req.user.organisationId, id, dto, req.user.userId, req.user.role);
     }
 
     @Delete('bookings/:id/advances/:receiptId')
-    voidAdvance(@Request() req, @Param('id', ParseUUIDPipe) id: string, @Param('receiptId', ParseUUIDPipe) receiptId: string) {
+    async voidAdvance(@Request() req, @Param('id', ParseUUIDPipe) id: string, @Param('receiptId', ParseUUIDPipe) receiptId: string) {
+        await this.retreatService.assertBookingAccess(req.user.organisationId, id, req.user);
         return this.retreatService.voidAdvance(req.user.organisationId, id, receiptId, req.user.userId, req.user.role);
     }
 
     @Patch('bookings/:id/refund')
-    recordRefund(@Request() req, @Param('id') id: string, @Body() dto: RecordRefundDto) {
+    async recordRefund(@Request() req, @Param('id') id: string, @Body() dto: RecordRefundDto) {
         const clinicId = req.user.organisationId;
+        await this.retreatService.assertBookingAccess(clinicId, id, req.user);
         return this.retreatService.recordRefund(clinicId, id, req.user.userId, dto);
     }
 

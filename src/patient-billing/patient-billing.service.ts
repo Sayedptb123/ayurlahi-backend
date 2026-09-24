@@ -51,6 +51,11 @@ export class PatientBillingService {
     private patientPaymentPosting: PatientPaymentPostingService,
   ) {}
 
+  // Branch scoping v2 — scope/Branch_Scoping_Remediation_Plan_2026-09-24.md.
+  private scopeFor(userId: string, userRole: string, organisationId: string | undefined) {
+    return this.branchVisibilityService.scopeFor({ userId, role: userRole, organisationId });
+  }
+
   private calculateBillTotals(items: BillItem[]): { subtotal: number } {
     const subtotal = items.reduce(
       (sum, item) =>
@@ -219,7 +224,7 @@ export class PatientBillingService {
       }
       // Branch scoping G11: the patient must be inside the caller's branch scope.
       this.branchVisibilityService.assertBranchAccess(
-        await this.branchVisibilityService.scopeFor({ userId, role: userRole, organisationId: clinicId }),
+        await this.scopeFor(userId, userRole, clinicId),
         patient.branchId,
         'Patient not found',
       );
@@ -440,31 +445,10 @@ export class PatientBillingService {
         organisationId,
       });
 
-      // ADR-004 D9/Phase 4 — branch-level visibility, additive on top of the
-      // organisation filter above, never a replacement for it.
-      const visibleBranchIds = await this.branchVisibilityService.resolveVisibleBranchIds(
-        userId,
-        organisationId,
-        userRole,
-      );
-      if (visibleBranchIds !== null) {
-        if (visibleBranchIds.length > 0) {
-          queryBuilder.andWhere(
-            '(bill.branchId IS NULL OR bill.branchId IN (:...visibleBranchIds))',
-            { visibleBranchIds },
-          );
-        } else {
-          queryBuilder.andWhere('bill.branchId IS NULL');
-        }
-      }
-
-      // Branch switcher (personal view filter) — ANDed on top of the visibility
-      // filter above, so it can only narrow further, never broaden it. Strict
-      // match: "All Locations" is the combined view, so a specific branch
-      // selection means only that branch's own records, not org-wide too.
-      if (branchId) {
-        queryBuilder.andWhere('bill.branchId = :selectedBranchId', { selectedBranchId: branchId });
-      }
+      // Branch scoping v2: shared scope (Q1), then the switcher — narrows, never widens.
+      const scope = await this.scopeFor(userId, userRole, organisationId);
+      this.branchVisibilityService.applyBranchScope(queryBuilder, 'bill.branchId', scope);
+      this.branchVisibilityService.narrowToSelectedBranch(queryBuilder, 'bill.branchId', branchId, scope);
     }
 
     if (patientId) {
@@ -534,18 +518,12 @@ export class PatientBillingService {
         throw new ForbiddenException('You do not have access to this bill');
       }
 
-      // ADR-004 D9/Phase 4 — branch-level visibility, additive on top of the
-      // organisation check above.
-      if (bill.branchId) {
-        const visibleBranchIds = await this.branchVisibilityService.resolveVisibleBranchIds(
-          userId,
-          organisationId,
-          userRole,
-        );
-        if (visibleBranchIds !== null && !visibleBranchIds.includes(bill.branchId)) {
-          throw new ForbiddenException('You do not have access to this bill');
-        }
-      }
+      // Branch scoping v2: 404 outside the caller's scope (Q1, Q2).
+      this.branchVisibilityService.assertBranchAccess(
+        await this.scopeFor(userId, userRole, organisationId),
+        bill.branchId,
+        `Bill with ID ${id} not found`,
+      );
     } else if (userRole !== 'SUPER_ADMIN' && userRole !== 'SUPPORT') {
       // SEC-7: unknown/missing organisationType must never read a bill.
       throw new ForbiddenException('You do not have access to this bill');
@@ -568,10 +546,13 @@ export class PatientBillingService {
       throw new NotFoundException(`Bill with ID ${id} not found`);
     }
 
+    const scope = await this.scopeFor(userId, userRole, organisationId);
     if (organisationType === 'CLINIC') {
       if (!organisationId || organisationId !== bill.organisationId) {
         throw new ForbiddenException('You do not have access to this bill');
       }
+      // Branch scoping G6: same check as reading it.
+      this.branchVisibilityService.assertBranchAccess(scope, bill.branchId, `Bill with ID ${id} not found`);
     } else if (userRole !== 'SUPER_ADMIN' && userRole !== 'SUPPORT') {
       // SEC-7: unknown/missing organisationType must never edit a bill.
       throw new ForbiddenException('You do not have access to this bill');
@@ -598,6 +579,7 @@ export class PatientBillingService {
       if (!patient || patient.organisationId !== bill.organisationId) {
         throw new ForbiddenException('Patient does not belong to this clinic');
       }
+      this.branchVisibilityService.assertBranchAccess(scope, patient.branchId, 'Patient not found');
     }
 
     if (
@@ -635,13 +617,9 @@ export class PatientBillingService {
       }
     }
 
+    // Moving a bill: only into a live, approved branch the caller may use.
     if (updateDto.branchId && updateDto.branchId !== bill.branchId) {
-      const branch = await this.branchesRepository.findOne({
-        where: { id: updateDto.branchId, organisationId: bill.organisationId },
-      });
-      if (!branch) {
-        throw new NotFoundException('Branch not found in this organisation');
-      }
+      await this.branchVisibilityService.resolveWriteBranch(scope, bill.organisationId, { requested: updateDto.branchId });
     }
 
     // Paid amount and the payment-derived statuses (partial/paid) come only from

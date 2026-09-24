@@ -1,3 +1,4 @@
+import { unrestrictedBranchVisibilityMock } from '../branch-visibility/testing/branch-visibility.mock';
 import { BadRequestException } from '@nestjs/common';
 import { PatientBillingService } from './patient-billing.service';
 import { PatientBill, BillStatus, PaymentMethod } from './entities/patient-bill.entity';
@@ -62,7 +63,7 @@ const makeService = (
     billPaymentsRepository,
     none, none, none, none, none, none,
     { sendToUsers: jest.fn() } as any,
-    { resolveVisibleBranchIds: jest.fn() } as any,
+    unrestrictedBranchVisibilityMock(),
     paymentPosting as any,
   );
   return { service, billsRepository, billItemsRepository, managerSave, managerQuery, manager, paymentPosting };

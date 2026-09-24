@@ -45,6 +45,7 @@ const USERS: Record<Role, { n: number; role: string; staffBranches?: ('A' | 'B')
 
 type Side = 'A' | 'B';
 type PatientLinked = 'medicalRecord' | 'prescription' | 'labReport' | 'vital' | 'newborn' | 'appointment' | 'document';
+type Stay = 'room' | 'booking' | 'admission' | 'bill';
 
 interface Fixture {
   orgId: string;
@@ -54,6 +55,7 @@ interface Fixture {
   doctorStaffId: string;
   patients: { A: string; B: string; NULL: string };
   records: Record<PatientLinked, Record<Side, string>>;
+  stays: Record<Stay, Record<Side, string>>;
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -82,6 +84,12 @@ async function ensureFixture(ds: DataSource): Promise<Fixture> {
     [orgId],
   );
   await ds.query(`UPDATE clinic_capabilities SET has_postnatal_care = true WHERE organisation_id = $1`, [orgId]);
+  // Booking / billing routes sit behind module flags: enable them all.
+  await ds.query(
+    `UPDATE clinic_capabilities SET enabled_modules = '["booking","rooms","enquiries","postnatal_care","ipd","opd","appointments","billing","patients","medical_records","prescriptions","lab_reports"]'
+      WHERE organisation_id = $1`,
+    [orgId],
+  );
 
   const branch = async (name: string, primary: boolean) => {
     const found = await one(`SELECT id FROM branches WHERE organisation_id = $1 AND name = $2 AND deleted_at IS NULL`, [orgId, name]);
@@ -193,7 +201,33 @@ async function ensureFixture(ds: DataSource): Promise<Fixture> {
       [orgId, tag, pid]);
   }
 
-  return { orgId, branchA, branchB, userIds, doctorStaffId, patients, records };
+  // Stays: one room / confirmed booking / active admission / bill per branch.
+  const stays = { room: {}, booking: {}, admission: {}, bill: {} } as Fixture['stays'];
+  for (const side of ['A', 'B'] as Side[]) {
+    const pid = patients[side];
+    const tag = `ZZBF-${side}`;
+    stays.room[side] = await record(
+      `SELECT id FROM rooms WHERE organisation_id = $1 AND room_number = $2 AND deleted_at IS NULL`,
+      `INSERT INTO rooms (organisation_id, room_number, branch_id) VALUES ($1, $2, $3) RETURNING id`,
+      [orgId, tag, branchId[side]]);
+    stays.booking[side] = await record(
+      `SELECT id FROM room_bookings WHERE organisation_id = $1 AND notes = $2 AND deleted_at IS NULL`,
+      `INSERT INTO room_bookings (organisation_id, notes, room_id, patient_id, check_in_date, check_out_date, total_price, status, branch_id)
+       VALUES ($1, $2, $3, $4, '2029-01-01', '2029-01-05', 1000, 'CONFIRMED', $5) RETURNING id`,
+      [orgId, tag, stays.room[side], pid, branchId[side]]);
+    stays.admission[side] = await record(
+      `SELECT id FROM admissions WHERE organisation_id = $1 AND notes = $2`,
+      `INSERT INTO admissions (organisation_id, notes, patient_id, room_id, check_in_date, status, branch_id)
+       VALUES ($1, $2, $3, $4, now(), 'ACTIVE', $5) RETURNING id`,
+      [orgId, tag, pid, stays.room[side], branchId[side]]);
+    stays.bill[side] = await record(
+      `SELECT id FROM patient_bills WHERE organisation_id = $1 AND bill_number = $2 AND deleted_at IS NULL`,
+      `INSERT INTO patient_bills (organisation_id, bill_number, patient_id, bill_date, subtotal, status, branch_id)
+       VALUES ($1, $2, $3, '2026-01-01', 100, 'pending', $4) RETURNING id`,
+      [orgId, tag, pid, branchId[side]]);
+  }
+
+  return { orgId, branchA, branchB, userIds, doctorStaffId, patients, records, stays };
 }
 
 // Every request crosses to the staging DB (Mumbai); the 5 s default is too tight.
@@ -507,6 +541,97 @@ describe('Branch isolation contract (real DB)', () => {
     });
     it('owner sees both', async () => {
       expect(ids(await api('owner').get(`${base()}?limit=100`))).toEqual(expect.arrayContaining([doc('A'), doc('B')]));
+    });
+  });
+  // ── Stays & money (Phase 3: G2, G3, G6 + list/read on the shared rule) ────
+  describe('bookings (G2)', () => {
+    const bk = (side: Side) => fx.stays.booking[side];
+    it('restricted list / calendar: own branch only; switcher cannot widen', async () => {
+      const own = ids(await api('restrictedA').get('/retreat/bookings'));
+      expect(own).toContain(bk('A'));
+      expect(own).not.toContain(bk('B'));
+      expect(ids(await api('restrictedA').get(`/retreat/bookings?branchId=${fx.branchB}`))).toEqual([]);
+      const cal = await api('restrictedA').get('/retreat/bookings/calendar?startDate=2029-01-01&endDate=2029-01-03');
+      expect((cal.body.bookings ?? []).map((b: any) => b.id)).not.toContain(bk('B'));
+    });
+    it('owner sees both', async () => {
+      expect(ids(await api('owner').get('/retreat/bookings'))).toEqual(expect.arrayContaining([bk('A'), bk('B')]));
+    });
+    it('restricted user: every action on a Branch B booking → 404, booking unchanged', async () => {
+      const u = api('restrictedA');
+      const id = bk('B');
+      const before = (await ds.query(`SELECT status, total_price, deleted_at FROM room_bookings WHERE id = $1`, [id]))[0];
+      expect((await u.get(`/retreat/bookings/${id}`)).status).toBe(404);
+      expect((await u.patch(`/retreat/bookings/${id}`, { totalPrice: 1000 })).status).toBe(404);
+      expect((await u.delete(`/retreat/bookings/${id}`)).status).toBe(404);
+      expect((await u.delete(`/retreat/bookings/${id}/remove`)).status).toBe(404);
+      expect((await u.get(`/retreat/bookings/${id}/advances`)).status).toBe(404);
+      expect((await u.post(`/retreat/bookings/${id}/advances`, { amount: 1, paymentMethod: 'cash' })).status).toBe(404);
+      expect((await u.delete(`/retreat/bookings/${id}/advances/00000000-0000-4000-8000-000000000000`)).status).toBe(404);
+      expect((await u.patch(`/retreat/bookings/${id}/refund`, { amount: 1, method: 'CASH' })).status).toBe(404);
+      expect((await u.post(`/retreat/bookings/${id}/promote`, {})).status).toBe(404);
+      const after = (await ds.query(`SELECT status, total_price, deleted_at FROM room_bookings WHERE id = $1`, [id]))[0];
+      expect(after).toEqual(before);
+    });
+    it('restricted user can read their own branch booking', async () => {
+      expect((await api('restrictedA').get(`/retreat/bookings/${bk('A')}`)).status).toBe(200);
+    });
+  });
+
+  describe('admissions (G3)', () => {
+    const adm = (side: Side) => fx.stays.admission[side];
+    it('restricted list: own branch only', async () => {
+      const own = ids(await api('restrictedA').get('/retreat/admissions'));
+      expect(own).toContain(adm('A'));
+      expect(own).not.toContain(adm('B'));
+      expect(ids(await api('restrictedA').get(`/retreat/admissions?branchId=${fx.branchB}`))).toEqual([]);
+    });
+    it('restricted user: read / discharge / record delivery on Branch B → 404, admission unchanged', async () => {
+      const u = api('restrictedA');
+      expect((await u.get(`/retreat/admissions/${adm('B')}`)).status).toBe(404);
+      expect((await u.post(`/retreat/admissions/${adm('B')}/discharge`, {})).status).toBe(404);
+      expect((await u.patch(`/retreat/admissions/${adm('B')}/delivery`, { actualDeliveryDate: '2029-01-02' })).status).toBe(404);
+      const [row] = await ds.query(`SELECT status, actual_delivery_date FROM admissions WHERE id = $1`, [adm('B')]);
+      expect(row.status).toBe('ACTIVE');
+      expect(row.actual_delivery_date).toBeNull();
+    });
+    it('owner and multi-branch user see both', async () => {
+      expect(ids(await api('owner').get('/retreat/admissions'))).toEqual(expect.arrayContaining([adm('A'), adm('B')]));
+      expect(ids(await api('multiAB').get('/retreat/admissions'))).toEqual(expect.arrayContaining([adm('A'), adm('B')]));
+    });
+  });
+
+  describe('patient bills (G6, G11)', () => {
+    const bill = (side: Side) => fx.stays.bill[side];
+    it('restricted list: own branch only', async () => {
+      const own = ids(await api('restrictedA').get('/patient-billing?limit=100'));
+      expect(own).toContain(bill('A'));
+      expect(own).not.toContain(bill('B'));
+      expect(ids(await api('restrictedA').get(`/patient-billing?limit=100&branchId=${fx.branchB}`))).toEqual([]);
+    });
+    it('restricted user: read / edit / pay / payments / delete on Branch B → 404, bill unchanged', async () => {
+      const u = api('restrictedA');
+      const before = (await ds.query(`SELECT status, total, paid_amount, deleted_at FROM patient_bills WHERE id = $1`, [bill('B')]))[0];
+      expect((await u.get(`/patient-billing/${bill('B')}`)).status).toBe(404);
+      expect((await u.patch(`/patient-billing/${bill('B')}`, { notes: 'ZZBF-B' })).status).toBe(404);
+      expect((await u.post(`/patient-billing/${bill('B')}/payment`, { amount: 1, paymentMethod: 'cash' })).status).toBe(404);
+      expect((await u.get(`/patient-billing/${bill('B')}/payments`)).status).toBe(404);
+      expect((await u.delete(`/patient-billing/${bill('B')}`)).status).toBe(404);
+      const after = (await ds.query(`SELECT status, total, paid_amount, deleted_at FROM patient_bills WHERE id = $1`, [bill('B')]))[0];
+      expect(after).toEqual(before);
+    });
+    const newBill = (patientId: string) => ({
+      patientId, billDate: '2026-09-24', branchId: fx.branchA,
+      items: [{ itemType: 'consultation', itemName: `ZZRun-${RUN}`, unitPrice: 1 }],
+    });
+    it("[G11] restricted user cannot bill Branch B's (or a NULL-branch) patient", async () => {
+      expect((await api('restrictedA').post('/patient-billing', newBill(fx.patients.B))).status).toBe(404);
+      expect((await api('restrictedA').post('/patient-billing', newBill(fx.patients.NULL))).status).toBe(404);
+    });
+    it('restricted user can bill their own branch patient', async () => {
+      const res = await api('restrictedA').post('/patient-billing', newBill(fx.patients.A));
+      if (res.body?.id) createdLinked.push({ table: 'patient_bills', id: res.body.id });
+      expect(res.status).toBe(201);
     });
   });
 });

@@ -1,6 +1,6 @@
 import { ForbiddenException, Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { EntityManager, In, IsNull, ObjectLiteral, Repository, SelectQueryBuilder } from 'typeorm';
+import { EntityManager, Equal, FindOperator, In, IsNull, ObjectLiteral, Repository, SelectQueryBuilder } from 'typeorm';
 import { Staff } from '../staff/entities/staff.entity';
 import { StaffBranchAssignment } from '../staff-branch-assignments/entities/staff-branch-assignment.entity';
 import { OrganisationSettingsService } from '../organisation-settings/organisation-settings.service';
@@ -136,6 +136,15 @@ export class BranchVisibilityService {
     }
     const param = nextParam('selectedBranchId');
     return qb.andWhere(`${column} = :${param}`, { [param]: requestedBranchId });
+  }
+
+  // Same rule as applyBranchScope + narrowToSelectedBranch, as a TypeORM
+  // find-options condition for `where: { branchId: … }`. undefined = no filter.
+  // In([]) renders as 0=1 (matches nothing), so an empty scope fails closed.
+  branchFindCondition(scope: BranchScope, requestedBranchId?: string | null): FindOperator<string> | undefined {
+    if (scope.kind === 'all') return requestedBranchId ? Equal(requestedBranchId) : undefined;
+    if (!requestedBranchId) return In(scope.ids);
+    return In(scope.ids.includes(requestedBranchId) ? [requestedBranchId] : []);
   }
 
   // Single record / any action on it. 404, not 403, so record ids can't be

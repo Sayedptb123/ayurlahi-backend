@@ -437,17 +437,11 @@ export class RetreatService {
         // regardless of who was asking or which branch the switcher had selected.
         // Enquiries (followUps) have no branch column — they predate a branch pick —
         // so they deliberately stay org-wide.
-        const visibleBranchIds = await this.branchVisibilityService.resolveVisibleBranchIds(userId, clinicId, userRole);
-        let branchWhere: any;
-        if (visibleBranchIds === null) {
-            if (branchId) branchWhere = Equal(branchId);
-        } else if (visibleBranchIds.length === 0) {
-            branchWhere = IsNull();
-        } else if (branchId && visibleBranchIds.includes(branchId)) {
-            branchWhere = Equal(branchId);
-        } else {
-            branchWhere = Or(IsNull(), In(visibleBranchIds));
-        }
+        // Branch scoping v2: shared scope, then the switcher (Q1 — no NULL rows for restricted staff).
+        const branchWhere = this.branchVisibilityService.branchFindCondition(
+            await this.scopeFor(userId, userRole, clinicId),
+            branchId,
+        );
 
         const arrivalsWhere: any = {
             organisationId: clinicId,
@@ -592,19 +586,12 @@ export class RetreatService {
             relations: ['patient', 'room', 'treatmentPackage'],
         });
         if (!admission) throw new NotFoundException('Admission not found');
-
-        // ADR-004 D9/Phase 4 — branch-level visibility, additive on top of the
-        // organisation check above.
-        if (admission.branchId) {
-            const visibleBranchIds = await this.branchVisibilityService.resolveVisibleBranchIds(
-                userId,
-                clinicId,
-                userRole,
-            );
-            if (visibleBranchIds !== null && !visibleBranchIds.includes(admission.branchId)) {
-                throw new ForbiddenException('You do not have access to this admission');
-            }
-        }
+        // Branch scoping v2: 404 outside the caller's scope (Q1, Q2).
+        this.branchVisibilityService.assertBranchAccess(
+            await this.scopeFor(userId, userRole, clinicId),
+            admission.branchId,
+            'Admission not found',
+        );
 
         return admission;
     }
@@ -634,33 +621,12 @@ export class RetreatService {
         if (params?.status) where.status = params.status;
         else where.status = AdmissionStatus.ACTIVE;
 
-        // ADR-004 D9/Phase 4 — branch-level visibility, additive on top of the
-        // organisation filter above, never a replacement for it.
-        const visibleBranchIds = await this.branchVisibilityService.resolveVisibleBranchIds(
-            userId,
-            clinicId,
-            userRole,
+        // Branch scoping v2: shared scope, then the switcher's selection.
+        const branchCond = this.branchVisibilityService.branchFindCondition(
+            await this.scopeFor(userId, userRole, clinicId),
+            params?.branchId,
         );
-        const selected = params?.branchId;
-        if (visibleBranchIds === null) {
-            // Unrestricted (shared policy, or org-wide role) — narrow to the
-            // switcher's selection if one was made, else no branch filter at all.
-            // Strict match, not OR-NULL: "All Locations" is the combined view,
-            // so a specific selection means only that branch's own records.
-            if (selected) where.branchId = Equal(selected);
-        } else if (visibleBranchIds.length === 0) {
-            // No active assignment at all — fail closed regardless of selection.
-            // This is access control, not the switcher, so OR-NULL stays.
-            where.branchId = IsNull();
-        } else if (selected && visibleBranchIds.includes(selected)) {
-            // Narrow the caller's visible set down to just the selected branch.
-            where.branchId = Equal(selected);
-        } else {
-            // No selection, or selection outside the visible set — unchanged
-            // visibility behaviour (never broadened by an invalid selection).
-            // This is access control (Phase 4), not the switcher, so OR-NULL stays.
-            where.branchId = Or(IsNull(), In(visibleBranchIds));
-        }
+        if (branchCond) where.branchId = branchCond;
 
         return this.admissionRepo.find({
             where,
@@ -682,21 +648,11 @@ export class RetreatService {
 
         // ADR-004 D9/Phase 4 visibility, composed with the branch switcher's
         // strict narrowing — same pattern as getAdmissions().
-        const visibleBranchIds = await this.branchVisibilityService.resolveVisibleBranchIds(
-            userId,
-            clinicId,
-            userRole,
+        const branchCond = this.branchVisibilityService.branchFindCondition(
+            await this.scopeFor(userId, userRole, clinicId),
+            branchId,
         );
-        const branchWhere: any = {};
-        if (visibleBranchIds === null) {
-            if (branchId) branchWhere.branchId = Equal(branchId);
-        } else if (visibleBranchIds.length === 0) {
-            branchWhere.branchId = IsNull();
-        } else if (branchId && visibleBranchIds.includes(branchId)) {
-            branchWhere.branchId = Equal(branchId);
-        } else {
-            branchWhere.branchId = Or(IsNull(), In(visibleBranchIds));
-        }
+        const branchWhere: any = branchCond ? { branchId: branchCond } : {};
 
         const [currentInpatients, admitsToday, dischargesToday] = await Promise.all([
             this.admissionRepo.count({
@@ -1093,29 +1049,10 @@ export class RetreatService {
 
             // ADR-004 D9/Phase 4 — branch-level visibility, additive on top of the
             // organisation filter above, never a replacement for it.
-            const visibleBranchIds = await this.branchVisibilityService.resolveVisibleBranchIds(
-                userId,
-                clinicId,
-                userRole,
-            );
-            if (visibleBranchIds !== null) {
-                if (visibleBranchIds.length > 0) {
-                    query.andWhere(
-                        '(booking.branchId IS NULL OR booking.branchId IN (:...visibleBranchIds))',
-                        { visibleBranchIds },
-                    );
-                } else {
-                    query.andWhere('booking.branchId IS NULL');
-                }
-            }
-
-            // Branch switcher (personal view filter) — ANDed on top of the
-            // visibility filter above, so it can only narrow further. Strict
-            // match: "All Locations" is the combined view, so a specific branch
-            // selection means only that branch's own records, not org-wide too.
-            if (filters?.branchId) {
-                query.andWhere('booking.branchId = :selectedBranchId', { selectedBranchId: filters.branchId });
-            }
+            const scope = await this.scopeFor(userId, userRole, clinicId);
+            this.branchVisibilityService.applyBranchScope(query, 'booking.branchId', scope);
+            // Branch switcher — narrows after scope, never widens.
+            this.branchVisibilityService.narrowToSelectedBranch(query, 'booking.branchId', filters?.branchId, scope);
 
             if (filters?.status) {
                 query.andWhere('booking.status = :status', { status: filters.status });
@@ -1151,19 +1088,12 @@ export class RetreatService {
         });
 
         if (!booking) throw new NotFoundException('Booking not found');
-
-        // ADR-004 D9/Phase 4 — branch-level visibility, additive on top of the
-        // organisation check above.
-        if (booking.branchId) {
-            const visibleBranchIds = await this.branchVisibilityService.resolveVisibleBranchIds(
-                userId,
-                clinicId,
-                userRole,
-            );
-            if (visibleBranchIds !== null && !visibleBranchIds.includes(booking.branchId)) {
-                throw new ForbiddenException('You do not have access to this booking');
-            }
-        }
+        // Branch scoping v2: 404 outside the caller's scope (Q1, Q2).
+        this.branchVisibilityService.assertBranchAccess(
+            await this.scopeFor(userId, userRole, clinicId),
+            booking.branchId,
+            'Booking not found',
+        );
 
         return Object.assign(booking, { contact: this.resolveContact(booking) });
     }
@@ -1531,6 +1461,41 @@ export class RetreatService {
             endDate,
             availability,
         };
+    }
+
+    // ── Branch scoping v2 (scope/Branch_Scoping_Remediation_Plan_2026-09-24.md) ──
+
+    private scopeFor(userId: string | undefined, userRole: string | undefined, clinicId: string) {
+        return this.branchVisibilityService.scopeFor({ userId, role: userRole, organisationId: clinicId });
+    }
+
+    // Guards for every action on one booking / admission (G2, G3): the record
+    // must be in the organisation and inside the caller's branch scope, else
+    // 404 — never "the list was filtered, so the id must be fine".
+    async assertBookingAccess(clinicId: string, bookingId: string, user: { userId?: string; role?: string }) {
+        const booking = await this.bookingRepo.findOne({
+            where: { id: bookingId, organisationId: clinicId },
+            select: ['id', 'branchId'],
+        });
+        if (!booking) throw new NotFoundException('Booking not found');
+        this.branchVisibilityService.assertBranchAccess(
+            await this.scopeFor(user.userId, user.role, clinicId),
+            booking.branchId,
+            'Booking not found',
+        );
+    }
+
+    async assertAdmissionAccess(clinicId: string, admissionId: string, user: { userId?: string; role?: string }) {
+        const admission = await this.admissionRepo.findOne({
+            where: { id: admissionId, organisationId: clinicId },
+            select: ['id', 'branchId'],
+        });
+        if (!admission) throw new NotFoundException('Admission not found');
+        this.branchVisibilityService.assertBranchAccess(
+            await this.scopeFor(user.userId, user.role, clinicId),
+            admission.branchId,
+            'Admission not found',
+        );
     }
 
     // ── Phase 0 safety helpers ──────────────────────────────────────────────
