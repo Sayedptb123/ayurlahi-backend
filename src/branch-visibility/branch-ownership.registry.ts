@@ -143,13 +143,13 @@ export const BRANCH_OWNED_AREAS: BranchOwnedArea[] = [
   },
   {
     prefix: '/retreat/enquiries',
-    anchor: 'own', // after Phase 7 adds booking_enquiries.branch_id
+    anchor: 'own', // booking_enquiries.branch_id (Phase 7)
     routes: {
-      'GET /retreat/enquiries': gap(7, 'G12'),
-      'POST /retreat/enquiries': gap(7, 'G12'),
-      'PATCH /retreat/enquiries/:id': gap(7, 'G12'),
-      'POST /retreat/enquiries/:id/convert': gap(7, 'G12'), // room branch (G10) covered; enquiry itself has no branch yet
-      'POST /retreat/enquiries/:id/lost': gap(7, 'G12'),
+      'GET /retreat/enquiries': covered,
+      'POST /retreat/enquiries': covered,
+      'PATCH /retreat/enquiries/:id': covered,
+      'POST /retreat/enquiries/:id/convert': covered, // enquiry access + room must be in the enquiry's branch
+      'POST /retreat/enquiries/:id/lost': covered,
     },
   },
   {

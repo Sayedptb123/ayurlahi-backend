@@ -56,6 +56,7 @@ interface Fixture {
   patients: { A: string; B: string; NULL: string };
   records: Record<PatientLinked, Record<Side, string>>;
   stays: Record<Stay, Record<Side, string>>;
+  enquiries: { A: string; B: string; NULL: string };
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -232,7 +233,19 @@ async function ensureFixture(ds: DataSource): Promise<Fixture> {
       [orgId, tag, pid, branchId[side]]);
   }
 
-  return { orgId, branchA, branchB, userIds, doctorStaffId, patients, records, stays };
+  // Enquiries: one per branch + one legacy NULL-branch row (Q1: owner-only).
+  const enquiry = async (tag: string, branch: string | null) => record(
+    `SELECT id FROM booking_enquiries WHERE organisation_id = $1 AND contact_name = $2 AND deleted_at IS NULL`,
+    `INSERT INTO booking_enquiries (organisation_id, contact_name, phone, channel, status, branch_id)
+     VALUES ($1, $2, '9000000999', 'PHONE', 'NEW', $3) RETURNING id`,
+    [orgId, tag, branch]);
+  const enquiries = {
+    A: await enquiry('ZZBF-ENQ-A', branchA),
+    B: await enquiry('ZZBF-ENQ-B', branchB),
+    NULL: await enquiry('ZZBF-ENQ-NULL', null),
+  };
+
+  return { orgId, branchA, branchB, userIds, doctorStaffId, patients, records, stays, enquiries };
 }
 
 // Every request crosses to the staging DB (Mumbai); the 5 s default is too tight.
@@ -806,6 +819,67 @@ describe('Branch isolation contract (real DB)', () => {
         expect(res.status).toBe(200);
         expect(res.body.totalPatients).toBe(n);
       }
+    });
+  });
+  // ── Phase 7: enquiries (G12) ──────────────────────────────────────────────
+  describe('enquiries (G12)', () => {
+    const enq = (k: 'A' | 'B' | 'NULL') => fx.enquiries[k];
+    const day = (offset: number) => new Date(Date.UTC(2032, 0, 1) + ((Number(RUN) % 2000) * 3 + offset) * 86400000).toISOString().slice(0, 10);
+
+    it('list: restricted sees own branch only (no Branch B, no NULL); switcher cannot widen', async () => {
+      const own = ids(await api('restrictedA').get('/retreat/enquiries'));
+      expect(own).toContain(enq('A'));
+      expect(own).not.toContain(enq('B'));
+      expect(own).not.toContain(enq('NULL'));
+      expect(ids(await api('restrictedA').get(`/retreat/enquiries?branchId=${fx.branchB}`))).toEqual([]);
+    });
+    it('list: multi-branch sees A + B; owner also sees the NULL row; unassigned sees none', async () => {
+      expect(ids(await api('multiAB').get('/retreat/enquiries'))).toEqual(expect.arrayContaining([enq('A'), enq('B')]));
+      expect(ids(await api('owner').get('/retreat/enquiries'))).toEqual(expect.arrayContaining([enq('A'), enq('B'), enq('NULL')]));
+      const none = ids(await api('unassigned').get('/retreat/enquiries'));
+      expect(none).not.toContain(enq('A'));
+      expect(none).not.toContain(enq('B'));
+    });
+    it("today's follow-ups: restricted user never sees Branch B's or NULL enquiries", async () => {
+      const today = await api('restrictedA').get('/retreat/today');
+      const follow = (today.body.followUps ?? []).map((e: any) => e.id);
+      expect(follow).toContain(enq('A'));
+      expect(follow).not.toContain(enq('B'));
+      expect(follow).not.toContain(enq('NULL'));
+    });
+    it('actions on a Branch B (or NULL) enquiry → 404, enquiry unchanged', async () => {
+      const u = api('restrictedA');
+      for (const k of ['B', 'NULL'] as const) {
+        const before = (await ds.query(`SELECT status, notes, lost_reason FROM booking_enquiries WHERE id = $1`, [enq(k)]))[0];
+        expect((await u.patch(`/retreat/enquiries/${enq(k)}`, { notes: 'x' })).status).toBe(404);
+        expect((await u.post(`/retreat/enquiries/${enq(k)}/lost`, { lostReason: 'x' })).status).toBe(404);
+        expect((await u.post(`/retreat/enquiries/${enq(k)}/convert`, {
+          roomId: fx.stays.freeRoom.A, checkInDate: day(0), checkOutDate: day(1), totalPrice: 1,
+        })).status).toBe(404);
+        expect((await ds.query(`SELECT status, notes, lost_reason FROM booking_enquiries WHERE id = $1`, [enq(k)]))[0]).toEqual(before);
+      }
+    });
+    it("convert: the room must be in the enquiry's branch (A enquiry + B room → 404 / 400); no booking written", async () => {
+      const body = { roomId: fx.stays.freeRoom.B, checkInDate: day(10), checkOutDate: day(11), totalPrice: 1 };
+      expect((await api('restrictedA').post(`/retreat/enquiries/${enq('A')}/convert`, body)).status).toBe(404);
+      expect((await api('multiAB').post(`/retreat/enquiries/${enq('A')}/convert`, body)).status).toBe(400);
+      const [{ n }] = await ds.query(`SELECT count(*)::int n FROM room_bookings WHERE enquiry_id = $1 AND check_in_date = $2`, [enq('A'), day(10)]);
+      expect(n).toBe(0);
+    });
+    it("booking from another branch's enquiry → 404", async () => {
+      expect((await api('restrictedA').post('/retreat/bookings', {
+        enquiryId: enq('B'), roomId: fx.stays.freeRoom.A, checkInDate: day(20), checkOutDate: day(21), totalPrice: 1,
+      })).status).toBe(404);
+    });
+    it('create: forged branch → 403 (nothing written); no branch → own single branch; multi-branch without branch → 400', async () => {
+      const name = `ZZEnq-${RUN}`;
+      expect((await api('restrictedA').post('/retreat/enquiries', { contactName: name, phone: '9000000998', channel: 'PHONE', branchId: fx.branchB })).status).toBe(403);
+      const [{ n }] = await ds.query(`SELECT count(*)::int n FROM booking_enquiries WHERE contact_name = $1`, [name]);
+      expect(n).toBe(0);
+      const ok = await api('restrictedA').post('/retreat/enquiries', { contactName: name, phone: '9000000998', channel: 'PHONE' });
+      if (ok.body?.id) createdLinked.push({ table: 'booking_enquiries', id: ok.body.id });
+      expect(ok.body.branchId).toBe(fx.branchA);
+      expect((await api('multiAB').post('/retreat/enquiries', { contactName: name, phone: '9000000998', channel: 'PHONE' })).status).toBe(400);
     });
   });
 });

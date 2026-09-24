@@ -195,10 +195,12 @@ export class BranchVisibilityService {
     const { requested, parent } = opts;
 
     if (parent) {
+      // Access first: an out-of-scope parent is 404 (Q2) — a mismatch error
+      // would reveal that it exists in another branch.
+      this.assertBranchAccess(scope, parent.branchId);
       if (requested && parent.branchId && requested !== parent.branchId) {
         throw new BadRequestException('Branch does not match the record it belongs to');
       }
-      this.assertBranchAccess(scope, parent.branchId);
       return parent.branchId;
     }
 

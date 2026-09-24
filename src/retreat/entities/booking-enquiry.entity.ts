@@ -32,6 +32,11 @@ export class BookingEnquiry {
     @Column({ type: 'uuid', name: 'organisation_id' })
     organisationId: string;
 
+    // Branch scoping G12: the branch the enquiry came in at (resolved on
+    // create; NULL only in organisations without branches).
+    @Column({ type: 'uuid', nullable: true, name: 'branch_id' })
+    branchId: string | null;
+
     @ManyToOne(() => Organisation)
     @JoinColumn({ name: 'organisation_id' })
     organisation: Organisation;

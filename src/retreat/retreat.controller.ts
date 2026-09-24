@@ -175,32 +175,36 @@ export class RetreatController {
         @Request() req,
         @Query('status') status?: EnquiryStatus,
         @Query('assignedTo') assignedTo?: string,
+        @Query('branchId') branchId?: string,
     ) {
         const clinicId = req.user.organisationId;
-        return this.retreatService.listEnquiries(clinicId, { status, assignedTo });
+        return this.retreatService.listEnquiries(clinicId, { status, assignedTo, branchId }, req.user);
     }
 
     @Post('enquiries')
     createEnquiry(@Request() req, @Body() dto: CreateEnquiryDto) {
         const clinicId = req.user.organisationId;
-        return this.retreatService.createEnquiry(clinicId, dto);
+        return this.retreatService.createEnquiry(clinicId, dto, req.user);
     }
 
     @Patch('enquiries/:id')
-    updateEnquiry(@Request() req, @Param('id') id: string, @Body() dto: UpdateEnquiryDto) {
+    async updateEnquiry(@Request() req, @Param('id') id: string, @Body() dto: UpdateEnquiryDto) {
         const clinicId = req.user.organisationId;
+        await this.retreatService.assertEnquiryAccess(clinicId, id, req.user);
         return this.retreatService.updateEnquiry(clinicId, id, dto);
     }
 
     @Post('enquiries/:id/convert')
-    convertEnquiryToBooking(@Request() req, @Param('id') id: string, @Body() dto: ConvertEnquiryDto) {
+    async convertEnquiryToBooking(@Request() req, @Param('id') id: string, @Body() dto: ConvertEnquiryDto) {
         const clinicId = req.user.organisationId;
+        await this.retreatService.assertEnquiryAccess(clinicId, id, req.user);
         return this.retreatService.convertEnquiryToBooking(clinicId, id, dto, req.user);
     }
 
     @Post('enquiries/:id/lost')
-    markEnquiryLost(@Request() req, @Param('id') id: string, @Body() body: { lostReason?: string }) {
+    async markEnquiryLost(@Request() req, @Param('id') id: string, @Body() body: { lostReason?: string }) {
         const clinicId = req.user.organisationId;
+        await this.retreatService.assertEnquiryAccess(clinicId, id, req.user);
         return this.retreatService.markEnquiryLost(clinicId, id, body?.lostReason);
     }
 

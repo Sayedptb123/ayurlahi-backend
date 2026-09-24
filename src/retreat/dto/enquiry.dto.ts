@@ -5,6 +5,11 @@ export class CreateEnquiryDto {
     @IsString()
     contactName: string;
 
+    // Requested branch (the switcher's); validated server-side, never trusted.
+    @IsOptional()
+    @IsUUID()
+    branchId?: string;
+
     @IsString()
     phone: string;
 

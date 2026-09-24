@@ -493,6 +493,8 @@ export class RetreatService {
                 where: {
                     organisationId: clinicId,
                     status: In([EnquiryStatus.NEW, EnquiryStatus.FOLLOW_UP]),
+                    // G12: follow-ups follow the same branch scope + switcher.
+                    ...(branchWhere ? { branchId: branchWhere } : {}),
                 },
                 order: { createdAt: 'ASC' },
             }),
@@ -964,12 +966,20 @@ export class RetreatService {
                 await this.assertPatientInOrg(clinicId, patientId, manager, userId, userRole);
             }
 
-            // Verify enquiry belongs to org (when enquiryId provided)
+            // Verify enquiry belongs to org and to the caller's branch scope (G12)
+            let enquiryBranchId: string | null | undefined;
             if (enquiryId) {
                 const enquiry = await manager.findOne(BookingEnquiry, {
                     where: { id: enquiryId, organisationId: clinicId },
                 });
-                if (!enquiry) throw new ForbiddenException('Enquiry not found in this organisation');
+                if (!enquiry) throw new NotFoundException('Enquiry not found');
+                this.branchVisibilityService.assertBranchAccess(
+                    await this.scopeFor(userId, userRole, clinicId), enquiry.branchId, 'Enquiry not found',
+                );
+                if (dto.branchId && enquiry.branchId && dto.branchId !== enquiry.branchId) {
+                    throw new BadRequestException('Branch does not match the enquiry');
+                }
+                enquiryBranchId = enquiry.branchId;
             }
 
             // Lock the room row before reading occupancy
@@ -980,8 +990,9 @@ export class RetreatService {
             if (!room) throw new NotFoundException('Room not found');
 
             // G10: the room decides the branch (see resolveStayBranch).
+            // An enquiry's branch must agree with the room's (G12).
             const bookingBranchId = await this.resolveStayBranch(clinicId, { userId, role: userRole }, room, {
-                requested: dto.branchId, patientId, manager,
+                requested: enquiryBranchId ?? dto.branchId, patientId, manager,
             });
 
             // Unified conflict check across admissions + room status + bookings
@@ -1522,6 +1533,19 @@ export class RetreatService {
         );
     }
 
+    async assertEnquiryAccess(clinicId: string, enquiryId: string, user: { userId?: string; role?: string }) {
+        const enquiry = await this.enquiryRepo.findOne({
+            where: { id: enquiryId, organisationId: clinicId },
+            select: ['id', 'branchId'],
+        });
+        if (!enquiry) throw new NotFoundException('Enquiry not found');
+        this.branchVisibilityService.assertBranchAccess(
+            await this.scopeFor(user.userId, user.role, clinicId),
+            enquiry.branchId,
+            'Enquiry not found',
+        );
+    }
+
     async assertAdmissionAccess(clinicId: string, admissionId: string, user: { userId?: string; role?: string }) {
         const admission = await this.admissionRepo.findOne({
             where: { id: admissionId, organisationId: clinicId },
@@ -1614,11 +1638,15 @@ export class RetreatService {
 
     // ── Enquiry methods ─────────────────────────────────────────────────────
 
-    async listEnquiries(clinicId: string, filters?: { status?: EnquiryStatus; assignedTo?: string }) {
+    async listEnquiries(clinicId: string, filters?: { status?: EnquiryStatus; assignedTo?: string; branchId?: string }, user: { userId?: string; role?: string } = {}) {
         const query = this.enquiryRepo.createQueryBuilder('enquiry')
             .leftJoinAndSelect('enquiry.assignedToUser', 'assignedToUser')
             .where('enquiry.organisationId = :organisationId', { organisationId: clinicId })
             .andWhere('enquiry.deletedAt IS NULL');
+        // G12: branch scope (Q1: no NULL rows for restricted staff), then the switcher.
+        const scope = await this.scopeFor(user.userId, user.role, clinicId);
+        this.branchVisibilityService.applyBranchScope(query, 'enquiry.branchId', scope);
+        this.branchVisibilityService.narrowToSelectedBranch(query, 'enquiry.branchId', filters?.branchId, scope);
 
         if (filters?.status) {
             query.andWhere('enquiry.status = :status', { status: filters.status });
@@ -1660,9 +1688,14 @@ export class RetreatService {
         );
     }
 
-    async createEnquiry(clinicId: string, dto: CreateEnquiryDto) {
+    async createEnquiry(clinicId: string, dto: CreateEnquiryDto, user: { userId?: string; role?: string } = {}) {
+        // G12 + G10: requested branch → usable branch, or the caller's single one (Q3).
+        const branchId = await this.branchVisibilityService.resolveWriteBranch(
+            await this.scopeFor(user.userId, user.role, clinicId), clinicId, { requested: dto.branchId },
+        );
         const enquiry = this.enquiryRepo.create({
             organisationId: clinicId,
+            branchId,
             contactName: dto.contactName,
             phone: dto.phone,
             channel: dto.channel,
@@ -1725,9 +1758,12 @@ export class RetreatService {
                 lock: { mode: 'pessimistic_write' },
             });
             if (!room) throw new NotFoundException('Room not found');
-            // G10: the new booking takes the room's branch — which the caller
-            // must be allowed to use. (It used to be saved with no branch.)
-            const bookingBranchId = await this.resolveStayBranch(clinicId, user, room, { manager });
+            // G10 + G12: the new booking takes the room's branch — which the
+            // caller must be allowed to use and which must be the enquiry's own
+            // branch. (It used to be saved with no branch.)
+            const bookingBranchId = await this.resolveStayBranch(clinicId, user, room, {
+                requested: enquiry.branchId, manager,
+            });
 
             const checkIn = new Date(dto.checkInDate);
             const checkOut = new Date(dto.checkOutDate);
