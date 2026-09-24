@@ -45,6 +45,16 @@ export class PatientBillPayment {
   @Column({ type: 'text', nullable: true, name: 'notes' })
   notes: string | null;
 
+  // Where the money went: a cash drawer, bank, UPI or partner-held ledger
+  // (Cash MVP plan §4b). Required once the organisation's cash module is live.
+  @Column({ type: 'uuid', nullable: true, name: 'received_into_account_id' })
+  receivedIntoAccountId: string | null;
+
+  // 'counter' = taken at billing/payment; 'booking_advance' = moved from a
+  // booking's advance at check-in (posted by the advance flow, not as a receipt).
+  @Column({ type: 'varchar', length: 20, default: 'counter', name: 'source' })
+  source: 'counter' | 'booking_advance';
+
   @Column({ type: 'uuid', nullable: true, name: 'created_by' })
   createdBy: string | null;
 

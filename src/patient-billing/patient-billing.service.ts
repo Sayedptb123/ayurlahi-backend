@@ -23,6 +23,7 @@ import { GetBillsDto } from './dto/get-bills.dto';
 import { NotificationsService } from '../notifications/notifications.service';
 import { BranchVisibilityService } from '../branch-visibility/branch-visibility.service';
 import { organisationBusinessDate } from '../common/business-date';
+import { PatientPaymentPostingService } from '../cash/patient-payment-posting.service';
 
 @Injectable()
 export class PatientBillingService {
@@ -47,6 +48,7 @@ export class PatientBillingService {
     private branchesRepository: Repository<Branch>,
     private notificationsService: NotificationsService,
     private branchVisibilityService: BranchVisibilityService,
+    private patientPaymentPosting: PatientPaymentPostingService,
   ) {}
 
   private calculateBillTotals(items: BillItem[]): { subtotal: number } {
@@ -152,6 +154,7 @@ export class PatientBillingService {
         paidAt: today,
         paymentMethod: PaymentMethod.CASH,
         notes: 'Advance paid at booking',
+        source: 'booking_advance',
         createdBy: createdBy ?? null,
       });
       await manager.save(PatientBillPayment, advance);
@@ -356,7 +359,10 @@ export class PatientBillingService {
       }
       const saved = await manager.save(PatientBill, bill);
       if (paidAmount > 0) {
-        await manager.save(
+        await this.patientPaymentPosting.checkReceivingAccount(
+          manager, saved.organisationId, createDto.receivedIntoAccountId, createDto.paymentMethod!,
+        );
+        const payment = await manager.save(
           PatientBillPayment,
           manager.create(PatientBillPayment, {
             organisationId: saved.organisationId,
@@ -365,9 +371,14 @@ export class PatientBillingService {
             paidAt: createDto.billDate.slice(0, 10),
             paymentMethod: createDto.paymentMethod,
             notes: 'Paid at billing',
+            receivedIntoAccountId: createDto.receivedIntoAccountId ?? null,
+            source: 'counter',
             createdBy: userId ?? null,
           }),
         );
+        // Receipt Voucher in this same transaction (Cash MVP §5 R1); a no-op
+        // until the organisation's cash module is live.
+        await this.patientPaymentPosting.post(manager, payment, saved, { userId, role: userRole });
       }
       return saved;
     }).catch((err) => {
@@ -774,7 +785,10 @@ export class PatientBillingService {
         );
       }
 
-      await payRepo.save(
+      await this.patientPaymentPosting.checkReceivingAccount(
+        manager, bill.organisationId, paymentDto.receivedIntoAccountId, paymentDto.paymentMethod,
+      );
+      const payment = await payRepo.save(
         payRepo.create({
           organisationId: bill.organisationId,
           billId: bill.id,
@@ -785,9 +799,14 @@ export class PatientBillingService {
           paymentMethod: paymentDto.paymentMethod,
           referenceNo: paymentDto.referenceNo ?? null,
           notes: paymentDto.notes ?? null,
+          receivedIntoAccountId: paymentDto.receivedIntoAccountId ?? null,
+          source: 'counter',
           createdBy: userId ?? null,
         }),
       );
+      // Receipt Voucher in this same transaction (Cash MVP §5 R1); a no-op
+      // until the organisation's cash module is live.
+      await this.patientPaymentPosting.post(manager, payment, locked, { userId, role: userRole });
 
       return this.reconcileBill(manager, bill.id);
     });
@@ -903,9 +922,18 @@ export class PatientBillingService {
 
     return this.billsRepository.manager.transaction(async (manager) => {
       const payRepo = manager.getRepository(PatientBillPayment);
-      const payment = await payRepo.findOne({ where: { id: paymentId, billId: id } });
+      // Locked so two voids of the same payment can't both go through.
+      const payment = await payRepo.findOne({
+        where: { id: paymentId, billId: id },
+        lock: { mode: 'pessimistic_write' },
+      });
       if (!payment) throw new NotFoundException('Payment not found');
       await payRepo.softRemove(payment);
+      // Reverse its Receipt Voucher, if it had one; the original is never changed.
+      await this.patientPaymentPosting.reverse(manager, payment.organisationId, payment.id, {
+        userId,
+        role: userRole,
+      });
       return this.reconcileBill(manager, id);
     });
   }

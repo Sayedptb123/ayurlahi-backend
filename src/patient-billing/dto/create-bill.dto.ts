@@ -9,6 +9,7 @@ import {
   Min,
   ValidateNested,
   MaxLength,
+  IsUUID,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { BillStatus, PaymentMethod } from '../entities/patient-bill.entity';
@@ -90,6 +91,12 @@ export class CreateBillDto {
   @IsNumber()
   @Min(0)
   paidAmount?: number;
+
+  // Ledger the money was received into (cash drawer / bank / UPI / partner).
+  // Required once the organisation's cash module is live.
+  @IsOptional()
+  @IsUUID()
+  receivedIntoAccountId?: string;
 
   @IsOptional()
   @IsString()

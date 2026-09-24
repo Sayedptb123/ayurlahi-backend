@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { CashModule } from '../cash/cash.module';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { PatientBillingController } from './patient-billing.controller';
 import { PatientBillingService } from './patient-billing.service';
@@ -16,7 +17,7 @@ import { BranchVisibilityModule } from '../branch-visibility/branch-visibility.m
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([PatientBill, BillItem, PatientBillPayment, Patient, Appointment, OrganisationUser, RoomBooking, Admission, Branch]),
+    TypeOrmModule.forFeature([PatientBill, BillItem, PatientBillPayment, Patient, Appointment, OrganisationUser, RoomBooking, Admission, Branch]), CashModule,
     NotificationsModule,
     BranchVisibilityModule,
   ],

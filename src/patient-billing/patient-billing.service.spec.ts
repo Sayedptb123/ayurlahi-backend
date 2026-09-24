@@ -49,6 +49,11 @@ const makeService = (
       getRawOne: jest.fn(() => Promise.resolve({ sum: String(opts.ledgerSum ?? 0) })),
     })),
   };
+  const paymentPosting = {
+    checkReceivingAccount: jest.fn(() => Promise.resolve()),
+    post: jest.fn(() => Promise.resolve(null)),
+    reverse: jest.fn(() => Promise.resolve(null)),
+  };
   const none: any = { findOne: jest.fn(() => Promise.resolve(null)), find: jest.fn(() => Promise.resolve([])) };
 
   const service = new PatientBillingService(
@@ -58,8 +63,9 @@ const makeService = (
     none, none, none, none, none, none,
     { sendToUsers: jest.fn() } as any,
     { resolveVisibleBranchIds: jest.fn() } as any,
+    paymentPosting as any,
   );
-  return { service, billsRepository, billItemsRepository, managerSave, managerQuery, manager };
+  return { service, billsRepository, billItemsRepository, managerSave, managerQuery, manager, paymentPosting };
 };
 
 const createBill = (service: PatientBillingService, dto: any) =>
@@ -338,5 +344,42 @@ describe('PatientBillingService — "today" is the organisation business date (G
       paidAt: '2026-09-20',
     });
     expect(payRepoSave.mock.calls.map(([x]) => x.paidAt)).toEqual(['2026-09-24', '2026-09-20']);
+  });
+});
+
+describe('PatientBillingService — Receipt Vouchers for patient payments (cash §5 R1)', () => {
+  it('bill created with a paid amount: checks the ledger, saves the payment, then posts it, in one transaction', async () => {
+    const { service, managerSave, paymentPosting, billsRepository } = makeService();
+    await createBill(service, { paidAmount: 400, paymentMethod: PaymentMethod.CASH, receivedIntoAccountId: 'acc-1' });
+    expect(billsRepository.manager.transaction).toHaveBeenCalledTimes(1);
+    expect(paymentPosting.checkReceivingAccount).toHaveBeenCalledWith(expect.anything(), 'org-1', 'acc-1', 'cash');
+    const [payment] = paymentSaves(managerSave);
+    expect(payment).toMatchObject({ receivedIntoAccountId: 'acc-1', source: 'counter' });
+    expect(paymentPosting.post).toHaveBeenCalledTimes(1);
+    expect((paymentPosting.post.mock.calls[0] as any[])[1]).toMatchObject({ amount: 400, receivedIntoAccountId: 'acc-1' });
+    expect((paymentPosting.post.mock.calls[0] as any[])[3]).toEqual({ userId: 'u-1', role: 'RECEPTIONIST' });
+  });
+
+  it('bill created with nothing paid: no payment, no posting', async () => {
+    const { service, paymentPosting } = makeService();
+    await createBill(service, {});
+    expect(paymentPosting.post).not.toHaveBeenCalled();
+  });
+
+  it('a posting failure fails the whole bill creation (rolls back with it)', async () => {
+    const { service, paymentPosting } = makeService();
+    paymentPosting.post.mockRejectedValueOnce(new Error('ledger missing') as never);
+    await expect(
+      createBill(service, { paidAmount: 400, paymentMethod: PaymentMethod.CASH, receivedIntoAccountId: 'acc-1' }),
+    ).rejects.toThrow('ledger missing');
+  });
+
+  it('admission advance rows are marked booking_advance (posted by the advance flow later, not as a receipt)', async () => {
+    const { service, manager, managerSave } = makeService({ maxBillNumber: 1 });
+    await service.buildBillFromBooking(manager, {
+      organisationId: 'org-1', patientId: 'p-1', bookingId: 'b-1', admissionId: 'adm-1',
+      lineItems: [{ name: 'Room', unitPrice: 500 }], advancePaid: 200,
+    });
+    expect(paymentSaves(managerSave)[0]).toMatchObject({ source: 'booking_advance' });
   });
 });

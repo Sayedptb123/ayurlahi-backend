@@ -6,6 +6,7 @@ import {
   IsString,
   IsDateString,
   Min,
+  IsUUID,
 } from 'class-validator';
 import { PaymentMethod } from '../entities/patient-bill.entity';
 
@@ -33,4 +34,10 @@ export class PaymentDto {
   @IsOptional()
   @IsString()
   notes?: string;
+
+  // Ledger the money was received into (cash drawer / bank / UPI / partner).
+  // Required once the organisation's cash module is live.
+  @IsOptional()
+  @IsUUID()
+  receivedIntoAccountId?: string;
 }

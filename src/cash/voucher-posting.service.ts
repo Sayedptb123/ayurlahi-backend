@@ -139,6 +139,17 @@ export class VoucherPostingService {
     return this.write(manager, input, null);
   }
 
+  // The organisation's go-live date ('YYYY-MM-DD'), or null while the cash
+  // module is off. Callers use it to skip money dated before go-live.
+  async liveFrom(manager: EntityManager, organisationId: string): Promise<string | null> {
+    const [settings] = await manager.query(
+      `SELECT to_char(cash_module_live_from, 'YYYY-MM-DD') AS live_from
+         FROM organisation_settings WHERE organisation_id = $1`,
+      [organisationId],
+    );
+    return settings?.live_from ?? null;
+  }
+
   // Corrections are reversals only: same lines, sides swapped, dated today.
   async reverse(manager: EntityManager, input: ReverseVoucherInput): Promise<PostedVoucher> {
     const reason = input.reason?.trim();
@@ -210,12 +221,7 @@ export class VoucherPostingService {
     }
 
     // Module-off switch and go-live date (plan §7, D10).
-    const [settings] = await manager.query(
-      `SELECT to_char(cash_module_live_from, 'YYYY-MM-DD') AS live_from
-         FROM organisation_settings WHERE organisation_id = $1`,
-      [orgId],
-    );
-    const liveFrom: string | null = settings?.live_from ?? null;
+    const liveFrom = await this.liveFrom(manager, orgId);
     if (!liveFrom || voucherDate < liveFrom) {
       if (input.requireLive) {
         throw new BadRequestException(
@@ -278,7 +284,7 @@ export class VoucherPostingService {
     );
     if (closed) {
       throw new ConflictException(
-        `${closed.name} is closed up to ${closed.close_date}. Record it with today's date and the original date instead.`,
+        `${closed.name} is closed up to ${closed.close_date}, so nothing more can be recorded in it on or before that day.`,
       );
     }
 
