@@ -79,7 +79,16 @@ export class StaffBranchAssignmentsService {
       createdBy,
     });
 
-    return await this.assignmentsRepository.save(assignment);
+    try {
+      return await this.assignmentsRepository.save(assignment);
+    } catch (err: any) {
+      // Two concurrent assigns of the same branch: the unique index catches
+      // the loser -- a conflict, not a server error.
+      if (err?.code === '23505' && err?.constraint === 'idx_staff_branch_unique_active') {
+        throw new ConflictException('Staff is already assigned to this branch');
+      }
+      throw err;
+    }
   }
 
   async findAll(
@@ -174,6 +183,10 @@ export class StaffBranchAssignmentsService {
 
   async remove(id: string, organisationId: string): Promise<void> {
     const assignment = await this.findOne(id, organisationId);
+    // Deactivate as well as soft-delete: a deleted row left is_active = true
+    // used to block re-assigning the same branch (unique index on active
+    // rows -- see migrations/2026-09-24-staff-branch-unique-active-excludes-deleted.sql).
+    await this.assignmentsRepository.update(assignment.id, { isActive: false });
     await this.assignmentsRepository.softDelete(assignment.id);
   }
 
