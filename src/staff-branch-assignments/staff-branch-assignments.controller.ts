@@ -9,6 +9,7 @@ import {
   Query,
   UseGuards,
   Request,
+  ForbiddenException,
 } from '@nestjs/common';
 import { StaffBranchAssignmentsService } from './staff-branch-assignments.service';
 import { CreateStaffBranchAssignmentDto } from './dto/create-staff-branch-assignment.dto';
@@ -24,12 +25,25 @@ export class StaffBranchAssignmentsController {
     private readonly assignmentsService: StaffBranchAssignmentsService,
   ) {}
 
+  // Branch assignments ARE the branch-isolation boundary: whoever can write
+  // them decides what every restricted user can see. Only organisation
+  // leadership and the Ayurlahi platform may change them (found in the
+  // pre-deploy review of the branch-scoping remediation — any clinic member
+  // could previously assign themselves to any branch). Reads stay open.
+  private assertCanManageAssignments(req: any) {
+    const allowed = ['OWNER', 'ADMIN', 'MANAGER', 'SUPER_ADMIN', 'SUPPORT'];
+    if (!allowed.includes(req.user?.role)) {
+      throw new ForbiddenException('Only owners, admins and managers can change branch assignments');
+    }
+  }
+
   @Post()
   create(
     @Param('organisationId') organisationId: string,
     @Body() createDto: CreateStaffBranchAssignmentDto,
     @Request() req,
   ) {
+    this.assertCanManageAssignments(req);
     return this.assignmentsService.create(
       organisationId,
       createDto,
@@ -58,7 +72,9 @@ export class StaffBranchAssignmentsController {
     @Param('organisationId') organisationId: string,
     @Param('id') id: string,
     @Body() updateDto: UpdateStaffBranchAssignmentDto,
+    @Request() req,
   ) {
+    this.assertCanManageAssignments(req);
     return this.assignmentsService.update(id, organisationId, updateDto);
   }
 
@@ -66,7 +82,9 @@ export class StaffBranchAssignmentsController {
   remove(
     @Param('organisationId') organisationId: string,
     @Param('id') id: string,
+    @Request() req,
   ) {
+    this.assertCanManageAssignments(req);
     return this.assignmentsService.remove(id, organisationId);
   }
 
