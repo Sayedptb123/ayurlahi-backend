@@ -1,11 +1,35 @@
-import { ForbiddenException, Injectable, BadRequestException } from '@nestjs/common';
+import { ForbiddenException, Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { IsNull, Repository } from 'typeorm';
+import { EntityManager, In, IsNull, ObjectLiteral, Repository, SelectQueryBuilder } from 'typeorm';
 import { Staff } from '../staff/entities/staff.entity';
 import { StaffBranchAssignment } from '../staff-branch-assignments/entities/staff-branch-assignment.entity';
 import { OrganisationSettingsService } from '../organisation-settings/organisation-settings.service';
 import { PatientVisibility, InventoryPolicy } from '../organisation-settings/entities/organisation-settings.entity';
 import { Branch } from '../branches/entities/branch.entity';
+import { Patient } from '../patients/entities/patient.entity';
+
+// ── Branch scoping v2 (scope/Branch_Scoping_Remediation_Plan_2026-09-24.md §7, §10–11)
+//
+// One rule for every branch-owned record, used by reads, single-record
+// access, actions and writes alike:
+//   READ    applyBranchScope / applyPatientBranchScope, then narrowToSelectedBranch
+//   ACTION  assertBranchAccess / assertPatientAccess   (404 outside scope — Q2)
+//   WRITE   resolveWriteBranch                         (trusted branch — Q3)
+// The switcher (narrowToSelectedBranch) only ever narrows *after* scope; it is
+// never the security mechanism.
+export type BranchScope =
+  | { kind: 'all' }
+  | { kind: 'branches'; ids: string[] };
+
+export interface BranchScopeUser {
+  userId?: string;
+  role?: string;
+  organisationId?: string;
+}
+
+// Unique query-parameter names so several scope filters can share one query.
+let scopeParamSeq = 0;
+const nextParam = (prefix: string) => `${prefix}_${++scopeParamSeq}`;
 
 // Organisation leadership roles are never branch-scoped — an OWNER/ADMIN/MANAGER
 // has no `staff` row in most orgs (they're not front-line staff), and even when
@@ -28,7 +52,162 @@ export class BranchVisibilityService {
     private readonly assignmentsRepository: Repository<StaffBranchAssignment>,
     @InjectRepository(Branch)
     private readonly branchesRepository: Repository<Branch>,
+    @InjectRepository(Patient)
+    private readonly patientsRepository: Repository<Patient>,
   ) {}
+
+  // ── Branch scoping v2 ──────────────────────────────────────────────────────
+
+  // Which branches this user may read/act on. 'all' when there is nothing to
+  // isolate: no organisation context, patient visibility not 'isolated', an
+  // org-wide role, or an org with no branches (NULL-branch rows are then the
+  // normal case — Q1). Otherwise the user's active assignments to live
+  // branches; an empty list is deliberate and matches nothing (fail closed).
+  async scopeFor(user: BranchScopeUser): Promise<BranchScope> {
+    const { userId, role, organisationId } = user;
+    if (!organisationId) return { kind: 'all' };
+    const settings = await this.organisationSettingsService.getOrCreate(organisationId);
+    if (settings.patientVisibility !== PatientVisibility.ISOLATED) return { kind: 'all' };
+    if (role && ORG_WIDE_ROLES.has(role)) return { kind: 'all' };
+    const branchCount = await this.branchesRepository.count({
+      where: { organisationId, deletedAt: IsNull() },
+    });
+    if (branchCount === 0) return { kind: 'all' };
+
+    const assigned = (await this.resolveViaAssignments(userId, organisationId, role)) ?? [];
+    if (assigned.length === 0) return { kind: 'branches', ids: [] };
+    // Assignments can outlive their branch (soft-deleted branch) — never scope to one.
+    const live = await this.branchesRepository.find({
+      where: { id: In(assigned), organisationId, deletedAt: IsNull() },
+      select: ['id'],
+    });
+    return { kind: 'branches', ids: live.map((b) => b.id) };
+  }
+
+  // Restrict a query to the scope. For a restricted user NULL-branch rows are
+  // excluded (Q1: unassigned legacy rows are owner/admin/manager-only).
+  applyBranchScope<T extends ObjectLiteral>(
+    qb: SelectQueryBuilder<T>,
+    column: string,
+    scope: BranchScope,
+  ): SelectQueryBuilder<T> {
+    if (scope.kind === 'all') return qb;
+    if (scope.ids.length === 0) return qb.andWhere('1 = 0');
+    const param = nextParam('scopeBranchIds');
+    return qb.andWhere(`${column} IN (:...${param})`, { [param]: scope.ids });
+  }
+
+  // Patient-linked records (medical records, prescriptions, lab reports,
+  // vitals, newborn assessments, patient documents): the patient's branch is
+  // the record's branch. `patientAlias` must already be joined.
+  applyPatientBranchScope<T extends ObjectLiteral>(
+    qb: SelectQueryBuilder<T>,
+    patientAlias: string,
+    scope: BranchScope,
+  ): SelectQueryBuilder<T> {
+    return this.applyBranchScope(qb, `${patientAlias}.branchId`, scope);
+  }
+
+  // The branch switcher: a view preference applied after scope. A requested
+  // branch outside the scope matches nothing — it can narrow, never widen.
+  narrowToSelectedBranch<T extends ObjectLiteral>(
+    qb: SelectQueryBuilder<T>,
+    column: string,
+    requestedBranchId: string | null | undefined,
+    scope: BranchScope,
+  ): SelectQueryBuilder<T> {
+    if (!requestedBranchId) return qb;
+    if (scope.kind === 'branches' && !scope.ids.includes(requestedBranchId)) {
+      return qb.andWhere('1 = 0');
+    }
+    const param = nextParam('selectedBranchId');
+    return qb.andWhere(`${column} = :${param}`, { [param]: requestedBranchId });
+  }
+
+  // Single record / any action on it. 404, not 403, so record ids can't be
+  // probed for existence across branches (Q2). NULL branch is outside a
+  // restricted scope (Q1).
+  assertBranchAccess(
+    scope: BranchScope,
+    branchId: string | null | undefined,
+    notFoundMessage = 'Not found',
+  ): void {
+    if (scope.kind === 'all') return;
+    if (!branchId || !scope.ids.includes(branchId)) {
+      throw new NotFoundException(notFoundMessage);
+    }
+  }
+
+  // Anything reached through a patient id (creating a clinical record, a
+  // bill, an appointment, a check-in; listing by patientId): the patient must
+  // be in the organisation and inside the scope. Returns the patient.
+  async assertPatientAccess(
+    scope: BranchScope,
+    organisationId: string,
+    patientId: string,
+    manager?: EntityManager,
+  ): Promise<Patient> {
+    const repo = manager ? manager.getRepository(Patient) : this.patientsRepository;
+    const patient = await repo.findOne({ where: { id: patientId, organisationId } });
+    if (!patient) throw new NotFoundException('Patient not found');
+    this.assertBranchAccess(scope, patient.branchId, 'Patient not found');
+    return patient;
+  }
+
+  // The branch a new record is written to. A client-supplied branchId is a
+  // request, never trusted on its own:
+  //  - parent given (patient / room / booking / admission / bill): the
+  //    parent's branch wins; a conflicting request is rejected; the parent
+  //    must be inside the scope.
+  //  - org with no branches: NULL.
+  //  - requested: must be a live, approved branch of the org, inside scope
+  //    (403 otherwise — same as inventory's resolveBranchIdForWrite).
+  //  - nothing requested: the user's single usable branch, else 400 (Q3) —
+  //    never a silently chosen default, never NULL in an org with branches.
+  async resolveWriteBranch(
+    scope: BranchScope,
+    organisationId: string,
+    opts: { requested?: string | null; parent?: { branchId: string | null } },
+  ): Promise<string | null> {
+    const { requested, parent } = opts;
+
+    if (parent) {
+      if (requested && parent.branchId && requested !== parent.branchId) {
+        throw new BadRequestException('Branch does not match the record it belongs to');
+      }
+      this.assertBranchAccess(scope, parent.branchId);
+      return parent.branchId;
+    }
+
+    const usable = await this.branchesRepository.find({
+      where: { organisationId, deletedAt: IsNull(), approvalStatus: 'approved' },
+      select: ['id'],
+    });
+    const liveCount = await this.branchesRepository.count({
+      where: { organisationId, deletedAt: IsNull() },
+    });
+    if (liveCount === 0) return null;
+
+    if (requested) {
+      if (!usable.some((b) => b.id === requested)) {
+        throw new BadRequestException('Branch not found for this organisation');
+      }
+      if (scope.kind === 'branches' && !scope.ids.includes(requested)) {
+        throw new ForbiddenException('You do not have access to this branch');
+      }
+      return requested;
+    }
+
+    const candidates = usable
+      .map((b) => b.id)
+      .filter((id) => scope.kind === 'all' || scope.ids.includes(id));
+    if (candidates.length === 1) return candidates[0];
+    throw new BadRequestException(
+      candidates.length === 0 ? 'You are not assigned to any branch' : 'Select a branch',
+    );
+  }
+
+  // ── end v2 ─────────────────────────────────────────────────────────────────
 
   // Returns:
   //   null      — no branch filter should be applied (patientVisibility is
