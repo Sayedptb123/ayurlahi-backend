@@ -1,3 +1,4 @@
+import { BranchVisibilityService } from '../branch-visibility/branch-visibility.service';
 import {
   Controller,
   Get,
@@ -23,14 +24,33 @@ import { OrganisationGuard } from '../auth/guards/organisation.guard';
 @Controller('organisations/:organisationId/duty-assignments')
 @UseGuards(JwtAuthGuard, OrganisationGuard)
 export class DutyAssignmentsController {
-  constructor(private readonly assignmentsService: DutyAssignmentsService) {}
+  constructor(
+    private readonly assignmentsService: DutyAssignmentsService,
+    private readonly branchVisibility: BranchVisibilityService,
+  ) {}
+
+  // Branch scoping G10 (scope/Branch_Scoping_Remediation_Plan_2026-09-24.md):
+  // creates resolve the branch through the shared rule; edits / deletes first
+  // check the existing row's branch is in the caller's scope (404), and a
+  // branch move goes through the same write rule.
+  private scopeOf(req: any, organisationId: string) {
+    return this.branchVisibility.scopeForOrganisation(req.user, organisationId);
+  }
+
+  private async gateRow(req: any, organisationId: string, id: string, requestedBranchId?: string | null) {
+    const scope = await this.scopeOf(req, organisationId);
+    const row: any = await this.assignmentsService.findOne(id, organisationId);
+    this.branchVisibility.assertBranchAccess(scope, row.branchId, 'Duty assignment not found');
+    return requestedBranchId ? this.branchVisibility.resolveWriteBranch(scope, organisationId, { requested: requestedBranchId }) : undefined;
+  }
 
   @Post()
-  create(
+  async create(
     @Param('organisationId') organisationId: string,
     @Body() createDto: CreateDutyAssignmentDto,
     @Request() req,
   ) {
+    createDto.branchId = (await this.branchVisibility.resolveWriteBranch(await this.scopeOf(req, organisationId), organisationId, { requested: createDto.branchId })) as any;
     return this.assignmentsService.create(
       organisationId,
       createDto,
@@ -55,28 +75,34 @@ export class DutyAssignmentsController {
   }
 
   @Patch(':id')
-  update(
+  async update(
     @Param('organisationId') organisationId: string,
     @Param('id') id: string,
     @Body() updateDto: UpdateDutyAssignmentDto,
+    @Request() req,
   ) {
+    await this.gateRow(req, organisationId, id); // branch isn't editable on an assignment
     return this.assignmentsService.update(id, organisationId, updateDto);
   }
 
   @Put(':id')
-  updatePut(
+  async updatePut(
     @Param('organisationId') organisationId: string,
     @Param('id') id: string,
     @Body() updateDto: UpdateDutyAssignmentDto,
+    @Request() req,
   ) {
+    await this.gateRow(req, organisationId, id); // branch isn't editable on an assignment
     return this.assignmentsService.update(id, organisationId, updateDto);
   }
 
   @Delete(':id')
-  remove(
+  async remove(
     @Param('organisationId') organisationId: string,
     @Param('id') id: string,
+    @Request() req,
   ) {
+    await this.gateRow(req, organisationId, id);
     return this.assignmentsService.remove(id, organisationId);
   }
 

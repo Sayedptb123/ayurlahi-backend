@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { BranchVisibilityModule } from '../branch-visibility/branch-visibility.module';
 import { CashModule } from '../cash/cash.module';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AssetCategory } from './entities/asset-category.entity';
@@ -11,6 +12,7 @@ import { AssetsController } from './assets.controller';
 @Module({
   imports: [
     TypeOrmModule.forFeature([AssetCategory, Asset, AssetMaintenance, Expense]),
+    BranchVisibilityModule,
     CashModule,
   ],
   controllers: [AssetsController],

@@ -111,12 +111,19 @@ export class RetreatService {
     // pattern createRoom already used for D14 (org-membership only, no
     // approval-status check — matches every other branch-assignment site in
     // this codebase, e.g. patients.service.ts).
-    private async assertBranchOwnership(clinicId: string, branchId: string): Promise<Branch> {
-        const branch = await this.dataSource.manager.findOne(Branch, {
-            where: { id: branchId, organisationId: clinicId },
-        });
-        if (!branch) throw new NotFoundException('Branch not found in this organisation');
-        return branch;
+    // Branch scoping G10 for setup/catalog writes: the target branch must be a
+    // live, approved branch of the organisation that the caller may use (403
+    // otherwise). `user` defaults to {} — an empty scope — so a caller that
+    // forgets to pass it is refused, never let through.
+    private async assertBranchOwnership(clinicId: string, branchId: string | null | undefined, user: { userId?: string; role?: string } = {}): Promise<string | null> {
+        const scope = await this.scopeFor(user.userId, user.role, clinicId);
+        return this.branchVisibilityService.resolveWriteBranch(scope, clinicId, { requested: branchId });
+    }
+
+    // An existing catalog row (room, category, package, pricing) may only be
+    // edited or deleted by a caller whose scope includes its branch (404).
+    private async assertCatalogRowAccess(clinicId: string, branchId: string | null, user: { userId?: string; role?: string }, notFound: string) {
+        this.branchVisibilityService.assertBranchAccess(await this.scopeFor(user.userId, user.role, clinicId), branchId, notFound);
     }
 
     // ADR-004 D15 — no precedent elsewhere in this codebase for "two sibling
@@ -159,8 +166,8 @@ export class RetreatService {
         });
     }
 
-    async createRoomCategory(clinicId: string, data: { name: string; branchId: string }) {
-        await this.assertBranchOwnership(clinicId, data.branchId);
+    async createRoomCategory(clinicId: string, data: { name: string; branchId: string }, user: { userId?: string; role?: string } = {}) {
+        await this.assertBranchOwnership(clinicId, data.branchId, user);
         const existing = await this.categoryRepo.findOne({
             where: { organisationId: clinicId, name: data.name },
             withDeleted: true,
@@ -172,22 +179,24 @@ export class RetreatService {
         return this.categoryRepo.save(category);
     }
 
-    async updateRoomCategory(clinicId: string, id: string, data: { name?: string; isActive?: boolean; branchId?: string }) {
+    async updateRoomCategory(clinicId: string, id: string, data: { name?: string; isActive?: boolean; branchId?: string }, user: { userId?: string; role?: string } = {}) {
         const category = await this.categoryRepo.findOne({ where: { id, organisationId: clinicId } });
         if (!category) throw new NotFoundException('Room category not found');
+        await this.assertCatalogRowAccess(clinicId, category.branchId, user, 'Room category not found');
         if (data.name !== undefined) category.name = data.name;
         if (data.isActive !== undefined) category.isActive = data.isActive;
         // ADR-004 D15 — this is also how a legacy NULL-branch row gets resolved.
         if (data.branchId !== undefined && data.branchId !== category.branchId) {
-            await this.assertBranchOwnership(clinicId, data.branchId);
+            await this.assertBranchOwnership(clinicId, data.branchId, user);
             category.branchId = data.branchId;
         }
         return this.categoryRepo.save(category);
     }
 
-    async deleteRoomCategory(clinicId: string, id: string) {
+    async deleteRoomCategory(clinicId: string, id: string, user: { userId?: string; role?: string } = {}) {
         const category = await this.categoryRepo.findOne({ where: { id, organisationId: clinicId } });
         if (!category) throw new NotFoundException('Room category not found');
+        await this.assertCatalogRowAccess(clinicId, category.branchId, user, 'Room category not found');
         await this.categoryRepo.softDelete(id);
     }
 
@@ -206,9 +215,10 @@ export class RetreatService {
         });
     }
 
-    async setPricingMatrix(clinicId: string, data: { roomCategoryId: string; packageId: string; basePrice: number; acSupplementPerDay?: number | null }) {
+    async setPricingMatrix(clinicId: string, data: { roomCategoryId: string; packageId: string; basePrice: number; acSupplementPerDay?: number | null }, user: { userId?: string; role?: string } = {}) {
         const category = await this.categoryRepo.findOne({ where: { id: data.roomCategoryId, organisationId: clinicId } });
         if (!category) throw new NotFoundException('Room category not found');
+        await this.assertCatalogRowAccess(clinicId, category.branchId, user, 'Room category not found');
         if (!category.isActive) throw new BadRequestException('Cannot set pricing for an inactive room category');
 
         // Closes a pre-existing gap — packageId was never validated at all
@@ -246,9 +256,10 @@ export class RetreatService {
         return this.categoryPricingRepo.save(entry);
     }
 
-    async deletePricingMatrixEntry(clinicId: string, id: string) {
+    async deletePricingMatrixEntry(clinicId: string, id: string, user: { userId?: string; role?: string } = {}) {
         const entry = await this.categoryPricingRepo.findOne({ where: { id, organisationId: clinicId } });
         if (!entry) throw new NotFoundException('Pricing entry not found');
+        await this.assertCatalogRowAccess(clinicId, entry.branchId, user, 'Pricing entry not found');
         await this.categoryPricingRepo.softDelete(id);
     }
 
@@ -266,9 +277,10 @@ export class RetreatService {
         });
     }
 
-    async setRoomPricingOverride(clinicId: string, data: { roomId: string; packageId: string; price: number }) {
+    async setRoomPricingOverride(clinicId: string, data: { roomId: string; packageId: string; price: number }, user: { userId?: string; role?: string } = {}) {
         const room = await this.roomRepo.findOne({ where: { id: data.roomId, organisationId: clinicId } });
         if (!room) throw new NotFoundException('Room not found');
+        await this.assertCatalogRowAccess(clinicId, room.branchId, user, 'Room not found');
 
         // Closes a pre-existing gap — packageId was never loaded or validated
         // at all before. Now required for the D15 same-branch check below.
@@ -299,9 +311,10 @@ export class RetreatService {
         return this.roomPricingOverrideRepo.save(override);
     }
 
-    async deleteRoomPricingOverride(clinicId: string, id: string) {
+    async deleteRoomPricingOverride(clinicId: string, id: string, user: { userId?: string; role?: string } = {}) {
         const override = await this.roomPricingOverrideRepo.findOne({ where: { id, organisationId: clinicId } });
         if (!override) throw new NotFoundException('Room pricing override not found');
+        await this.assertCatalogRowAccess(clinicId, override.branchId, user, 'Room pricing override not found');
         await this.roomPricingOverrideRepo.softDelete(id);
     }
 
@@ -488,27 +501,19 @@ export class RetreatService {
         return { arrivals, departures, holds, followUps };
     }
 
-    async createRoom(clinicId: string, data: { roomNumber: string; floor?: string; roomCategoryId?: string; capacity?: number; amenities?: string[]; description?: string; branchId?: string }) {
+    async createRoom(clinicId: string, data: { roomNumber: string; floor?: string; roomCategoryId?: string; capacity?: number; amenities?: string[]; description?: string; branchId?: string }, user: { userId?: string; role?: string } = {}) {
         let cat: RoomCategory | null = null;
         if (data.roomCategoryId) {
             cat = await this.categoryRepo.findOne({ where: { id: data.roomCategoryId, organisationId: clinicId } });
             if (!cat) throw new NotFoundException('Room category not found');
         }
         // ADR-004 D14 — a room is a physical asset that exists in exactly one
-        // location; the column existed since D14 but was never actually
-        // validated/set anywhere until now.
-        if (data.branchId) {
-            const branch = await this.dataSource.manager.findOne(Branch, {
-                where: { id: data.branchId, organisationId: clinicId },
-            });
-            if (!branch) throw new NotFoundException('Branch not found in this organisation');
-        }
-        // ADR-004 D15 — a categorized room must agree with its own category's
-        // branch. Only checked when both sides actually carry a branch; a
-        // room's own branchId stays optional (D14), so a branch-less room
-        // isn't forced into this check.
-        if (cat && data.branchId) {
-            this.assertSameBranch({ branchId: data.branchId }, cat, 'Room', 'Room category');
+        // location. G10: the requested branch must be one the caller may use,
+        // else their single usable branch (Q3); never NULL in a branched org.
+        const roomBranchId = await this.assertBranchOwnership(clinicId, data.branchId, user);
+        // ADR-004 D15 — a categorized room must agree with its own category's branch.
+        if (cat && roomBranchId) {
+            this.assertSameBranch({ branchId: roomBranchId }, cat, 'Room', 'Room category');
         }
         const room = this.roomRepo.create({
             roomNumber: data.roomNumber,
@@ -518,21 +523,21 @@ export class RetreatService {
             capacity: data.capacity ?? null,
             amenities: data.amenities ?? null,
             organisationId: clinicId,
-            branchId: data.branchId ?? null,
+            branchId: roomBranchId,
         });
         const saved = await this.roomRepo.save(room);
         return { ...saved, roomCategory: cat?.name ?? null };
     }
 
-    async updateRoom(clinicId: string, id: string, data: { roomNumber?: string; floor?: string; roomCategoryId?: string; capacity?: number; amenities?: string[]; description?: string; status?: string; branchId?: string | null }) {
+    async updateRoom(clinicId: string, id: string, data: { roomNumber?: string; floor?: string; roomCategoryId?: string; capacity?: number; amenities?: string[]; description?: string; status?: string; branchId?: string | null }, user: { userId?: string; role?: string } = {}) {
         const room = await this.roomRepo.findOne({ where: { id, organisationId: clinicId } });
         if (!room) throw new NotFoundException('Room not found');
+        await this.assertCatalogRowAccess(clinicId, room.branchId, user, 'Room not found');
         // D14 — apply a branchId change first, so the category cross-check
         // below (if both are changing in the same request) validates against
         // the room's new branch, not its stale one.
         if (data.branchId !== undefined && data.branchId !== room.branchId) {
-            if (data.branchId) await this.assertBranchOwnership(clinicId, data.branchId);
-            room.branchId = data.branchId || null;
+            room.branchId = await this.assertBranchOwnership(clinicId, data.branchId, user);
         }
         if (data.roomCategoryId !== undefined) {
             if (data.roomCategoryId) {
@@ -556,9 +561,10 @@ export class RetreatService {
         return { ...saved, roomCategory: cat?.name ?? null };
     }
 
-    async deleteRoom(clinicId: string, id: string) {
+    async deleteRoom(clinicId: string, id: string, user: { userId?: string; role?: string } = {}) {
         const room = await this.roomRepo.findOne({ where: { id, organisationId: clinicId } });
         if (!room) throw new NotFoundException('Room not found');
+        await this.assertCatalogRowAccess(clinicId, room.branchId, user, 'Room not found');
         await this.roomRepo.softDelete(room.id);
     }
 
@@ -574,8 +580,8 @@ export class RetreatService {
         });
     }
 
-    async createPackage(clinicId: string, data: Partial<TreatmentPackage> & { branchId: string }) {
-        await this.assertBranchOwnership(clinicId, data.branchId);
+    async createPackage(clinicId: string, data: Partial<TreatmentPackage> & { branchId: string }, user: { userId?: string; role?: string } = {}) {
+        await this.assertBranchOwnership(clinicId, data.branchId, user);
         const pkg = this.packageRepo.create({ ...data, organisationId: clinicId });
         return this.packageRepo.save(pkg);
     }
@@ -596,20 +602,23 @@ export class RetreatService {
         return admission;
     }
 
-    async updatePackage(clinicId: string, id: string, data: Partial<TreatmentPackage>) {
+    async updatePackage(clinicId: string, id: string, data: Partial<TreatmentPackage>, user: { userId?: string; role?: string } = {}) {
         const pkg = await this.packageRepo.findOne({ where: { id, organisationId: clinicId } });
         if (!pkg) throw new NotFoundException('Package not found');
+        // A legacy NULL-branch package is fixable by org-wide roles only (Q1).
+        await this.assertCatalogRowAccess(clinicId, pkg.branchId, user, 'Package not found');
         // ADR-004 D15 — this is also how a legacy NULL-branch row gets resolved.
         if (data.branchId !== undefined && data.branchId !== pkg.branchId) {
-            if (data.branchId) await this.assertBranchOwnership(clinicId, data.branchId);
+            if (data.branchId) await this.assertBranchOwnership(clinicId, data.branchId, user);
         }
         Object.assign(pkg, data);
         return this.packageRepo.save(pkg);
     }
 
-    async deletePackage(clinicId: string, id: string) {
+    async deletePackage(clinicId: string, id: string, user: { userId?: string; role?: string } = {}) {
         const pkg = await this.packageRepo.findOne({ where: { id, organisationId: clinicId } });
         if (!pkg) throw new NotFoundException('Package not found');
+        await this.assertCatalogRowAccess(clinicId, pkg.branchId, user, 'Package not found');
         await this.packageRepo.softDelete(id);
         return { message: 'Package deleted' };
     }
@@ -747,10 +756,11 @@ export class RetreatService {
             if (block.blocked) throw new ConflictException(this.blockMessage(block.reason));
 
             // 5. Create admission and occupy the room
-            // ADR-004 D9/D14 — inherit from the booking if there is one, else from
-            // the room's own branch (walk-in, no booking). Both may be NULL, which
-            // is a valid, organisation-wide state.
-            const branchId = linkedBooking?.branchId ?? room.branchId ?? null;
+            // G10: the room decides the branch; a linked booking must agree with
+            // it and the patient must be registered there (resolveStayBranch).
+            const branchId = await this.resolveStayBranch(clinicId, { userId: performedBy, role: performedByRole }, room, {
+                requested: linkedBooking?.branchId, patientId, manager,
+            });
             const admission = manager.create(Admission, {
                 organisationId: clinicId,
                 patientId,
@@ -969,13 +979,10 @@ export class RetreatService {
             });
             if (!room) throw new NotFoundException('Room not found');
 
-            // ADR-004 D9 — validated now even though nothing reads it until Phase 4.
-            if (dto.branchId) {
-                const branch = await manager.findOne(Branch, {
-                    where: { id: dto.branchId, organisationId: clinicId },
-                });
-                if (!branch) throw new NotFoundException('Branch not found in this organisation');
-            }
+            // G10: the room decides the branch (see resolveStayBranch).
+            const bookingBranchId = await this.resolveStayBranch(clinicId, { userId, role: userRole }, room, {
+                requested: dto.branchId, patientId, manager,
+            });
 
             // Unified conflict check across admissions + room status + bookings
             const block = await this.isRoomBlocked(manager, room, checkIn, checkOut);
@@ -1015,7 +1022,7 @@ export class RetreatService {
                 // Bookings List the moment a specific branch (not "All Locations") was
                 // selected — even though the calendar's OR-NULL visibility check let
                 // them still show there.
-                branchId: dto.branchId || room.branchId || null,
+                branchId: bookingBranchId,
             });
             const saved = await manager.save(booking);
             if (cashLive && initialAdvance > 0) {
@@ -1098,7 +1105,7 @@ export class RetreatService {
         return Object.assign(booking, { contact: this.resolveContact(booking) });
     }
 
-    async updateBooking(clinicId: string, bookingId: string, dto: UpdateBookingDto) {
+    async updateBooking(clinicId: string, bookingId: string, dto: UpdateBookingDto, user: { userId?: string; role?: string } = {}) {
         return this.dataSource.transaction(async (manager) => {
             const booking = await manager.findOne(RoomBooking, {
                 where: { id: bookingId, organisationId: clinicId },
@@ -1116,6 +1123,13 @@ export class RetreatService {
                     lock: { mode: 'pessimistic_write' },
                 });
                 if (!room) throw new NotFoundException('Room not found');
+                // G10: moving to another room moves the booking to that room's
+                // branch — only one the caller may use, and the patient's own.
+                if (dto.roomId && dto.roomId !== booking.roomId) {
+                    booking.branchId = await this.resolveStayBranch(clinicId, user, room, {
+                        requested: dto.branchId, patientId: booking.patientId, manager,
+                    });
+                }
 
                 const block = await this.isRoomBlocked(manager, room, newCheckIn, newCheckOut, bookingId);
                 if (block.blocked) throw new ConflictException(this.blockMessage(block.reason));
@@ -1140,12 +1154,10 @@ export class RetreatService {
             if (dto.discountReason !== undefined) booking.discountReason = dto.discountReason;
             if (dto.acRequired !== undefined) booking.acRequired = dto.acRequired;
             if (dto.notes !== undefined) booking.notes = dto.notes;
+            // A booking's branch is its room's branch: a branchId that disagrees
+            // with it is rejected, never written (G10).
             if (dto.branchId !== undefined && dto.branchId !== booking.branchId) {
-                const branch = await manager.findOne(Branch, {
-                    where: { id: dto.branchId, organisationId: clinicId },
-                });
-                if (!branch) throw new NotFoundException('Branch not found in this organisation');
-                booking.branchId = dto.branchId;
+                throw new BadRequestException("A booking's branch follows its room — change the room instead");
             }
 
             return manager.save(booking);
@@ -1469,6 +1481,31 @@ export class RetreatService {
         return this.branchVisibilityService.scopeFor({ userId, role: userRole, organisationId: clinicId });
     }
 
+    // Branch scoping G10 — the branch a stay (booking / admission) is written
+    // to. The room is the parent: its branch wins, the caller must be allowed
+    // to use it, and a conflicting requested branch is rejected. A linked
+    // patient must be registered at that same branch (a patient belongs to one
+    // branch). Never trusts a client-supplied branchId on its own.
+    private async resolveStayBranch(
+        clinicId: string,
+        user: { userId?: string; role?: string },
+        room: Room,
+        opts: { requested?: string | null; patientId?: string | null; manager?: EntityManager },
+    ): Promise<string | null> {
+        const scope = await this.scopeFor(user.userId, user.role, clinicId);
+        const branchId = await this.branchVisibilityService.resolveWriteBranch(scope, clinicId, {
+            requested: opts.requested,
+            parent: { branchId: room.branchId },
+        });
+        if (opts.patientId) {
+            const patient = await this.branchVisibilityService.assertPatientAccess(scope, clinicId, opts.patientId, opts.manager);
+            if (branchId && patient.branchId && patient.branchId !== branchId) {
+                throw new BadRequestException('Patient is registered at another branch');
+            }
+        }
+        return branchId;
+    }
+
     // Guards for every action on one booking / admission (G2, G3): the record
     // must be in the organisation and inside the caller's branch scope, else
     // 404 — never "the list was filtered, so the id must be fine".
@@ -1676,7 +1713,7 @@ export class RetreatService {
         return this.enquiryRepo.save(enquiry);
     }
 
-    async convertEnquiryToBooking(clinicId: string, enquiryId: string, dto: ConvertEnquiryDto) {
+    async convertEnquiryToBooking(clinicId: string, enquiryId: string, dto: ConvertEnquiryDto, user: { userId?: string; role?: string } = {}) {
         return this.dataSource.transaction(async (manager) => {
             const enquiry = await manager.findOne(BookingEnquiry, {
                 where: { id: enquiryId, organisationId: clinicId },
@@ -1688,6 +1725,9 @@ export class RetreatService {
                 lock: { mode: 'pessimistic_write' },
             });
             if (!room) throw new NotFoundException('Room not found');
+            // G10: the new booking takes the room's branch — which the caller
+            // must be allowed to use. (It used to be saved with no branch.)
+            const bookingBranchId = await this.resolveStayBranch(clinicId, user, room, { manager });
 
             const checkIn = new Date(dto.checkInDate);
             const checkOut = new Date(dto.checkOutDate);
@@ -1708,6 +1748,7 @@ export class RetreatService {
                 enquiryId,
                 patientId: null,
                 roomId: dto.roomId,
+                branchId: bookingBranchId,
                 packageId: dto.packageId || null,
                 checkInDate: checkIn,
                 checkOutDate: checkOut,
@@ -1922,14 +1963,14 @@ export class RetreatService {
     // D15 follows. Existing rows that already belong to a DIFFERENT branch are
     // never silently reassigned — skipped and reported, same pattern this
     // importer already uses for other unresolvable rows.
-    async importXlsx(orgId: string, buffer: Buffer, branchId: string, dryRun = false): Promise<{
+    async importXlsx(orgId: string, buffer: Buffer, branchId: string, dryRun = false, user: { userId?: string; role?: string } = {}): Promise<{
         dryRun: boolean;
         categories: { created: number; updated: number; unchanged: number; skipped: string[] };
         rooms: { created: number; updated: number; unchanged: number; skipped: string[] };
         packages: { created: number; updated: number; unchanged: number; skipped: string[] };
         pricing: { created: number; updated: number; unchanged: number; skipped: string[] };
     }> {
-        await this.assertBranchOwnership(orgId, branchId);
+        await this.assertBranchOwnership(orgId, branchId, user);
         const wb = XLSX.read(buffer, { type: 'buffer' });
 
         // Sentinel error used to roll back the transaction in dry-run (preview) mode.

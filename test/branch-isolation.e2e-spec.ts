@@ -45,7 +45,7 @@ const USERS: Record<Role, { n: number; role: string; staffBranches?: ('A' | 'B')
 
 type Side = 'A' | 'B';
 type PatientLinked = 'medicalRecord' | 'prescription' | 'labReport' | 'vital' | 'newborn' | 'appointment' | 'document';
-type Stay = 'room' | 'booking' | 'admission' | 'bill';
+type Stay = 'room' | 'freeRoom' | 'booking' | 'admission' | 'bill';
 
 interface Fixture {
   orgId: string;
@@ -202,7 +202,7 @@ async function ensureFixture(ds: DataSource): Promise<Fixture> {
   }
 
   // Stays: one room / confirmed booking / active admission / bill per branch.
-  const stays = { room: {}, booking: {}, admission: {}, bill: {} } as Fixture['stays'];
+  const stays = { room: {}, freeRoom: {}, booking: {}, admission: {}, bill: {} } as Fixture['stays'];
   for (const side of ['A', 'B'] as Side[]) {
     const pid = patients[side];
     const tag = `ZZBF-${side}`;
@@ -210,6 +210,11 @@ async function ensureFixture(ds: DataSource): Promise<Fixture> {
       `SELECT id FROM rooms WHERE organisation_id = $1 AND room_number = $2 AND deleted_at IS NULL`,
       `INSERT INTO rooms (organisation_id, room_number, branch_id) VALUES ($1, $2, $3) RETURNING id`,
       [orgId, tag, branchId[side]]);
+    // Never occupied: Phase 4 write tests book it (far-future, per-run dates).
+    stays.freeRoom[side] = await record(
+      `SELECT id FROM rooms WHERE organisation_id = $1 AND room_number = $2 AND deleted_at IS NULL`,
+      `INSERT INTO rooms (organisation_id, room_number, branch_id) VALUES ($1, $2, $3) RETURNING id`,
+      [orgId, `${tag}-FREE`, branchId[side]]);
     stays.booking[side] = await record(
       `SELECT id FROM room_bookings WHERE organisation_id = $1 AND notes = $2 AND deleted_at IS NULL`,
       `INSERT INTO room_bookings (organisation_id, notes, room_id, patient_id, check_in_date, check_out_date, total_price, status, branch_id)
@@ -399,15 +404,31 @@ describe('Branch isolation contract (real DB)', () => {
       expect(row.deleted_at).toBeNull();
     });
 
-    test.failing('[G10, Phase 4] restricted user cannot create a patient in another branch', async () => {
+    it('[G10] restricted user cannot create a patient in another branch (nothing written)', async () => {
       const res = await api('restrictedA').post('/patients', { firstName: 'ZZForged', lastName: RUN, branchId: fx.branchB });
       if (res.body?.id) createdPatientIds.push(res.body.id);
       expect(res.status).toBe(403);
+      const [{ n }] = await ds.query(`SELECT count(*)::int n FROM patients WHERE organisation_id = $1 AND first_name = 'ZZForged' AND last_name = $2`, [fx.orgId, RUN]);
+      expect(n).toBe(0);
     });
-    test.failing('[G10/Q3, Phase 4] create without branchId lands in the single usable branch', async () => {
+    it('[G10/Q3] create without branchId lands in the single usable branch', async () => {
       const res = await api('restrictedA').post('/patients', { firstName: 'ZZNoBranch', lastName: RUN });
       if (res.body?.id) createdPatientIds.push(res.body.id);
       expect(res.body?.branchId).toBe(fx.branchA);
+    });
+    it('[Q3] multi-branch user: no branch → 400; explicit branch → that branch', async () => {
+      expect((await api('multiAB').post('/patients', { firstName: 'ZZAmbiguous', lastName: RUN })).status).toBe(400);
+      const res = await api('multiAB').post('/patients', { firstName: 'ZZMultiB', lastName: RUN, branchId: fx.branchB });
+      if (res.body?.id) createdPatientIds.push(res.body.id);
+      expect(res.status).toBe(201);
+      expect(res.body.branchId).toBe(fx.branchB);
+    });
+    it("[G10] a newborn takes the mother's branch; another branch's mother → 404", async () => {
+      expect((await api('restrictedA').post('/patients', { firstName: 'ZZBaby', lastName: RUN, motherPatientId: fx.patients.B })).status).toBe(404);
+      const res = await api('restrictedA').post('/patients', { firstName: 'ZZBaby', lastName: RUN, motherPatientId: fx.patients.A });
+      if (res.body?.id) createdPatientIds.push(res.body.id);
+      expect(res.body?.branchId).toBe(fx.branchA);
+      expect((await api('multiAB').post('/patients', { firstName: 'ZZBaby', lastName: RUN, motherPatientId: fx.patients.A, branchId: fx.branchB })).status).toBe(400);
     });
     it('restricted user can move a patient only into a branch they can use', async () => {
       const res = await api('restrictedA').patch(`/patients/${fx.patients.A}`, { branchId: fx.branchB });
@@ -632,6 +653,83 @@ describe('Branch isolation contract (real DB)', () => {
       const res = await api('restrictedA').post('/patient-billing', newBill(fx.patients.A));
       if (res.body?.id) createdLinked.push({ table: 'patient_bills', id: res.body.id });
       expect(res.status).toBe(201);
+    });
+  });
+  // ── Phase 4: trusted write branch (G10) ───────────────────────────────────
+  describe('write branch (G10)', () => {
+    const runDay = (offset: number) => new Date(Date.UTC(2031, 0, 1) + ((Number(RUN) % 2000) * 3 + offset) * 86400000).toISOString().slice(0, 10);
+    const count = async (sql: string, params: any[]) => (await ds.query(sql, params))[0].n as number;
+
+    it('appointment: branch comes from the patient; a conflicting branchId → 400', async () => {
+      const body = { patientId: fx.patients.A, doctorId: fx.doctorStaffId, appointmentDate: runDay(0), appointmentTime: '09:00' };
+      expect((await api('restrictedA').post('/appointments', { ...body, branchId: fx.branchB })).status).toBe(400);
+      const res = await api('restrictedA').post('/appointments', body);
+      if (res.body?.id) createdLinked.push({ table: 'appointments', id: res.body.id });
+      expect(res.status).toBe(201);
+      expect(res.body.branchId).toBe(fx.branchA);
+    });
+
+    it("bill: walk-in in another branch → 403; patient + conflicting branch → 400; another branch's booking → 404", async () => {
+      const item = [{ itemType: 'consultation', itemName: `ZZRun-${RUN}`, unitPrice: 1 }];
+      const u = api('restrictedA');
+      expect((await u.post('/patient-billing', { walkInName: `ZZRun-${RUN}`, billDate: '2026-09-24', items: item, branchId: fx.branchB })).status).toBe(403);
+      expect((await u.post('/patient-billing', { patientId: fx.patients.A, billDate: '2026-09-24', items: item, branchId: fx.branchB })).status).toBe(400);
+      expect((await u.post('/patient-billing', { patientId: fx.patients.A, bookingId: fx.stays.booking.B, billDate: '2026-09-24', items: item })).status).toBe(404);
+      expect(await count(`SELECT count(*)::int n FROM patient_bills pb JOIN bill_items bi ON bi."billId" = pb.id WHERE pb.organisation_id = $1 AND bi."itemName" = $2 AND pb.branch_id = $3`,
+        [fx.orgId, `ZZRun-${RUN}`, fx.branchB])).toBe(0);
+    });
+
+    it("booking create: another branch's room → 404; patient from another branch → 400; conflicting branchId → 400; nothing written", async () => {
+      const base = { checkInDate: runDay(10), checkOutDate: runDay(12), totalPrice: 1 };
+      expect((await api('restrictedA').post('/retreat/bookings', { ...base, patientId: fx.patients.A, roomId: fx.stays.freeRoom.B })).status).toBe(404);
+      expect((await api('multiAB').post('/retreat/bookings', { ...base, patientId: fx.patients.A, roomId: fx.stays.freeRoom.B })).status).toBe(400);
+      expect((await api('restrictedA').post('/retreat/bookings', { ...base, patientId: fx.patients.A, roomId: fx.stays.freeRoom.A, branchId: fx.branchB })).status).toBe(400);
+      expect(await count(`SELECT count(*)::int n FROM room_bookings WHERE organisation_id = $1 AND check_in_date = $2 AND deleted_at IS NULL`, [fx.orgId, runDay(10)])).toBe(0);
+    });
+
+    it("booking create in own branch's room takes the room's branch; moving it to another branch's room → 404", async () => {
+      const res = await api('restrictedA').post('/retreat/bookings', {
+        checkInDate: runDay(20), checkOutDate: runDay(22), totalPrice: 1, patientId: fx.patients.A, roomId: fx.stays.freeRoom.A,
+      });
+      if (res.body?.id) createdLinked.push({ table: 'room_bookings', id: res.body.id });
+      expect(res.status).toBe(201);
+      expect(res.body.branchId).toBe(fx.branchA);
+      expect((await api('restrictedA').patch(`/retreat/bookings/${res.body.id}`, { roomId: fx.stays.freeRoom.B })).status).toBe(404);
+      expect((await api('restrictedA').patch(`/retreat/bookings/${res.body.id}`, { branchId: fx.branchB })).status).toBe(400);
+      const [row] = await ds.query(`SELECT room_id, branch_id FROM room_bookings WHERE id = $1`, [res.body.id]);
+      expect(row).toEqual({ room_id: fx.stays.freeRoom.A, branch_id: fx.branchA });
+    });
+
+    it("check-in: another branch's room → 404; patient from another branch → 400; no admission written", async () => {
+      expect((await api('restrictedA').post('/retreat/admissions', { patientId: fx.patients.A, roomId: fx.stays.freeRoom.B })).status).toBe(404);
+      expect((await api('multiAB').post('/retreat/admissions', { patientId: fx.patients.A, roomId: fx.stays.freeRoom.B })).status).toBe(400);
+      expect(await count(`SELECT count(*)::int n FROM admissions WHERE room_id = $1 AND status = 'ACTIVE'`, [fx.stays.freeRoom.B])).toBe(0);
+    });
+
+    it("enquiry → booking: another branch's room → 404; own room → booking in that branch (used to be NULL)", async () => {
+      const enq = await api('restrictedA').post('/retreat/enquiries', { contactName: `ZZRun-${RUN}`, phone: '9000000888', channel: 'PHONE' });
+      expect(enq.status).toBe(201);
+      createdLinked.push({ table: 'booking_enquiries', id: enq.body.id });
+      const conv = (roomId: string, day: number) => api('restrictedA').post(`/retreat/enquiries/${enq.body.id}/convert`, {
+        roomId, checkInDate: runDay(day), checkOutDate: runDay(day + 1), totalPrice: 1,
+      });
+      expect((await conv(fx.stays.freeRoom.B, 30)).status).toBe(404);
+      const ok = await conv(fx.stays.freeRoom.A, 40);
+      if (ok.body?.id) createdLinked.push({ table: 'room_bookings', id: ok.body.id });
+      expect(ok.status).toBe(201);
+      expect(ok.body.branchId).toBe(fx.branchA);
+    });
+
+    it("setup writes: create in another branch → 403; edit / delete another branch's room → 404, room unchanged", async () => {
+      const u = api('restrictedA');
+      expect((await u.post('/retreat/rooms', { roomNumber: `ZZRun-${RUN}`, branchId: fx.branchB })).status).toBe(403);
+      expect((await u.post('/retreat/room-categories', { name: `ZZRun-${RUN}`, branchId: fx.branchB })).status).toBe(403);
+      expect((await u.patch(`/retreat/rooms/${fx.stays.freeRoom.B}`, { floor: 'x' })).status).toBe(404);
+      expect((await u.delete(`/retreat/rooms/${fx.stays.freeRoom.B}`)).status).toBe(404);
+      const [room] = await ds.query(`SELECT floor, deleted_at FROM rooms WHERE id = $1`, [fx.stays.freeRoom.B]);
+      expect(room).toEqual({ floor: null, deleted_at: null });
+      expect(await count(`SELECT count(*)::int n FROM rooms WHERE organisation_id = $1 AND room_number = $2`, [fx.orgId, `ZZRun-${RUN}`])).toBe(0);
+      expect((await u.post(`/organisations/${fx.orgId}/duty-types`, { name: `ZZRun-${RUN}`, startTime: '09:00:00', endTime: '17:00:00', branchId: fx.branchB })).status).toBe(403);
     });
   });
 });

@@ -96,31 +96,30 @@ export class PatientsService {
     // branch visibility -- this used to 409 org-wide and leak the other
     // branch's patient name. See scope/patient-phone-non-unique-and-matching.md.
 
-    // If motherPatientId is supplied, verify it belongs to the same org (no cross-org linking)
+    // Branch scoping G10: the branch is resolved, never taken on trust. A
+    // newborn registered with a mother belongs to the mother's branch (the
+    // mother must be visible to the caller); otherwise the requested branch
+    // must be one the caller may use, or their single usable branch (Q3).
+    const scope = await this.branchVisibilityService.scopeFor({ userId, role: userRole, organisationId: clinicId });
+    let mother: Patient | null = null;
     if (createDto.motherPatientId) {
-      const mother = await this.patientsRepository.findOne({
+      mother = await this.patientsRepository.findOne({
         where: { id: createDto.motherPatientId, organisationId: clinicId as string },
       });
       if (!mother) {
         throw new NotFoundException('Mother patient not found in this clinic');
       }
     }
-
-    // ADR-004 D9 — validated now even though nothing reads it until Phase 4.
-    if (createDto.branchId) {
-      const branch = await this.branchesRepository.findOne({
-        where: { id: createDto.branchId, organisationId: clinicId as string },
-      });
-      if (!branch) {
-        throw new NotFoundException('Branch not found in this organisation');
-      }
-    }
+    const branchId = await this.branchVisibilityService.resolveWriteBranch(scope, clinicId as string, {
+      requested: createDto.branchId,
+      parent: mother ? { branchId: mother.branchId } : undefined,
+    });
 
     const patient = this.patientsRepository.create({
       organisationId: clinicId as string,
       patientCode,
       fileNumber: createDto.fileNumber || null,
-      branchId: createDto.branchId || null,
+      branchId,
       createdBy: userId,
       firstName: createDto.firstName,
       lastName: createDto.lastName,

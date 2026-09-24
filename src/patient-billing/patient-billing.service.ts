@@ -212,6 +212,10 @@ export class PatientBillingService {
       );
     }
 
+    const scope = await this.scopeFor(userId, userRole, clinicId);
+    // Branches of every record the bill is linked to (G10 parent-derived branch).
+    const parentBranches: (string | null)[] = [];
+
     if (createDto.patientId) {
       const patient = await this.patientsRepository.findOne({
         where: { id: createDto.patientId },
@@ -223,11 +227,8 @@ export class PatientBillingService {
         throw new ForbiddenException('Patient does not belong to this clinic');
       }
       // Branch scoping G11: the patient must be inside the caller's branch scope.
-      this.branchVisibilityService.assertBranchAccess(
-        await this.scopeFor(userId, userRole, clinicId),
-        patient.branchId,
-        'Patient not found',
-      );
+      this.branchVisibilityService.assertBranchAccess(scope, patient.branchId, 'Patient not found');
+      parentBranches.push(patient.branchId);
     }
 
     if (createDto.appointmentId) {
@@ -247,6 +248,7 @@ export class PatientBillingService {
           'Appointment does not belong to this patient',
         );
       }
+      parentBranches.push(appointment.branchId);
     }
 
     if (createDto.bookingId) {
@@ -259,6 +261,8 @@ export class PatientBillingService {
       if (booking.organisationId !== clinicId) {
         throw new ForbiddenException('Booking does not belong to this clinic');
       }
+      this.branchVisibilityService.assertBranchAccess(scope, booking.branchId, 'Booking not found');
+      parentBranches.push(booking.branchId);
     }
 
     if (createDto.admissionId) {
@@ -271,17 +275,22 @@ export class PatientBillingService {
       if (admission.organisationId !== clinicId) {
         throw new ForbiddenException('Admission does not belong to this clinic');
       }
+      this.branchVisibilityService.assertBranchAccess(scope, admission.branchId, 'Admission not found');
+      parentBranches.push(admission.branchId);
     }
 
-    // ADR-004 D9 — validated now even though nothing reads it until Phase 4.
-    if (createDto.branchId) {
-      const branch = await this.branchesRepository.findOne({
-        where: { id: createDto.branchId, organisationId: clinicId },
-      });
-      if (!branch) {
-        throw new NotFoundException('Branch not found in this organisation');
-      }
+    // Branch scoping G10: a bill linked to records takes their branch (they
+    // must all agree; a conflicting requested branchId is rejected). A walk-in
+    // bill takes the requested branch if the caller may use it, else their
+    // single usable branch (Q3). Never NULL in an organisation with branches.
+    const distinctParentBranches = [...new Set(parentBranches)];
+    if (distinctParentBranches.length > 1) {
+      throw new BadRequestException('The records linked to this bill belong to different branches');
     }
+    const billBranchId = await this.branchVisibilityService.resolveWriteBranch(scope, clinicId as string, {
+      requested: createDto.branchId,
+      parent: parentBranches.length ? { branchId: distinctParentBranches[0] } : undefined,
+    });
 
     if (!createDto.items || createDto.items.length === 0) {
       throw new BadRequestException('Bill must have at least one item');
@@ -345,7 +354,7 @@ export class PatientBillingService {
       appointmentId: createDto.appointmentId || null,
       bookingId: createDto.bookingId || null,
       admissionId: createDto.admissionId || null,
-      branchId: createDto.branchId || null,
+      branchId: billBranchId,
       createdBy: userId,
       billNumber: createDto.billNumber,
       billDate: new Date(createDto.billDate),

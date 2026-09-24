@@ -73,12 +73,15 @@ export class AppointmentsService {
     if (patient.organisationId !== clinicId) {
       throw new ForbiddenException('Patient does not belong to this clinic');
     }
-    // Branch scoping G11: the patient must be inside the caller's branch scope.
-    this.branchVisibilityService.assertBranchAccess(
-      await this.scopeFor(userId, userRole, clinicId),
-      patient.branchId,
-      'Patient not found',
-    );
+    // Branch scoping G11 + G10: the patient must be inside the caller's scope,
+    // and the appointment takes the patient's branch — a patient belongs to one
+    // branch, so a conflicting requested branchId is rejected, not honoured.
+    const scope = await this.scopeFor(userId, userRole, clinicId);
+    this.branchVisibilityService.assertBranchAccess(scope, patient.branchId, 'Patient not found');
+    const appointmentBranchId = await this.branchVisibilityService.resolveWriteBranch(scope, clinicId as string, {
+      requested: createDto.branchId,
+      parent: { branchId: patient.branchId },
+    });
 
     // Verify doctor (staff) exists and belongs to clinic
     const doctor = await this.staffRepository.findOne({
@@ -144,9 +147,8 @@ export class AppointmentsService {
     const appointment = this.appointmentsRepository.create({
       ...createDto,
       organisationId: clinicId,
-      // ADR-004 D9 — defaults to the patient's own branch when not explicitly
-      // overridden, since an appointment naturally belongs where its patient does.
-      branchId: createDto.branchId ?? patient.branchId ?? null,
+      // The patient's branch (resolved above).
+      branchId: appointmentBranchId,
       appointmentDate: new Date(createDto.appointmentDate),
       duration: createDto.duration ?? 30,
       status: createDto.status ?? AppointmentStatus.SCHEDULED,

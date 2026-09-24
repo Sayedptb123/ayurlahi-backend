@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { BranchVisibilityModule } from '../branch-visibility/branch-visibility.module';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { DutyTemplatesController } from './duty-templates.controller';
 import { DutyTemplatesService } from './duty-templates.service';
@@ -10,6 +11,7 @@ import { OrganisationUser } from '../organisation-users/entities/organisation-us
 @Module({
   imports: [
     TypeOrmModule.forFeature([DutyTemplate, Branch, OrganisationUser]),
+    BranchVisibilityModule,
     DutyAssignmentsModule,
   ],
   controllers: [DutyTemplatesController],

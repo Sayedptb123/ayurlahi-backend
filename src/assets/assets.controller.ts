@@ -1,3 +1,4 @@
+import { BranchVisibilityService } from '../branch-visibility/branch-visibility.service';
 import {
   Controller,
   Get,
@@ -26,7 +27,25 @@ import { AssetStatus } from './entities/asset.entity';
 @Controller('assets')
 @UseGuards(JwtAuthGuard)
 export class AssetsController {
-  constructor(private readonly assetsService: AssetsService) {}
+  constructor(
+    private readonly assetsService: AssetsService,
+    private readonly branchVisibility: BranchVisibilityService,
+  ) {}
+
+  // Branch scoping G10 (scope/Branch_Scoping_Remediation_Plan_2026-09-24.md):
+  // an asset's branch is validated through the shared write rule (a live,
+  // approved branch of this organisation the caller may use; never NULL in a
+  // branched org) — createAsset used to save whatever branchId was sent.
+  private async resolveAssetBranch(req: any, requested?: string | null) {
+    const scope = await this.branchVisibility.scopeFor(req.user);
+    return this.branchVisibility.resolveWriteBranch(scope, req.user.organisationId, { requested });
+  }
+
+  private async assertAssetAccess(req: any, id: string) {
+    const scope = await this.branchVisibility.scopeFor(req.user);
+    const asset: any = await this.assetsService.findOneAsset(id, req.user.organisationId);
+    this.branchVisibility.assertBranchAccess(scope, asset.branchId, 'Asset not found');
+  }
 
   // ==========================================================================
   // ASSET CATEGORIES
@@ -58,8 +77,9 @@ export class AssetsController {
 
   @ApiOperation({ summary: 'Register a new asset (Manager only)' })
   @Post()
-  createAsset(@Request() req, @Body() dto: CreateAssetDto) {
+  async createAsset(@Request() req, @Body() dto: CreateAssetDto) {
     this.checkManagerRole(req.user.role);
+    dto.branchId = (await this.resolveAssetBranch(req, dto.branchId)) as any;
     return this.assetsService.createAsset(req.user.organisationId, dto);
   }
 
@@ -90,19 +110,22 @@ export class AssetsController {
 
   @ApiOperation({ summary: 'Update an asset record (Manager only)' })
   @Patch(':id')
-  updateAsset(
+  async updateAsset(
     @Param('id', ParseUUIDPipe) id: string,
     @Request() req,
     @Body() dto: UpdateAssetDto
   ) {
     this.checkManagerRole(req.user.role);
+    await this.assertAssetAccess(req, id);
+    if (dto.branchId) dto.branchId = (await this.resolveAssetBranch(req, dto.branchId)) as any;
     return this.assetsService.updateAsset(id, req.user.organisationId, dto);
   }
 
   @ApiOperation({ summary: 'Soft delete an asset record (Manager only)' })
   @Delete(':id')
-  deleteAsset(@Param('id', ParseUUIDPipe) id: string, @Request() req) {
+  async deleteAsset(@Param('id', ParseUUIDPipe) id: string, @Request() req) {
     this.checkManagerRole(req.user.role);
+    await this.assertAssetAccess(req, id);
     return this.assetsService.deleteAsset(id, req.user.organisationId);
   }
 

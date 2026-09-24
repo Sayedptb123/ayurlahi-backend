@@ -47,7 +47,7 @@ export const BRANCH_OWNED_AREAS: BranchOwnedArea[] = [
       'GET /patients/:id': covered,
       'PATCH /patients/:id': covered,
       'DELETE /patients/:id': covered,
-      'POST /patients': gap(4, 'G10'),
+      'POST /patients': covered,
     },
   },
   {
@@ -58,7 +58,7 @@ export const BRANCH_OWNED_AREAS: BranchOwnedArea[] = [
       'GET /appointments/:id': covered,
       'PATCH /appointments/:id': covered,
       'DELETE /appointments/:id': covered,
-      'POST /appointments': gap(4, 'G10'), // G11 fixed + covered in Phase 2
+      'POST /appointments': covered,
     },
   },
   {
@@ -69,7 +69,7 @@ export const BRANCH_OWNED_AREAS: BranchOwnedArea[] = [
       'GET /patient-billing/:id': covered,
       'PATCH /patient-billing/:id': covered,
       'DELETE /patient-billing/:id': covered,
-      'POST /patient-billing': gap(4, 'G10'), // G11 covered; requested branchId not yet validated
+      'POST /patient-billing': covered,
       'POST /patient-billing/:id/payment': covered,
       'GET /patient-billing/:id/payments': covered,
       'DELETE /patient-billing/:id/payments/:paymentId': reviewed(3), // same findOne check as payment
@@ -118,8 +118,8 @@ export const BRANCH_OWNED_AREAS: BranchOwnedArea[] = [
       'GET /retreat/bookings/:id': covered,
       'GET /retreat/bookings/calendar': covered,
       'POST /retreat/bookings/check-availability': gap(8, 'rooms-picker'),
-      'POST /retreat/bookings': gap(4, 'G10'),
-      'PATCH /retreat/bookings/:id': covered, // + new room's branch: G10, Phase 4
+      'POST /retreat/bookings': covered,
+      'PATCH /retreat/bookings/:id': covered,
       'DELETE /retreat/bookings/:id': covered,
       'DELETE /retreat/bookings/:id/remove': covered,
       'PATCH /retreat/bookings/:id/refund': covered,
@@ -136,9 +136,7 @@ export const BRANCH_OWNED_AREAS: BranchOwnedArea[] = [
       'GET /retreat/admissions': covered,
       'GET /retreat/admissions/stats': reviewed(3), // same branchFindCondition as the list
       'GET /retreat/admissions/:id': covered,
-      // Patient check was already present (audit's G11 claim here was wrong);
-      // now on the shared 404 rule. Remaining: room/booking branch (G10).
-      'POST /retreat/admissions': gap(4, 'G10'),
+      'POST /retreat/admissions': covered, // room decides the branch; patient must match (G10)
       'POST /retreat/admissions/:id/discharge': covered,
       'PATCH /retreat/admissions/:id/delivery': covered,
     },
@@ -150,7 +148,7 @@ export const BRANCH_OWNED_AREAS: BranchOwnedArea[] = [
       'GET /retreat/enquiries': gap(7, 'G12'),
       'POST /retreat/enquiries': gap(7, 'G12'),
       'PATCH /retreat/enquiries/:id': gap(7, 'G12'),
-      'POST /retreat/enquiries/:id/convert': gap(7, 'G12', 'G2'),
+      'POST /retreat/enquiries/:id/convert': gap(7, 'G12'), // room branch (G10) covered; enquiry itself has no branch yet
       'POST /retreat/enquiries/:id/lost': gap(7, 'G12'),
     },
   },
@@ -164,9 +162,9 @@ export const BRANCH_OWNED_AREAS: BranchOwnedArea[] = [
     anchor: 'own',
     routes: {
       'GET /retreat/rooms': catalog,
-      'POST /retreat/rooms': catalog,
-      'PATCH /retreat/rooms/:id': catalog,
-      'DELETE /retreat/rooms/:id': catalog,
+      'POST /retreat/rooms': covered, // G10 write branch
+      'PATCH /retreat/rooms/:id': covered,
+      'DELETE /retreat/rooms/:id': covered,
       'GET /retreat/rooms/resolve-price': catalog,
       'GET /retreat/rooms/available': gap(8, 'rooms-picker'),
     },

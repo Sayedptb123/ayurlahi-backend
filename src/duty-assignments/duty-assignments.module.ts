@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { BranchVisibilityModule } from '../branch-visibility/branch-visibility.module';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { DutyAssignmentsController } from './duty-assignments.controller';
 import { DutyAssignmentsService } from './duty-assignments.service';
@@ -18,6 +19,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
       DutyType,
       OrganisationUser,
     ]),
+    BranchVisibilityModule,
     NotificationsModule,
   ],
   controllers: [DutyAssignmentsController],

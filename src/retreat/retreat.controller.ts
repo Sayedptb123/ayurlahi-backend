@@ -43,17 +43,17 @@ export class RetreatController {
 
     @Post('room-categories')
     createRoomCategory(@Request() req, @Body() body: CreateRoomCategoryDto) {
-        return this.retreatService.createRoomCategory(req.user.organisationId, body);
+        return this.retreatService.createRoomCategory(req.user.organisationId, body, req.user);
     }
 
     @Patch('room-categories/:id')
     updateRoomCategory(@Request() req, @Param('id') id: string, @Body() body: UpdateRoomCategoryDto) {
-        return this.retreatService.updateRoomCategory(req.user.organisationId, id, body);
+        return this.retreatService.updateRoomCategory(req.user.organisationId, id, body, req.user);
     }
 
     @Delete('room-categories/:id')
     deleteRoomCategory(@Request() req, @Param('id') id: string) {
-        return this.retreatService.deleteRoomCategory(req.user.organisationId, id);
+        return this.retreatService.deleteRoomCategory(req.user.organisationId, id, req.user);
     }
 
     // Must be declared before rooms/:id to avoid 'available' being matched as :id
@@ -74,12 +74,12 @@ export class RetreatController {
 
     @Post('pricing-matrix')
     setPricingMatrix(@Request() req, @Body() body: SetPricingMatrixDto) {
-        return this.retreatService.setPricingMatrix(req.user.organisationId, body);
+        return this.retreatService.setPricingMatrix(req.user.organisationId, body, req.user);
     }
 
     @Delete('pricing-matrix/:id')
     deletePricingMatrixEntry(@Request() req, @Param('id') id: string) {
-        return this.retreatService.deletePricingMatrixEntry(req.user.organisationId, id);
+        return this.retreatService.deletePricingMatrixEntry(req.user.organisationId, id, req.user);
     }
 
     @Get('room-pricing-overrides')
@@ -89,12 +89,12 @@ export class RetreatController {
 
     @Post('room-pricing-overrides')
     setRoomPricingOverride(@Request() req, @Body() body: SetRoomPricingOverrideDto) {
-        return this.retreatService.setRoomPricingOverride(req.user.organisationId, body);
+        return this.retreatService.setRoomPricingOverride(req.user.organisationId, body, req.user);
     }
 
     @Delete('room-pricing-overrides/:id')
     deleteRoomPricingOverride(@Request() req, @Param('id') id: string) {
-        return this.retreatService.deleteRoomPricingOverride(req.user.organisationId, id);
+        return this.retreatService.deleteRoomPricingOverride(req.user.organisationId, id, req.user);
     }
 
     @Get('rooms')
@@ -123,19 +123,19 @@ export class RetreatController {
     @Post('rooms')
     createRoom(@Request() req, @Body() body) {
         const clinicId = req.user.organisationId;
-        return this.retreatService.createRoom(clinicId, body);
+        return this.retreatService.createRoom(clinicId, body, req.user);
     }
 
     @Patch('rooms/:id')
     updateRoom(@Request() req, @Param('id') id: string, @Body() body: { roomNumber?: string; floor?: string; roomCategoryId?: string; capacity?: number; amenities?: string[]; description?: string; status?: string; branchId?: string | null }) {
         const clinicId = req.user.organisationId;
-        return this.retreatService.updateRoom(clinicId, id, body);
+        return this.retreatService.updateRoom(clinicId, id, body, req.user);
     }
 
     @Delete('rooms/:id')
     deleteRoom(@Request() req, @Param('id') id: string) {
         const clinicId = req.user.organisationId;
-        return this.retreatService.deleteRoom(clinicId, id);
+        return this.retreatService.deleteRoom(clinicId, id, req.user);
     }
 
     @Get('packages')
@@ -147,7 +147,7 @@ export class RetreatController {
     @Post('packages')
     createPackage(@Request() req, @Body() body: CreatePackageDto) {
         const clinicId = req.user.organisationId;
-        return this.retreatService.createPackage(clinicId, body);
+        return this.retreatService.createPackage(clinicId, body, req.user);
     }
 
     @Get('admissions')
@@ -195,7 +195,7 @@ export class RetreatController {
     @Post('enquiries/:id/convert')
     convertEnquiryToBooking(@Request() req, @Param('id') id: string, @Body() dto: ConvertEnquiryDto) {
         const clinicId = req.user.organisationId;
-        return this.retreatService.convertEnquiryToBooking(clinicId, id, dto);
+        return this.retreatService.convertEnquiryToBooking(clinicId, id, dto, req.user);
     }
 
     @Post('enquiries/:id/lost')
@@ -239,13 +239,13 @@ export class RetreatController {
     @Patch('packages/:id')
     updatePackage(@Request() req, @Param('id') id: string, @Body() body: UpdatePackageDto) {
         const clinicId = req.user.organisationId;
-        return this.retreatService.updatePackage(clinicId, id, body);
+        return this.retreatService.updatePackage(clinicId, id, body, req.user);
     }
 
     @Delete('packages/:id')
     deletePackage(@Request() req, @Param('id') id: string) {
         const clinicId = req.user.organisationId;
-        return this.retreatService.deletePackage(clinicId, id);
+        return this.retreatService.deletePackage(clinicId, id, req.user);
     }
 
     // --- BOOKING ENDPOINTS ---
@@ -288,7 +288,7 @@ export class RetreatController {
     async updateBooking(@Request() req, @Param('id') id: string, @Body() dto: UpdateBookingDto) {
         const clinicId = req.user.organisationId;
         await this.retreatService.assertBookingAccess(clinicId, id, req.user);
-        return this.retreatService.updateBooking(clinicId, id, dto);
+        return this.retreatService.updateBooking(clinicId, id, dto, req.user);
     }
 
     @Delete('bookings/:id')
@@ -358,7 +358,7 @@ export class RetreatController {
         if (!file) throw new Error('No file uploaded');
         // ADR-004 D15 — one branch per import, required.
         if (!branchId) throw new Error('branchId is required');
-        return this.retreatService.importXlsx(req.user.organisationId, file.buffer, branchId, dryRun === 'true');
+        return this.retreatService.importXlsx(req.user.organisationId, file.buffer, branchId, dryRun === 'true', req.user);
     }
 
     // ─── Custom Field Definitions ────────────────────────────────────────────
