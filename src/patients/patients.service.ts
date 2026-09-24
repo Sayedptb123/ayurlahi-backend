@@ -6,7 +6,7 @@ import {
   ConflictException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, EntityManager } from 'typeorm';
+import { Repository, EntityManager, SelectQueryBuilder } from 'typeorm';
 import { Patient } from './entities/patient.entity';
 import { Branch } from '../branches/entities/branch.entity';
 import { CreatePatientDto } from './dto/create-patient.dto';
@@ -176,6 +176,101 @@ export class PatientsService {
     }
   }
 
+  // Organisation filter + ADR-004 D9/Phase 4 branch-level visibility. Shared
+  // by the list, the possible-match lookup and promote-by-id so all three
+  // agree on exactly which patients a caller can see.
+  private async applyVisibility(
+    queryBuilder: SelectQueryBuilder<Patient>,
+    userId: string | undefined,
+    organisationId: string,
+    userRole: string | undefined,
+  ): Promise<void> {
+    queryBuilder.where('patient.organisationId = :organisationId', {
+      organisationId,
+    });
+
+    // Branch-level visibility, additive on top of the organisation filter
+    // above, never a replacement for it.
+    const visibleBranchIds = await this.branchVisibilityService.resolveVisibleBranchIds(
+      userId,
+      organisationId,
+      userRole,
+    );
+    if (visibleBranchIds !== null) {
+      if (visibleBranchIds.length > 0) {
+        queryBuilder.andWhere(
+          '(patient.branchId IS NULL OR patient.branchId IN (:...visibleBranchIds))',
+          { visibleBranchIds },
+        );
+      } else {
+        // No active branch assignment at all — only organisation-wide
+        // (NULL branch) records are visible. Fail closed, not open.
+        queryBuilder.andWhere('patient.branchId IS NULL');
+      }
+    }
+  }
+
+  // Patients the caller can see that share this exact phone number. Phone is
+  // a contact attribute, not identity: this only ever returns candidates for
+  // a human to choose from, never a patient to link automatically. Branch
+  // switcher deliberately not applied -- hints cover everything the caller
+  // may see. Non-CLINIC callers get nothing (deny by default).
+  async findVisibleByPhone(
+    userId: string | undefined,
+    userRole: string | undefined,
+    organisationId: string | undefined,
+    organisationType: string | undefined,
+    phone: string | undefined,
+    manager?: EntityManager,
+  ): Promise<Patient[]> {
+    const trimmed = phone?.trim();
+    if (organisationType !== 'CLINIC' || !organisationId || !trimmed) return [];
+
+    const repo = manager ? manager.getRepository(Patient) : this.patientsRepository;
+    const queryBuilder = repo
+      .createQueryBuilder('patient')
+      .leftJoin('patient.branch', 'branch')
+      .select([
+        'patient.id',
+        'patient.patientCode',
+        'patient.fileNumber',
+        'patient.firstName',
+        'patient.lastName',
+        'patient.dateOfBirth',
+        'patient.gender',
+        'patient.phone',
+        'patient.branchId',
+        // Selected because it is the sort key: take() + a join makes TypeORM
+        // paginate via a DISTINCT subquery that can only order by selected
+        // columns (500 "distinctAlias.patient_created_at does not exist").
+        'patient.createdAt',
+        'branch.id',
+        'branch.name',
+      ]);
+    await this.applyVisibility(queryBuilder, userId, organisationId, userRole);
+    queryBuilder
+      .andWhere('patient.phone = :phone', { phone: trimmed })
+      .orderBy('patient.createdAt', 'DESC')
+      .take(20);
+    return queryBuilder.getMany();
+  }
+
+  // A single patient, only if it is in the caller's organisation and visible
+  // to them under branch isolation; null otherwise (caller decides 404).
+  async findVisibleById(
+    userId: string | undefined,
+    userRole: string | undefined,
+    organisationId: string,
+    patientId: string,
+    manager?: EntityManager,
+  ): Promise<Patient | null> {
+    const repo = manager ? manager.getRepository(Patient) : this.patientsRepository;
+    const queryBuilder = repo.createQueryBuilder('patient');
+    await this.applyVisibility(queryBuilder, userId, organisationId, userRole);
+    queryBuilder.andWhere('patient.id = :patientId', { patientId });
+    return queryBuilder.getOne();
+  }
+
   async findAll(
     userId: string,
     userRole: string,
@@ -202,29 +297,7 @@ export class PatientsService {
       if (!organisationId) {
         return { data: [], total: 0, page, limit, totalPages: 0 };
       }
-      queryBuilder.where('patient.organisationId = :organisationId', {
-        organisationId,
-      });
-
-      // ADR-004 D9/Phase 4 — branch-level visibility, additive on top of the
-      // organisation filter above, never a replacement for it.
-      const visibleBranchIds = await this.branchVisibilityService.resolveVisibleBranchIds(
-        userId,
-        organisationId,
-        userRole,
-      );
-      if (visibleBranchIds !== null) {
-        if (visibleBranchIds.length > 0) {
-          queryBuilder.andWhere(
-            '(patient.branchId IS NULL OR patient.branchId IN (:...visibleBranchIds))',
-            { visibleBranchIds },
-          );
-        } else {
-          // No active branch assignment at all — only organisation-wide
-          // (NULL branch) records are visible. Fail closed, not open.
-          queryBuilder.andWhere('patient.branchId IS NULL');
-        }
-      }
+      await this.applyVisibility(queryBuilder, userId, organisationId, userRole);
 
       // Branch switcher (personal view filter) — ANDed on top of the visibility
       // filter above, so it can only narrow further, never broaden it. Strict

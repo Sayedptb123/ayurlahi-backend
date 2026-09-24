@@ -185,3 +185,17 @@ export class RecordAdvanceDto {
     @IsUUID()
     idempotencyKey?: string;
 }
+
+// Promote a booking's enquiry to a patient. Phone never decides identity:
+// either the receptionist picked an existing patient (patientId), or asked
+// for a new one (createNew). With neither, the server creates a new patient
+// only when no visible patient shares the enquiry phone.
+export class PromoteBookingDto {
+    @IsOptional()
+    @IsUUID()
+    patientId?: string;
+
+    @IsOptional()
+    @IsBoolean()
+    createNew?: boolean;
+}

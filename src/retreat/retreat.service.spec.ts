@@ -1,4 +1,4 @@
-import { ForbiddenException, BadRequestException, NotFoundException } from '@nestjs/common';
+import { ForbiddenException, BadRequestException, NotFoundException, ConflictException } from '@nestjs/common';
 import { RetreatService, rangesOverlap } from './retreat.service';
 import { RoomStatus } from './entities/room.entity';
 import { AdmissionStatus } from './entities/admission.entity';
@@ -413,7 +413,7 @@ describe('RetreatService — removeBooking (refund gate)', () => {
 // bypasses PatientsService.create() entirely, so it needs its own test
 // distinct from patients.service.spec.ts's create() coverage.
 describe('RetreatService.promoteEnquiry — audit event (second patient-creation path)', () => {
-    const makeService = (opts: { existingPatient?: any } = {}) => {
+    const makeService = (opts: { phoneMatches?: any[]; visiblePatient?: any } = {}) => {
         const booking = {
             id: 'bk-1', organisationId: 'org-1', branchId: 'branch-1', patientId: null,
             enquiry: { phone: '9999999999', contactName: 'Jane Doe' },
@@ -429,7 +429,11 @@ describe('RetreatService.promoteEnquiry — audit event (second patient-creation
             save: jest.fn((arg1: any, arg2?: any) => Promise.resolve(arg2 ?? { id: 'p-new', ...arg1 })),
         };
         const dataSource: any = { transaction: jest.fn((cb: any) => cb(manager)) };
-        const patientsService: any = { generateNextPatientCode: jest.fn(() => Promise.resolve('P00001')) };
+        const patientsService: any = {
+            generateNextPatientCode: jest.fn(() => Promise.resolve('P00001')),
+            findVisibleByPhone: jest.fn(() => Promise.resolve(opts.phoneMatches ?? [])),
+            findVisibleById: jest.fn(() => Promise.resolve(opts.visiblePatient ?? null)),
+        };
         const auditService: any = {
             record: jest.fn((params: any, mgr: any) => { managerRecord.push({ params, mgr }); return Promise.resolve(); }),
         };
@@ -439,7 +443,7 @@ describe('RetreatService.promoteEnquiry — audit event (second patient-creation
             dataSource, {} as any, {} as any, patientsService, {} as any, auditService,
             { liveFrom: jest.fn(() => Promise.resolve(null)), postReceipt: jest.fn(() => Promise.resolve(null)), reverseReceipt: jest.fn(() => Promise.resolve(null)), postTransfer: jest.fn(() => Promise.resolve(null)), postRefund: jest.fn(() => Promise.resolve(null)) } as any, // advancePosting (cash off)
         );
-        return { service, auditService, managerRecord, manager };
+        return { service, auditService, managerRecord, manager, patientsService };
     };
 
     it('records action=create with source=api and via=booking_promotion, using the transaction manager', async () => {
@@ -460,10 +464,79 @@ describe('RetreatService.promoteEnquiry — audit event (second patient-creation
         expect(managerRecord[0].mgr).toBeDefined(); // participates in the transaction, per decision C
     });
 
-    it('does not audit a creation when the phone-dedup match finds an existing patient', async () => {
-        const { service, managerRecord } = makeService({ existingPatient: { id: 'existing-p' } });
-        await service.promoteEnquiry('org-1', 'bk-1', 'u-1');
+    it('does not audit a creation when linking a patient the receptionist chose', async () => {
+        const { service, managerRecord } = makeService({ visiblePatient: { id: 'existing-p' } });
+        await service.promoteEnquiry('org-1', 'bk-1', 'u-1', { patientId: 'existing-p' });
         expect(managerRecord).toHaveLength(0);
+    });
+});
+
+// Phone is a contact attribute, not identity (scope/patient-phone-non-unique-and-matching.md):
+// promotion must never pick an existing patient by phone on its own.
+describe('RetreatService.promoteEnquiry — never auto-links by phone', () => {
+    const makeService = (opts: { phoneMatches?: any[]; visiblePatient?: any } = {}) => {
+        const booking = {
+            id: 'bk-1', organisationId: 'org-1', branchId: 'branch-1', patientId: null,
+            enquiry: { phone: '9999999999', contactName: 'Jane Doe' },
+        };
+        const manager: any = {
+            findOne: jest.fn((entity: any) =>
+                Promise.resolve(entity?.name === 'RoomBooking' ? { ...booking } : null)),
+            create: jest.fn((_entity: any, data: any) => data),
+            save: jest.fn((arg1: any, arg2?: any) => Promise.resolve(arg2 ?? { id: 'p-new', ...arg1 })),
+        };
+        const dataSource: any = { transaction: jest.fn((cb: any) => cb(manager)) };
+        const patientsService: any = {
+            generateNextPatientCode: jest.fn(() => Promise.resolve('P00001')),
+            findVisibleByPhone: jest.fn(() => Promise.resolve(opts.phoneMatches ?? [])),
+            findVisibleById: jest.fn(() => Promise.resolve(opts.visiblePatient ?? null)),
+        };
+        const auditService: any = { record: jest.fn(() => Promise.resolve()) };
+        const service = new RetreatService(
+            {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any,
+            {} as any, {} as any, {} as any, {} as any,
+            dataSource, {} as any, {} as any, patientsService, {} as any, auditService,
+            {} as any,
+        );
+        return { service, manager, patientsService, auditService };
+    };
+
+    it('refuses with 409 and links nothing when a visible patient shares the phone', async () => {
+        const { service, manager, patientsService } = makeService({ phoneMatches: [{ id: 'p-a' }, { id: 'p-b' }] });
+        await expect(service.promoteEnquiry('org-1', 'bk-1', 'u-1', { role: 'RECEPTIONIST' }))
+            .rejects.toBeInstanceOf(ConflictException);
+        expect(patientsService.findVisibleByPhone).toHaveBeenCalledWith('u-1', 'RECEPTIONIST', 'org-1', 'CLINIC', '9999999999', manager);
+        expect(manager.save).not.toHaveBeenCalled();
+    });
+
+    it('creates a new patient when no visible patient shares the phone', async () => {
+        const { service, manager } = makeService();
+        const saved: any = await service.promoteEnquiry('org-1', 'bk-1', 'u-1');
+        expect(manager.create).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ phone: '9999999999', branchId: 'branch-1' }));
+        expect(saved.patientId).toBe('p-new');
+    });
+
+    it('creates a new patient on createNew even when matches exist, without looking them up', async () => {
+        const { service, manager, patientsService } = makeService({ phoneMatches: [{ id: 'p-a' }] });
+        const saved: any = await service.promoteEnquiry('org-1', 'bk-1', 'u-1', { createNew: true });
+        expect(patientsService.findVisibleByPhone).not.toHaveBeenCalled();
+        expect(manager.create).toHaveBeenCalled();
+        expect(saved.patientId).toBe('p-new');
+    });
+
+    it('links the chosen patient when it is visible to the caller', async () => {
+        const { service, manager, patientsService } = makeService({ visiblePatient: { id: 'p-a' } });
+        const saved: any = await service.promoteEnquiry('org-1', 'bk-1', 'u-1', { role: 'RECEPTIONIST', patientId: 'p-a' });
+        expect(patientsService.findVisibleById).toHaveBeenCalledWith('u-1', 'RECEPTIONIST', 'org-1', 'p-a', manager);
+        expect(manager.create).not.toHaveBeenCalled();
+        expect(saved.patientId).toBe('p-a');
+    });
+
+    it('404s when the chosen patient is in another org or a branch the caller cannot see', async () => {
+        const { service, manager } = makeService({ visiblePatient: null });
+        await expect(service.promoteEnquiry('org-1', 'bk-1', 'u-1', { patientId: 'p-hidden' }))
+            .rejects.toBeInstanceOf(NotFoundException);
+        expect(manager.save).not.toHaveBeenCalled();
     });
 });
 

@@ -17,7 +17,7 @@ import type { Response } from 'express';
 import { RetreatService } from './retreat.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { ModuleGuard, RequireModule } from '../auth/guards/module.guard';
-import { CreateBookingDto, UpdateBookingDto, CheckAvailabilityDto, RecordRefundDto, RecordAdvanceDto } from './dto/booking.dto';
+import { CreateBookingDto, UpdateBookingDto, CheckAvailabilityDto, RecordRefundDto, RecordAdvanceDto, PromoteBookingDto } from './dto/booking.dto';
 import { CreateEnquiryDto, UpdateEnquiryDto, ConvertEnquiryDto } from './dto/enquiry.dto';
 import { CreateFieldDefinitionDto, UpdateFieldDefinitionDto } from './dto/field-definition.dto';
 import { CreateRoomCategoryDto, UpdateRoomCategoryDto, GetRoomCategoriesDto } from './dto/room-category.dto';
@@ -202,9 +202,13 @@ export class RetreatController {
     }
 
     @Post('bookings/:id/promote')
-    promoteEnquiry(@Request() req, @Param('id') id: string) {
+    promoteEnquiry(@Request() req, @Param('id') id: string, @Body() dto: PromoteBookingDto) {
         const clinicId = req.user.organisationId;
-        return this.retreatService.promoteEnquiry(clinicId, id, req.user.userId);
+        return this.retreatService.promoteEnquiry(clinicId, id, req.user.userId, {
+            role: req.user.role,
+            patientId: dto?.patientId,
+            createNew: dto?.createNew,
+        });
     }
 
     @Post('admissions/:id/discharge')

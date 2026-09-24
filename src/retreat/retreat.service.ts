@@ -1773,8 +1773,19 @@ export class RetreatService {
         });
     }
 
-    // Phone-dedup patient search / creation. Sets booking.patient_id only.
-    async promoteEnquiry(clinicId: string, bookingId: string, performedBy?: string) {
+    // Links the booking to a patient (booking.patient_id only). Phone is a
+    // contact attribute, not identity -- several patients can share one -- so
+    // this never picks an existing patient by phone. The receptionist either
+    // chose one (opts.patientId, must be visible to them) or asked for a new
+    // one (opts.createNew). With neither, a new patient is created only when
+    // no visible patient shares the enquiry phone; otherwise 409 so the app
+    // shows the choice instead of guessing.
+    async promoteEnquiry(
+        clinicId: string,
+        bookingId: string,
+        performedBy?: string,
+        opts: { role?: string; patientId?: string; createNew?: boolean } = {},
+    ) {
         return this.dataSource.transaction(async (manager) => {
             const booking = await manager.findOne(RoomBooking, {
                 where: { id: bookingId, organisationId: clinicId },
@@ -1788,14 +1799,24 @@ export class RetreatService {
                 throw new BadRequestException('Booking has no enquiry to promote');
             }
 
-            // Phone dedup
-            const existingPatient = await manager.findOne(Patient, {
-                where: { phone: booking.enquiry.phone, organisationId: clinicId },
-            });
-
-            if (existingPatient) {
-                booking.patientId = existingPatient.id;
+            if (opts.patientId) {
+                const chosen = await this.patientsService.findVisibleById(
+                    performedBy, opts.role, clinicId, opts.patientId, manager,
+                );
+                if (!chosen) throw new NotFoundException('Patient not found');
+                booking.patientId = chosen.id;
             } else {
+                if (!opts.createNew) {
+                    const matches = await this.patientsService.findVisibleByPhone(
+                        performedBy, opts.role, clinicId, 'CLINIC', booking.enquiry.phone, manager,
+                    );
+                    if (matches.length > 0) {
+                        throw new ConflictException(
+                            `${matches.length} existing patient${matches.length === 1 ? '' : 's'} use${matches.length === 1 ? 's' : ''} this phone number. Choose the patient or create a new one.`,
+                        );
+                    }
+                }
+
                 const patientCode = await this.patientsService.generateNextPatientCode(clinicId, manager);
                 const newPatient = manager.create(Patient, {
                     organisationId: clinicId,
