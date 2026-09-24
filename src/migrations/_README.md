@@ -79,16 +79,31 @@ applied with `psql`. **No more TypeORM migrations.**
    possible (use `IF NOT EXISTS`, `IF EXISTS`, `DROP CONSTRAINT IF EXISTS`,
    etc.).
 
-3. End the file with an `INSERT INTO migrations (name)` recording the
+3. **Every new table, including every new partition, gets
+   `ALTER TABLE <name> ENABLE ROW LEVEL SECURITY;`** in the same file.
+   Supabase exposes the `public` schema through its Data API with a public
+   anon key; RLS with no policies denies that path, while the backend's
+   owner role (`postgres`) is unaffected. Use `ENABLE`, never `FORCE`
+   (`FORCE` would lock out the backend). Tables created between 2026-06-02
+   and 2026-09-24 missed this (30 of 97); fixed on 2026-09-24 by re-running
+   `2026-06-02-enable-rls-public.sql`, which is idempotent and covers every
+   public table. Check with:
+
+   ```sql
+   SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public' AND c.relkind IN ('r','p') AND NOT c.relrowsecurity;
+   ```
+
+4. End the file with an `INSERT INTO migrations (name)` recording the
    migration name. Use `ON CONFLICT (name) DO NOTHING` for safety.
 
-4. Apply to dev:
+5. Apply to dev:
 
    ```bash
    psql medilink -f src/migrations/2026-06-15-add-discount-codes.sql
    ```
 
-5. Apply to staging/prod via your deployment script (the production
+6. Apply to staging/prod via your deployment script (the production
    deploy should run all `*.sql` files in this folder in lexicographic
    order, skipping any whose name already appears in the `migrations`
    table).
@@ -106,6 +121,7 @@ BEGIN;
 CREATE TABLE IF NOT EXISTS "public"."discount_codes" (
   ...
 );
+ALTER TABLE "public"."discount_codes" ENABLE ROW LEVEL SECURITY;
 
 INSERT INTO "public"."migrations" ("name")
 VALUES ('2026-06-15-add-discount-codes')
