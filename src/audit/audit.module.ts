@@ -3,6 +3,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { AuditLog } from './entities/audit-log.entity';
 import { AuditService } from './audit.service';
 import { AuditReadService } from './audit-read.service';
+import { AuditPartitionService } from './audit-partition.service';
 import { AuditController } from './audit.controller';
 import { User } from '../users/entities/user.entity';
 import { Organisation } from '../organisations/entities/organisation.entity';
@@ -23,7 +24,7 @@ import { Branch } from '../branches/entities/branch.entity';
 @Module({
   imports: [TypeOrmModule.forFeature([AuditLog, User, Organisation, Branch])],
   controllers: [AuditController],
-  providers: [AuditService, AuditReadService],
+  providers: [AuditService, AuditReadService, AuditPartitionService],
   exports: [AuditService],
 })
 export class AuditModule {}
