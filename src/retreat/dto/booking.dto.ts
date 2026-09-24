@@ -1,5 +1,6 @@
 import { IsUUID, IsDateString, IsOptional, IsNumber, IsString, IsEnum, IsBoolean, Min } from 'class-validator';
 import { BookingStatus, RefundMethod } from '../entities/room-booking.entity';
+import { PaymentMethod } from '../../patient-billing/entities/patient-bill.entity';
 
 export class CreateBookingDto {
     @IsOptional()
@@ -32,6 +33,20 @@ export class CreateBookingDto {
     @IsNumber()
     @Min(0)
     advancePaid?: number;
+
+    // Cash tracking (once live): how the initial advance was paid and where
+    // it was received. Recorded as an advance receipt, not just a number.
+    @IsOptional()
+    @IsEnum(PaymentMethod)
+    advancePaymentMethod?: PaymentMethod;
+
+    @IsOptional()
+    @IsUUID()
+    advanceReceivedIntoAccountId?: string;
+
+    @IsOptional()
+    @IsUUID()
+    advanceIdempotencyKey?: string;
 
     @IsOptional()
     @IsString()
@@ -112,6 +127,11 @@ export class RecordRefundDto {
     @IsEnum(RefundMethod)
     method: RefundMethod;
 
+    // Cash tracking (once live): the ledger the refund was paid from.
+    @IsOptional()
+    @IsUUID()
+    paidFromAccountId?: string;
+
     @IsOptional()
     @IsString()
     note?: string;
@@ -130,4 +150,38 @@ export class CheckAvailabilityDto {
     @IsOptional()
     @IsUUID()
     excludeBookingId?: string;
+}
+
+// "Record advance" (cash MVP batch 1): each advance is its own receipt row, so
+// once cash tracking is live advance_paid is never edited directly.
+export class RecordAdvanceDto {
+    @IsNumber({ maxDecimalPlaces: 2 })
+    @Min(0.01)
+    amount: number;
+
+    @IsEnum(PaymentMethod)
+    paymentMethod: PaymentMethod;
+
+    // Required once cash tracking is live.
+    @IsOptional()
+    @IsUUID()
+    receivedIntoAccountId?: string;
+
+    // The day the money was received; defaults to today's business date.
+    @IsOptional()
+    @IsDateString()
+    receivedAt?: string;
+
+    @IsOptional()
+    @IsString()
+    referenceNo?: string;
+
+    @IsOptional()
+    @IsString()
+    notes?: string;
+
+    // One per form submit, so a double-tap can't record the advance twice.
+    @IsOptional()
+    @IsUUID()
+    idempotencyKey?: string;
 }

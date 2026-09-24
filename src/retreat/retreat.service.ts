@@ -16,13 +16,15 @@ import { Branch } from '../branches/entities/branch.entity';
 import { ClinicCapabilities } from '../clinic-capabilities/entities/clinic-capabilities.entity';
 import { PatientBillingService } from '../patient-billing/patient-billing.service';
 import { PatientsService } from '../patients/patients.service';
-import { CreateBookingDto, UpdateBookingDto, CheckAvailabilityDto, RecordRefundDto } from './dto/booking.dto';
+import { CreateBookingDto, UpdateBookingDto, CheckAvailabilityDto, RecordRefundDto, RecordAdvanceDto } from './dto/booking.dto';
 import { CreateEnquiryDto, UpdateEnquiryDto, ConvertEnquiryDto } from './dto/enquiry.dto';
 import { BookingFieldDefinition } from './entities/booking-field-definition.entity';
 import { CreateFieldDefinitionDto, UpdateFieldDefinitionDto } from './dto/field-definition.dto';
 import { NotificationsService } from '../notifications/notifications.service';
 import { BranchVisibilityService } from '../branch-visibility/branch-visibility.service';
 import { AuditService } from '../audit/audit.service';
+import { BookingAdvancePostingService } from '../cash/booking-advance-posting.service';
+import { organisationBusinessDate } from '../common/business-date';
 
 // Phase 0: half-open interval overlap. Two ranges [aStart,aEnd) and [bStart,bEnd)
 // overlap iff aStart < bEnd AND aEnd > bStart. Back-to-back (a ends when b starts)
@@ -66,6 +68,7 @@ export class RetreatService {
         private patientsService: PatientsService,
         private branchVisibilityService: BranchVisibilityService,
         private auditService: AuditService,
+        private advancePosting: BookingAdvancePostingService,
     ) { }
 
     // Map a clinic_capabilities row to the set of care programs the org is allowed
@@ -853,7 +856,7 @@ export class RetreatService {
             // Bill + BillItem[] + first ledger payment (ADR-003 Phase 2) — built by
             // PatientBillingService so bill construction has one owner, inside this
             // same locked transaction (see Payment_Wiring_Implementation_Plan.md Phase A).
-            await this.patientBillingService.buildBillFromBooking(manager, {
+            const bill = await this.patientBillingService.buildBillFromBooking(manager, {
                 organisationId: clinicId,
                 patientId,
                 bookingId: linkedBooking?.id ?? null,
@@ -863,6 +866,16 @@ export class RetreatService {
                 createdBy: performedBy ?? null,
                 branchId,
             });
+
+            // Cash tracking: the advance already in Patient advances becomes
+            // income on this bill. A journal only: no cash moves at check-in.
+            if (advancePaid > 0) {
+                await this.advancePosting.postTransfer(
+                    manager,
+                    { organisationId: clinicId, admissionId: savedAdmission.id, billId: bill.id, branchId: branchId ?? null, amount: advancePaid },
+                    { userId: performedBy as string, role: performedByRole ?? null },
+                );
+            }
 
             return { savedAdmission, room };
         });
@@ -955,6 +968,7 @@ export class RetreatService {
     // --- BOOKINGS ---
     async createBooking(clinicId: string, dto: CreateBookingDto, userId?: string, userRole?: string) {
         const { patientId, enquiryId, roomId, packageId, checkInDate, checkOutDate, advancePaid, notes, discountReason, acRequired = false } = dto;
+        const initialAdvance = Number(advancePaid) || 0;
 
         // Validate identity: at least one of patientId or enquiryId must be present
         if (!patientId && !enquiryId) {
@@ -975,6 +989,10 @@ export class RetreatService {
 
         // Phase 1: serialise per-room + verify patient ownership + unified conflict in one txn.
         return this.dataSource.transaction(async (manager) => {
+            const cashLive = !!(await this.advancePosting.liveFrom(manager, clinicId));
+            if (cashLive && initialAdvance > 0 && !dto.advancePaymentMethod) {
+                throw new BadRequestException('Say how the advance was paid (cash, UPI, card...) and where it was received');
+            }
             // Patient ownership guard (when patientId provided)
             if (patientId) {
                 await this.assertPatientInOrg(clinicId, patientId, manager, userId, userRole);
@@ -1026,7 +1044,9 @@ export class RetreatService {
                 suggestedPrice,
                 totalPrice,
                 discountReason: discountReason || null,
-                advancePaid: advancePaid || 0,
+                // Once cash tracking is live the initial advance is recorded as a
+                // receipt below, which also sets advance_paid.
+                advancePaid: cashLive ? 0 : initialAdvance,
                 acRequired,
                 status: BookingStatus.HELD,
                 notes: notes || null,
@@ -1041,7 +1061,18 @@ export class RetreatService {
                 // them still show there.
                 branchId: dto.branchId || room.branchId || null,
             });
-            return manager.save(booking);
+            const saved = await manager.save(booking);
+            if (cashLive && initialAdvance > 0) {
+                await this.insertAdvanceReceipt(manager, saved, {
+                    amount: initialAdvance,
+                    paymentMethod: dto.advancePaymentMethod!,
+                    receivedIntoAccountId: dto.advanceReceivedIntoAccountId ?? null,
+                    receivedAt: await organisationBusinessDate(manager, clinicId),
+                    idempotencyKey: dto.advanceIdempotencyKey ?? null,
+                }, { userId: userId as string, role: userRole ?? null });
+                saved.advancePaid = initialAdvance;
+            }
+            return saved;
         });
     }
 
@@ -1168,7 +1199,14 @@ export class RetreatService {
             if (dto.packageId !== undefined) booking.packageId = dto.packageId;
             if (dto.status) booking.status = dto.status;
             if (dto.totalPrice !== undefined) booking.totalPrice = dto.totalPrice;
-            if (dto.advancePaid !== undefined) booking.advancePaid = Number(dto.advancePaid);
+            if (dto.advancePaid !== undefined && Number(dto.advancePaid) !== Number(booking.advancePaid)) {
+                // Once cash tracking is live, advance_paid is kept from the advance
+                // receipts; it changes only through Record advance / void / refund.
+                if (await this.advancePosting.liveFrom(manager, clinicId)) {
+                    throw new BadRequestException('Advances are recorded with "Record advance" once cash tracking is live');
+                }
+                booking.advancePaid = Number(dto.advancePaid);
+            }
             if (dto.discountReason !== undefined) booking.discountReason = dto.discountReason;
             if (dto.acRequired !== undefined) booking.acRequired = dto.acRequired;
             if (dto.notes !== undefined) booking.notes = dto.notes;
@@ -1248,6 +1286,13 @@ export class RetreatService {
                 );
             }
 
+            // Cash tracking: the refund leaves the chosen ledger (Payment Voucher).
+            await this.advancePosting.postRefund(
+                manager,
+                { organisationId: clinicId, bookingId: booking.id, branchId: booking.branchId ?? null, amount: dto.amount, method: dto.method, paidFromAccountId: dto.paidFromAccountId ?? null },
+                { userId },
+            );
+
             booking.refundAmount = dto.amount;
             booking.refundMethod = dto.method;
             booking.refundNote = dto.note?.trim() || null;
@@ -1255,6 +1300,123 @@ export class RetreatService {
             booking.refundedAt = new Date();
 
             return bookingRepo.save(booking);
+        });
+    }
+
+    // ── Booking advances (Cash MVP batch 1) ─────────────────────────────────
+    // Each advance is its own receipt row (the voucher's source). The row is
+    // idempotent per submit key; advance_paid is kept in step with the live rows
+    // in the same transaction. Vouchers post only once cash tracking is live.
+
+    private async insertAdvanceReceipt(
+        manager: EntityManager,
+        booking: RoomBooking,
+        input: { amount: number; paymentMethod: string; receivedIntoAccountId: string | null; receivedAt: string; referenceNo?: string | null; notes?: string | null; idempotencyKey: string | null },
+        actor: { userId: string; role?: string | null },
+    ) {
+        if (input.idempotencyKey) {
+            const [prior] = await manager.query(
+                `SELECT id FROM booking_advance_receipts WHERE booking_id = $1 AND idempotency_key = $2`,
+                [booking.id, input.idempotencyKey],
+            );
+            if (prior) return { id: prior.id, replayed: true };
+        }
+        let row: { id: string; received_at: string };
+        try {
+            [row] = await manager.query(
+                `INSERT INTO booking_advance_receipts
+                   (organisation_id, booking_id, amount, received_at, payment_method, reference_no,
+                    received_into_account_id, notes, created_by, idempotency_key)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+                 RETURNING id, to_char(received_at, 'YYYY-MM-DD') AS received_at`,
+                [booking.organisationId, booking.id, input.amount.toFixed(2), input.receivedAt, input.paymentMethod,
+                 input.referenceNo ?? null, input.receivedIntoAccountId, input.notes ?? null, actor.userId, input.idempotencyKey],
+            );
+        } catch (err: any) {
+            if (err?.code === '23505' && err?.constraint === 'uq_booking_advance_receipts_idem') {
+                throw new ConflictException('This advance has already been recorded');
+            }
+            if (err?.code === '23503') throw new NotFoundException('Ledger not found in this organisation');
+            throw err;
+        }
+        await manager.query(
+            `UPDATE room_bookings SET advance_paid = advance_paid + $2 WHERE id = $1`,
+            [booking.id, input.amount.toFixed(2)],
+        );
+        const voucher = await this.advancePosting.postReceipt(
+            manager,
+            { id: row.id, organisationId: booking.organisationId, bookingId: booking.id, amount: input.amount, receivedAt: row.received_at,
+              paymentMethod: input.paymentMethod, receivedIntoAccountId: input.receivedIntoAccountId, referenceNo: input.referenceNo },
+            { branchId: booking.branchId ?? null },
+            actor,
+        );
+        return { id: row.id, replayed: false, voucher };
+    }
+
+    private async lockOpenBooking(manager: EntityManager, clinicId: string, bookingId: string) {
+        const booking = await manager.findOne(RoomBooking, {
+            where: { id: bookingId, organisationId: clinicId },
+            lock: { mode: 'pessimistic_write' },
+        });
+        if (!booking) throw new NotFoundException('Booking not found');
+        if (booking.status !== BookingStatus.HELD && booking.status !== BookingStatus.CONFIRMED) {
+            throw new BadRequestException('Advances can only change on a held or confirmed booking');
+        }
+        return booking;
+    }
+
+    async recordAdvance(clinicId: string, bookingId: string, dto: RecordAdvanceDto, userId: string, userRole?: string) {
+        return this.dataSource.transaction(async (manager) => {
+            const booking = await this.lockOpenBooking(manager, clinicId, bookingId);
+            const receivedAt = dto.receivedAt ? dto.receivedAt.slice(0, 10) : await organisationBusinessDate(manager, clinicId);
+            const result = await this.insertAdvanceReceipt(manager, booking, {
+                amount: dto.amount,
+                paymentMethod: dto.paymentMethod,
+                receivedIntoAccountId: dto.receivedIntoAccountId ?? null,
+                receivedAt,
+                referenceNo: dto.referenceNo ?? null,
+                notes: dto.notes ?? null,
+                idempotencyKey: dto.idempotencyKey ?? null,
+            }, { userId, role: userRole ?? null });
+            const [b] = await manager.query(`SELECT advance_paid FROM room_bookings WHERE id = $1`, [bookingId]);
+            return { receiptId: result.id, replayed: result.replayed, advancePaid: Number(b.advance_paid) };
+        });
+    }
+
+    async listAdvances(clinicId: string, bookingId: string) {
+        const booking = await this.bookingRepo.findOne({ where: { id: bookingId, organisationId: clinicId } });
+        if (!booking) throw new NotFoundException('Booking not found');
+        return this.dataSource.query(
+            `SELECT r.id, r.amount, to_char(r.received_at, 'YYYY-MM-DD') AS "receivedAt", r.payment_method AS "paymentMethod",
+                    r.reference_no AS "referenceNo", r.notes, a.name AS "receivedInto", r.deleted_at IS NOT NULL AS voided, r.created_at AS "createdAt"
+               FROM booking_advance_receipts r LEFT JOIN accounts a ON a.id = r.received_into_account_id
+              WHERE r.booking_id = $1 AND r.organisation_id = $2
+              ORDER BY r.created_at DESC`,
+            [bookingId, clinicId],
+        );
+    }
+
+    async voidAdvance(clinicId: string, bookingId: string, receiptId: string, userId: string, userRole?: string) {
+        return this.dataSource.transaction(async (manager) => {
+            await this.lockOpenBooking(manager, clinicId, bookingId);
+            const [receipt] = await manager.query(
+                `SELECT id, amount FROM booking_advance_receipts
+                  WHERE id = $1 AND booking_id = $2 AND organisation_id = $3 AND deleted_at IS NULL FOR UPDATE`,
+                [receiptId, bookingId, clinicId],
+            );
+            if (!receipt) throw new NotFoundException('Advance not found');
+            await manager.query(`UPDATE booking_advance_receipts SET deleted_at = now() WHERE id = $1`, [receiptId]);
+            // (A plain UPDATE then SELECT: TypeORM's query() returns [rows, count]
+            // for UPDATE ... RETURNING, not the rows.)
+            await manager.query(
+                `UPDATE room_bookings SET advance_paid = advance_paid - $2 WHERE id = $1`,
+                [bookingId, receipt.amount],
+            );
+            const [b] = await manager.query(`SELECT advance_paid FROM room_bookings WHERE id = $1`, [bookingId]);
+            if (Number(b.advance_paid) < 0) throw new BadRequestException('Advance total would go below zero');
+            // Reverse its Receipt Voucher, if it had one; the original is never changed.
+            await this.advancePosting.reverseReceipt(manager, clinicId, receiptId, { userId, role: userRole ?? null });
+            return { advancePaid: Number(b.advance_paid) };
         });
     }
 

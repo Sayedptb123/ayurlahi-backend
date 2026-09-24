@@ -84,7 +84,9 @@ describe('RetreatService Phase 0 — isRoomBlocked', () => {
             {} as any, // notificationsService
             {} as any, // patientBillingService
             {} as any, // patientsService
-            {} as any, // branchVisibilityService
+            {} as any, // branchVisibilityService,
+            {} as any,
+            { liveFrom: jest.fn(() => Promise.resolve(null)), postReceipt: jest.fn(() => Promise.resolve(null)), reverseReceipt: jest.fn(() => Promise.resolve(null)), postTransfer: jest.fn(() => Promise.resolve(null)), postRefund: jest.fn(() => Promise.resolve(null)) } as any, // advancePosting (cash off)
         );
     });
 
@@ -146,7 +148,9 @@ describe('RetreatService Phase 0 — assertPatientInOrg', () => {
         service = new RetreatService(
             {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any,
             {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any,
-            {} as any, // branchVisibilityService
+            {} as any, // branchVisibilityService,
+            {} as any,
+            { liveFrom: jest.fn(() => Promise.resolve(null)), postReceipt: jest.fn(() => Promise.resolve(null)), reverseReceipt: jest.fn(() => Promise.resolve(null)), postTransfer: jest.fn(() => Promise.resolve(null)), postRefund: jest.fn(() => Promise.resolve(null)) } as any, // advancePosting (cash off)
         );
     });
 
@@ -174,8 +178,10 @@ describe('RetreatService W1-A.1 — resolveCareProgram', () => {
         {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any,
         { findOne: jest.fn(() => Promise.resolve(capsRow)) } as any, // capabilitiesRepo
         {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any,
-        {} as any, // branchVisibilityService
-    );
+        {} as any, // branchVisibilityService,
+            {} as any,
+            { liveFrom: jest.fn(() => Promise.resolve(null)), postReceipt: jest.fn(() => Promise.resolve(null)), reverseReceipt: jest.fn(() => Promise.resolve(null)), postTransfer: jest.fn(() => Promise.resolve(null)), postRefund: jest.fn(() => Promise.resolve(null)) } as any, // advancePosting (cash off)
+        );
 
     const resolve = (svc: RetreatService, requested?: string) =>
         (svc as any).resolveCareProgram('org-1', requested);
@@ -248,6 +254,8 @@ describe('RetreatService — recordRefund', () => {
             {} as any, {} as any, {} as any, {} as any,
             dataSource as any, // dataSource
             {} as any, {} as any, {} as any, {} as any,
+            {} as any,
+            { liveFrom: jest.fn(() => Promise.resolve(null)), postReceipt: jest.fn(() => Promise.resolve(null)), reverseReceipt: jest.fn(() => Promise.resolve(null)), postTransfer: jest.fn(() => Promise.resolve(null)), postRefund: jest.fn(() => Promise.resolve(null)) } as any, // advancePosting (cash off)
         );
         return { service, txBookingRepo, saved };
     };
@@ -360,6 +368,8 @@ describe('RetreatService — removeBooking (refund gate)', () => {
             {} as any, {} as any, {} as any, {} as any,
             {} as any, // dataSource
             {} as any, {} as any, {} as any, {} as any,
+            {} as any,
+            { liveFrom: jest.fn(() => Promise.resolve(null)), postReceipt: jest.fn(() => Promise.resolve(null)), reverseReceipt: jest.fn(() => Promise.resolve(null)), postTransfer: jest.fn(() => Promise.resolve(null)), postRefund: jest.fn(() => Promise.resolve(null)) } as any, // advancePosting (cash off)
         );
         return { service, bookingRepo };
     };
@@ -427,6 +437,7 @@ describe('RetreatService.promoteEnquiry — audit event (second patient-creation
             {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any,
             {} as any, {} as any, {} as any, {} as any,
             dataSource, {} as any, {} as any, patientsService, {} as any, auditService,
+            { liveFrom: jest.fn(() => Promise.resolve(null)), postReceipt: jest.fn(() => Promise.resolve(null)), reverseReceipt: jest.fn(() => Promise.resolve(null)), postTransfer: jest.fn(() => Promise.resolve(null)), postRefund: jest.fn(() => Promise.resolve(null)) } as any, // advancePosting (cash off)
         );
         return { service, auditService, managerRecord, manager };
     };
@@ -453,5 +464,41 @@ describe('RetreatService.promoteEnquiry — audit event (second patient-creation
         const { service, managerRecord } = makeService({ existingPatient: { id: 'existing-p' } });
         await service.promoteEnquiry('org-1', 'bk-1', 'u-1');
         expect(managerRecord).toHaveLength(0);
+    });
+});
+
+// Cash MVP batch 1: voidAdvance must read the new total back with a SELECT.
+// TypeORM's query() returns [rows, count] for UPDATE ... RETURNING, which made
+// the returned total NaN and the below-zero guard unreachable (caught on staging).
+describe('RetreatService.voidAdvance — advance total read-back', () => {
+    const build = (advanceAfter: string) => {
+        const reverseReceipt = jest.fn(() => Promise.resolve(null));
+        const query = jest.fn((sql: string) => {
+            if (sql.startsWith('SELECT id, amount FROM booking_advance_receipts')) return Promise.resolve([{ id: 'r1', amount: '500.00' }]);
+            if (sql.startsWith('UPDATE room_bookings')) return Promise.resolve([[{ advance_paid: 'ignored' }], 1]); // what TypeORM really returns
+            if (sql.startsWith('SELECT advance_paid FROM room_bookings')) return Promise.resolve([{ advance_paid: advanceAfter }]);
+            return Promise.resolve([]);
+        });
+        const manager: any = {
+            query,
+            findOne: jest.fn(() => Promise.resolve({ id: 'b1', organisationId: 'org-1', status: 'CONFIRMED' })),
+        };
+        const args: any[] = Array.from({ length: 18 }, () => ({}));
+        args[12] = { transaction: (cb: any) => cb(manager) }; // dataSource
+        args[18] = { reverseReceipt };
+        const service = new (RetreatService as any)(...args);
+        return { service, reverseReceipt };
+    };
+
+    it('returns the new total as a number and reverses the receipt voucher', async () => {
+        const { service, reverseReceipt } = build('2000.00');
+        await expect(service.voidAdvance('org-1', 'b1', 'r1', 'u-1', 'OWNER')).resolves.toEqual({ advancePaid: 2000 });
+        expect(reverseReceipt).toHaveBeenCalledWith(expect.anything(), 'org-1', 'r1', { userId: 'u-1', role: 'OWNER' });
+    });
+
+    it('refuses (and so rolls back) a void that would take the total below zero', async () => {
+        const { service, reverseReceipt } = build('-100.00');
+        await expect(service.voidAdvance('org-1', 'b1', 'r1', 'u-1', 'OWNER')).rejects.toThrow('below zero');
+        expect(reverseReceipt).not.toHaveBeenCalled();
     });
 });

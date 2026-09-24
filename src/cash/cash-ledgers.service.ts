@@ -32,6 +32,7 @@ const RECEIVING_KINDS: Record<string, string[]> = {
   card: ['bank'],
   online: ['bank', 'upi'],
   cheque: ['bank'],
+  bank_transfer: ['bank'],
 };
 
 export interface IncomeShare {

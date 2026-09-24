@@ -20,6 +20,7 @@ import { PatientsModule } from '../patients/patients.module';
 import { ModuleGuard } from '../auth/guards/module.guard';
 import { BranchVisibilityModule } from '../branch-visibility/branch-visibility.module';
 import { AuditModule } from '../audit/audit.module';
+import { CashModule } from '../cash/cash.module';
 
 @Module({
   imports: [
@@ -29,6 +30,7 @@ import { AuditModule } from '../audit/audit.module';
     PatientsModule,
     BranchVisibilityModule,
     AuditModule,
+    CashModule,
   ],
   controllers: [RetreatController],
   providers: [RetreatService, ModuleGuard],
