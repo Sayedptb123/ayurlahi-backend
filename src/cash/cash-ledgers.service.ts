@@ -14,6 +14,22 @@ export const INCOME_LEDGERS: Array<{ key: string; name: string }> = [
   { key: 'income_other', name: 'Other patient income' },
 ];
 
+export const EXPENSE_LEDGERS: Array<{ key: string; name: string }> = [
+  { key: 'expense_operations', name: 'Operations' },
+  { key: 'expense_salary', name: 'Salary' },
+  { key: 'expense_inventory', name: 'Medicines & supplies' },
+  { key: 'expense_marketing', name: 'Marketing' },
+  { key: 'expense_maintenance', name: 'Maintenance' },
+  { key: 'expense_utilities', name: 'Utilities' },
+  { key: 'expense_other', name: 'Other expenses' },
+];
+
+// expenses.category (lower-cased) → expense ledger; anything else → Other.
+export function expenseLedgerKey(category: string | null | undefined): string {
+  const k = `expense_${String(category ?? '').trim().toLowerCase()}`;
+  return EXPENSE_LEDGERS.some((l) => l.key === k) ? k : 'expense_other';
+}
+
 // bill_items.item_type → income ledger.
 export const INCOME_KEY_BY_ITEM_TYPE: Record<string, string> = {
   consultation: 'income_consultation',
@@ -33,6 +49,8 @@ const RECEIVING_KINDS: Record<string, string[]> = {
   online: ['bank', 'upi'],
   cheque: ['bank'],
   bank_transfer: ['bank'],
+  // A hospital cost paid from the hospital's own money (Batch 3 adds staff/partner-paid).
+  hospital: ['cash', 'bank', 'upi'],
 };
 
 export interface IncomeShare {
@@ -61,6 +79,7 @@ export class CashLedgersService {
       [null, 'bank', 'Bank', 'bank'],
       [null, 'upi', 'UPI', 'upi'],
       ...INCOME_LEDGERS.map((l): [string | null, string, string, string] => [null, 'income', l.name, l.key]),
+      ...EXPENSE_LEDGERS.map((l): [string | null, string, string, string] => [null, 'expense', l.name, l.key]),
       // Needed by go-live's opening journal (review §7).
       [null, 'patient_advances', 'Patient advances', 'patient_advances'],
       [null, 'opening_balance', 'Opening balance', 'opening_balance'],

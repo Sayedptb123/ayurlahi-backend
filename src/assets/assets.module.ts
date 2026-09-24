@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { CashModule } from '../cash/cash.module';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AssetCategory } from './entities/asset-category.entity';
 import { Asset } from './entities/asset.entity';
@@ -10,6 +11,7 @@ import { AssetsController } from './assets.controller';
 @Module({
   imports: [
     TypeOrmModule.forFeature([AssetCategory, Asset, AssetMaintenance, Expense]),
+    CashModule,
   ],
   controllers: [AssetsController],
   providers: [AssetsService],

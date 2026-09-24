@@ -56,6 +56,11 @@ export class Expense {
     @Column({ type: 'timestamp', nullable: true, name: 'approved_at' })
     approvedAt: Date | null;
 
+    // Set when another flow (recurring-bill payment, asset maintenance) owns this
+    // expense's cash posting, so the expense flow never posts it again.
+    @Column({ type: 'varchar', length: 20, nullable: true, name: 'posted_via' })
+    postedVia: 'bill_payment' | 'asset_maintenance' | null;
+
     @Column({ type: 'uuid', name: 'created_by' })
     createdBy: string;
 

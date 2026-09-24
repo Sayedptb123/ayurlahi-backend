@@ -1,4 +1,4 @@
-import { IsString, IsNotEmpty, IsOptional, IsNumber, IsDateString, IsEnum, IsBoolean, Min } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, IsNumber, IsDateString, IsEnum, IsBoolean, Min, IsUUID } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 import { MaintenanceType } from '../entities/asset-maintenance.entity';
 
@@ -38,4 +38,14 @@ export class LogMaintenanceDto {
   @IsBoolean()
   @IsOptional()
   integrateExpense?: boolean;
+
+  // Cash tracking (once live): the cash drawer, bank or UPI ledger it was paid from.
+  @IsOptional()
+  @IsUUID()
+  paidFromAccountId?: string;
+
+  // One per form submit, so a double-submit is recorded once.
+  @IsOptional()
+  @IsUUID()
+  idempotencyKey?: string;
 }

@@ -11,6 +11,7 @@ import { UpdateRecurringBillDto } from './dto/update-recurring-bill.dto';
 import { LogBillPaymentDto } from './dto/log-bill-payment.dto';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { DEFAULT_TIMEZONE, organisationBusinessDate } from '../common/business-date';
+import { CostPaymentPostingService } from '../cash/cost-payment-posting.service';
 
 export type RequestUser = { userId: string; organisationId: string; role?: string; organisationType?: string };
 
@@ -26,6 +27,7 @@ export class BillsService {
     @InjectRepository(OrganisationUser)
     private orgUserRepo: Repository<OrganisationUser>,
     private notificationsService: NotificationsService,
+    private costPosting: CostPaymentPostingService,
   ) {}
 
   // --- CRUD Schedules ---
@@ -141,6 +143,15 @@ export class BillsService {
       });
       if (!locked) throw new NotFoundException('Recurring bill not found');
 
+      // The same submit again returns the payment already recorded.
+      if (logDto.idempotencyKey) {
+        const prior = await manager.getRepository(BillPayment).findOne({
+          where: { recurringBillId: bill.id, idempotencyKey: logDto.idempotencyKey },
+        });
+        if (prior) return prior;
+      }
+      await this.costPosting.checkPaidFrom(manager, bill.organisationId, logDto.paidFromAccountId);
+
       const savedExpense = await manager.getRepository(Expense).save(
         manager.getRepository(Expense).create({
           organisationId: bill.organisationId,
@@ -150,6 +161,8 @@ export class BillsService {
           expenseDate: paidDate,
           status: 'verified', // real logged payment is verified
           paymentMethod: bill.paymentMethod ?? 'bank_transfer',
+          // Its cash posting is the bill payment's voucher, never the expense flow's.
+          postedVia: 'bill_payment',
           createdBy: reqUser.userId,
         }),
       );
@@ -169,7 +182,26 @@ export class BillsService {
           isLate,
           lateFee: logDto.lateFee ?? 0,
           expenseId: savedExpense.id,
+          idempotencyKey: logDto.idempotencyKey ?? null,
         }),
+      );
+
+      // Payment Voucher in this same transaction (Cash MVP §5 R6); a no-op
+      // until the organisation's cash tracking is live.
+      await this.costPosting.post(
+        manager,
+        {
+          organisationId: bill.organisationId,
+          sourceType: 'bill_payment',
+          sourceId: payment.id,
+          paidOn: logDto.paidDate,
+          amount: logDto.paidAmount,
+          category: bill.category,
+          paidFromAccountId: logDto.paidFromAccountId ?? null,
+          branchId: bill.branchId ?? null,
+          narration: `Paid ${bill.billName}${logDto.billNumber ? ` (bill ${logDto.billNumber})` : ''}`,
+        },
+        { userId: reqUser.userId, role: reqUser.role ?? null },
       );
 
       // Advance the recurring bill's next due date if we paid for the current/future cycle
@@ -253,6 +285,9 @@ export class BillsService {
                 expenseDate: new Date(bill.nextDueDate),
                 status: isAutoApproved ? 'verified' : 'pending',
                 paymentMethod: bill.paymentMethod ?? 'bank_transfer',
+                // A due bill isn't a payment: this expense never posts on its
+                // own; only a recorded payment posts a voucher.
+                postedVia: 'bill_payment',
                 createdBy: bill.createdBy || undefined,
               }),
             );
@@ -260,8 +295,14 @@ export class BillsService {
             // valid, organisation-wide state).
             notice = `Bill "${bill.billName}"${branchLabel} is due. ${isAutoApproved ? 'An approved' : 'A pending'} expense of ₹${expenseAmount.toLocaleString('en-IN')} has been generated.`;
 
-            // If autoPay is active, immediately log the payment record too
-            if (bill.autoPay) {
+            // If autoPay is active, immediately log the payment record too.
+            // Once cash tracking is live the scheduler never records a payment
+            // (it can't know which drawer, bank or UPI paid): the payment is
+            // logged with its paid-from ledger instead.
+            const cashLive = !!(await this.costPosting.liveFrom(manager, bill.organisationId));
+            if (bill.autoPay && cashLive) {
+              notice += ' Record the payment when it is made.';
+            } else if (bill.autoPay) {
               await manager.getRepository(BillPayment).save(
                 manager.getRepository(BillPayment).create({
                   recurringBillId: bill.id,

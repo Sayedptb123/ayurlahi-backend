@@ -9,6 +9,7 @@ import { CreateAssetCategoryDto } from './dto/create-asset-category.dto';
 import { CreateAssetDto } from './dto/create-asset.dto';
 import { UpdateAssetDto } from './dto/update-asset.dto';
 import { LogMaintenanceDto } from './dto/log-maintenance.dto';
+import { CostPaymentPostingService } from '../cash/cost-payment-posting.service';
 
 @Injectable()
 export class AssetsService {
@@ -21,6 +22,7 @@ export class AssetsService {
     private readonly maintenanceRepository: Repository<AssetMaintenance>,
     @InjectRepository(Expense)
     private readonly expenseRepository: Repository<Expense>,
+    private readonly costPosting: CostPaymentPostingService,
   ) {}
 
   // ==========================================================================
@@ -231,6 +233,15 @@ export class AssetsService {
     // MVP plan §6). Previously a failure after the expense save left an
     // expense with no maintenance record.
     const savedMaint = await this.assetRepository.manager.transaction(async (manager) => {
+      // The same submit again returns the maintenance already logged.
+      if (dto.idempotencyKey) {
+        const prior = await manager.getRepository(AssetMaintenance).findOne({
+          where: { assetId, idempotencyKey: dto.idempotencyKey },
+        });
+        if (prior) return prior;
+      }
+      await this.costPosting.checkPaidFrom(manager, organisationId, dto.paidFromAccountId);
+
       // 2. Create the ledger Expense if integrated
       let paymentId: string | null = null;
       if (dto.integrateExpense && dto.cost && dto.cost > 0) {
@@ -246,6 +257,8 @@ export class AssetsService {
             createdBy: userId,
             approvedBy: userId,
             approvedAt: new Date(),
+            // Its cash posting is the maintenance voucher, never the expense flow's.
+            postedVia: 'asset_maintenance',
           }),
         );
         paymentId = savedExpense.id;
@@ -263,8 +276,29 @@ export class AssetsService {
           nextMaintenanceDate: nextMaintDate,
           paymentId,
           performedBy: userId,
+          idempotencyKey: dto.idempotencyKey ?? null,
         }),
       );
+
+      // Payment Voucher in this same transaction (Cash MVP §5 R7), for a cost
+      // recorded as an expense; a no-op until cash tracking is live.
+      if (paymentId) {
+        await this.costPosting.post(
+          manager,
+          {
+            organisationId,
+            sourceType: 'asset_maintenance',
+            sourceId: maint.id,
+            paidOn: dto.maintenanceDate,
+            amount: dto.cost!,
+            category: 'maintenance',
+            paidFromAccountId: dto.paidFromAccountId ?? null,
+            branchId: asset.branchId ?? null,
+            narration: `Maintenance: [${asset.assetCode}] ${asset.name}${dto.serviceProvider ? ` (${dto.serviceProvider})` : ''}`,
+          },
+          { userId },
+        );
+      }
 
       // 4. Update core asset flags
       asset.lastMaintenanceDate = maintDate;

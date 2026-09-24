@@ -10,6 +10,7 @@ describe('AssetsService.logMaintenance — one transaction', () => {
     const saved: unknown[] = [];
     const repoFor = (entity: unknown) => ({
       create: (x: any) => x,
+      findOne: jest.fn(() => Promise.resolve(null)),
       save: jest.fn((x: any) => {
         if (entity === failOn) return Promise.reject(new Error('save failed'));
         saved.push(entity);
@@ -23,8 +24,9 @@ describe('AssetsService.logMaintenance — one transaction', () => {
       manager: { transaction: jest.fn((cb: any) => cb(manager)) },
     };
     const outside: any = { save: jest.fn(), create: (x: any) => x };
-    const service = new AssetsService({} as any, assetRepository, outside, outside);
-    return { service, saved, assetRepository, outside };
+    const costPosting = { checkPaidFrom: jest.fn(() => Promise.resolve()), post: jest.fn(() => Promise.resolve(null)) };
+    const service = new AssetsService({} as any, assetRepository, outside, outside, costPosting as any);
+    return { service, saved, assetRepository, outside, costPosting };
   };
   const dto: any = { maintenanceType: 'repair', maintenanceDate: '2026-09-24', cost: 1200, integrateExpense: true };
 
@@ -35,6 +37,21 @@ describe('AssetsService.logMaintenance — one transaction', () => {
     expect(saved).toEqual([Expense, AssetMaintenance, Asset]);
     expect(outside.save).not.toHaveBeenCalled();
     expect(assetRepository.save).not.toHaveBeenCalled();
+  });
+
+  it('posts one Payment Voucher for the cost, sourced from the maintenance row, and tags the expense', async () => {
+    const { service, costPosting } = setup();
+    await service.logMaintenance('as-1', 'org-1', { ...dto, paidFromAccountId: 'drawer', idempotencyKey: 'k' }, 'u-1');
+    expect(costPosting.post).toHaveBeenCalledTimes(1);
+    expect((costPosting.post.mock.calls[0] as any[])[1]).toMatchObject({
+      sourceType: 'asset_maintenance', sourceId: 'id-2', amount: 1200, category: 'maintenance', paidFromAccountId: 'drawer', paidOn: '2026-09-24',
+    });
+  });
+
+  it('a cost not recorded as an expense posts no voucher', async () => {
+    const { service, costPosting } = setup();
+    await service.logMaintenance('as-1', 'org-1', { ...dto, integrateExpense: false }, 'u-1');
+    expect(costPosting.post).not.toHaveBeenCalled();
   });
 
   it('propagates a failure after the expense save, so the transaction rolls back', async () => {

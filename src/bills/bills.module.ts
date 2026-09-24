@@ -7,10 +7,12 @@ import { BillPayment } from './entities/bill-payment.entity';
 import { Expense } from '../expenses/entities/expense.entity';
 import { OrganisationUser } from '../organisation-users/entities/organisation-user.entity';
 import { NotificationsModule } from '../notifications/notifications.module';
+import { CashModule } from '../cash/cash.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([RecurringBill, BillPayment, Expense, OrganisationUser]),
+    CashModule,
     NotificationsModule,
   ],
   controllers: [BillsController],

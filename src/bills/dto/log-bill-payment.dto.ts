@@ -4,8 +4,7 @@ import {
   IsNumber,
   Min,
   IsDateString,
-  MaxLength,
-} from 'class-validator';
+  MaxLength, IsUUID } from 'class-validator';
 
 export class LogBillPaymentDto {
   @IsDateString()
@@ -48,4 +47,14 @@ export class LogBillPaymentDto {
   @Min(0)
   @IsOptional()
   lateFee?: number;
+
+  // Cash tracking (once live): the cash drawer, bank or UPI ledger it was paid from.
+  @IsOptional()
+  @IsUUID()
+  paidFromAccountId?: string;
+
+  // One per form submit, so a double-submit is recorded once.
+  @IsOptional()
+  @IsUUID()
+  idempotencyKey?: string;
 }

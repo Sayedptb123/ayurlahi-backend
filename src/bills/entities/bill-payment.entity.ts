@@ -66,4 +66,8 @@ export class BillPayment {
 
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
+
+  // One per form submit, so a double-submitted payment is recorded once.
+  @Column({ type: 'uuid', nullable: true, name: 'idempotency_key' })
+  idempotencyKey: string | null;
 }

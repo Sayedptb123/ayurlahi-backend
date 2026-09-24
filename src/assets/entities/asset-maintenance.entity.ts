@@ -62,4 +62,8 @@ export class AssetMaintenance {
 
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
+
+  // One per form submit, so a double-submitted maintenance log is recorded once.
+  @Column({ type: 'uuid', nullable: true, name: 'idempotency_key' })
+  idempotencyKey: string | null;
 }
