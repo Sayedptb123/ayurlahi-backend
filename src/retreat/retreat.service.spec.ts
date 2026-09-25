@@ -663,3 +663,74 @@ describe('RetreatService.getTodaySummary — rooms.freeTonight', () => {
         expect(roomRepo.find).toHaveBeenLastCalledWith(expect.objectContaining({ where: { organisationId: 'org-1', branchId: 'br-1' } }));
     });
 });
+
+// scope/Needs_Branch_Remediation_Plan_2026-09-26.md B1 — a parent's branch
+// change re-syncs its prices' branch in the same transaction.
+describe('RetreatService — price branch resync on parent branch change', () => {
+    const build = (entities: { category?: any; pkg?: any; room?: any }) => {
+        const queries: { sql: string; params: any[] }[] = [];
+        const manager: any = {
+            save: jest.fn((e: any) => Promise.resolve(e)),
+            query: jest.fn((sql: string, params: any[]) => { queries.push({ sql, params }); return Promise.resolve([]); }),
+        };
+        const dataSource: any = { transaction: jest.fn((cb: any) => cb(manager)) };
+        const repo = (row: any) => ({ findOne: jest.fn(() => Promise.resolve(row ? { ...row } : null)), save: jest.fn((e: any) => Promise.resolve(e)) });
+        const roomRepo = repo(entities.room);
+        const packageRepo = repo(entities.pkg);
+        const categoryRepo = repo(entities.category);
+        const service = new RetreatService(
+            roomRepo as any, packageRepo as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any,
+            categoryRepo as any, {} as any, {} as any, {} as any,
+            dataSource, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any,
+        );
+        jest.spyOn(service as any, 'assertCatalogRowAccess').mockResolvedValue(undefined);
+        jest.spyOn(service as any, 'assertBranchOwnership').mockImplementation((_c: any, b: any) => Promise.resolve(b));
+        return { service, dataSource, manager, queries, roomRepo, packageRepo, categoryRepo };
+    };
+
+    it('category branch change: saves and re-syncs its pricing entries in one transaction', async () => {
+        const t = build({ category: { id: 'cat-1', organisationId: 'org-1', branchId: null, name: 'Deluxe' } });
+        await t.service.updateRoomCategory('org-1', 'cat-1', { branchId: 'br-1' });
+        expect(t.dataSource.transaction).toHaveBeenCalledTimes(1);
+        expect(t.manager.save).toHaveBeenCalledWith(expect.objectContaining({ id: 'cat-1', branchId: 'br-1' }));
+        expect(t.queries).toHaveLength(1);
+        expect(t.queries[0].sql).toContain('UPDATE room_category_pricing');
+        expect(t.queries[0].params).toEqual(['org-1', 'cat-1', null]);
+        expect(t.categoryRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('category rename only: plain save, no transaction, no resync', async () => {
+        const t = build({ category: { id: 'cat-1', organisationId: 'org-1', branchId: 'br-1', name: 'Deluxe' } });
+        await t.service.updateRoomCategory('org-1', 'cat-1', { name: 'Suite', branchId: 'br-1' });
+        expect(t.dataSource.transaction).not.toHaveBeenCalled();
+        expect(t.categoryRepo.save).toHaveBeenCalled();
+        expect(t.queries).toHaveLength(0);
+    });
+
+    it('package branch change: re-syncs both pricing entries and room overrides', async () => {
+        const t = build({ pkg: { id: 'pkg-1', organisationId: 'org-1', branchId: 'br-1' } });
+        await t.service.updatePackage('org-1', 'pkg-1', { branchId: 'br-2' } as any);
+        expect(t.dataSource.transaction).toHaveBeenCalledTimes(1);
+        expect(t.queries.map((q) => q.sql.match(/UPDATE (\w+)/)?.[1])).toEqual(['room_category_pricing', 'room_pricing_overrides']);
+        expect(t.queries.every((q) => q.params[0] === 'org-1' && q.params[2] === 'pkg-1')).toBe(true);
+    });
+
+    it('room branch change: re-syncs its overrides only', async () => {
+        const t = build({ room: { id: 'room-1', organisationId: 'org-1', branchId: 'br-1', roomCategoryId: null } });
+        await t.service.updateRoom('org-1', 'room-1', { branchId: 'br-2' });
+        expect(t.dataSource.transaction).toHaveBeenCalledTimes(1);
+        expect(t.queries).toHaveLength(1);
+        expect(t.queries[0].sql).toContain('UPDATE room_pricing_overrides');
+        expect(t.queries[0].params).toEqual(['org-1', 'room-1', null]);
+    });
+
+    it('resync SQL only writes rows whose branch actually changes, and never deleted ones', async () => {
+        const t = build({ pkg: { id: 'pkg-1', organisationId: 'org-1', branchId: 'br-1' } });
+        await t.service.updatePackage('org-1', 'pkg-1', { branchId: 'br-2' } as any);
+        for (const q of t.queries) {
+            expect(q.sql).toContain('deleted_at IS NULL');
+            expect(q.sql).toContain('IS DISTINCT FROM');
+            expect(q.sql).toMatch(/CASE WHEN \w\.branch_id = k\.branch_id THEN \w\.branch_id ELSE NULL END/);
+        }
+    });
+});

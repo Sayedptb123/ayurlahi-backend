@@ -148,6 +148,47 @@ export class RetreatService {
         }
     }
 
+    // ADR-004 D15 — a price's branch is denormalized from its parents
+    // (category + package, or room + package) and used to be copied only when
+    // the price itself was saved, so moving a parent left every price behind
+    // as "needs a branch" until each one was re-saved by hand. Called in the
+    // same transaction as a parent's branch change. Same rule setPricingMatrix
+    // / setRoomPricingOverride enforce on save: the parents' branch when they
+    // agree, otherwise NULL, which is then a genuine "needs assignment" signal.
+    // See scope/Needs_Branch_Remediation_Plan_2026-09-26.md B1.
+    private async resyncCatalogPriceBranches(
+        manager: EntityManager,
+        organisationId: string,
+        changed: { categoryId?: string; packageId?: string; roomId?: string },
+    ): Promise<void> {
+        if (changed.categoryId || changed.packageId) {
+            await manager.query(
+                `UPDATE room_category_pricing p
+                    SET branch_id = CASE WHEN c.branch_id = k.branch_id THEN c.branch_id ELSE NULL END,
+                        updated_at = now()
+                   FROM room_categories c, treatment_packages k
+                  WHERE p.room_category_id = c.id AND p.package_id = k.id
+                    AND p.organisation_id = $1 AND p.deleted_at IS NULL
+                    AND (c.id = $2 OR k.id = $3)
+                    AND p.branch_id IS DISTINCT FROM (CASE WHEN c.branch_id = k.branch_id THEN c.branch_id ELSE NULL END)`,
+                [organisationId, changed.categoryId ?? null, changed.packageId ?? null],
+            );
+        }
+        if (changed.roomId || changed.packageId) {
+            await manager.query(
+                `UPDATE room_pricing_overrides o
+                    SET branch_id = CASE WHEN r.branch_id = k.branch_id THEN r.branch_id ELSE NULL END,
+                        updated_at = now()
+                   FROM rooms r, treatment_packages k
+                  WHERE o.room_id = r.id AND o.package_id = k.id
+                    AND o.organisation_id = $1 AND o.deleted_at IS NULL
+                    AND (r.id = $2 OR k.id = $3)
+                    AND o.branch_id IS DISTINCT FROM (CASE WHEN r.branch_id = k.branch_id THEN r.branch_id ELSE NULL END)`,
+                [organisationId, changed.roomId ?? null, changed.packageId ?? null],
+            );
+        }
+    }
+
     // --- ROOMS ---
     async getRoomCategories(clinicId: string, branchId?: string) {
         // ADR-004 D15 — filtered view, distinct from the ownership enforcement
@@ -186,10 +227,16 @@ export class RetreatService {
         if (data.name !== undefined) category.name = data.name;
         if (data.isActive !== undefined) category.isActive = data.isActive;
         // ADR-004 D15 — this is also how a legacy NULL-branch row gets resolved.
-        if (data.branchId !== undefined && data.branchId !== category.branchId) {
+        const branchChanged = data.branchId !== undefined && data.branchId !== category.branchId;
+        if (branchChanged) {
             category.branchId = (await this.assertBranchOwnership(clinicId, data.branchId, user)) as string;
         }
-        return this.categoryRepo.save(category);
+        if (!branchChanged) return this.categoryRepo.save(category);
+        return this.dataSource.transaction(async (manager) => {
+            const saved = await manager.save(category);
+            await this.resyncCatalogPriceBranches(manager, clinicId, { categoryId: category.id });
+            return saved;
+        });
     }
 
     async deleteRoomCategory(clinicId: string, id: string, user: { userId?: string; role?: string } = {}) {
@@ -556,7 +603,8 @@ export class RetreatService {
         // D14 — apply a branchId change first, so the category cross-check
         // below (if both are changing in the same request) validates against
         // the room's new branch, not its stale one.
-        if (data.branchId !== undefined && data.branchId !== room.branchId) {
+        const branchChanged = data.branchId !== undefined && data.branchId !== room.branchId;
+        if (branchChanged) {
             room.branchId = await this.assertBranchOwnership(clinicId, data.branchId, user);
         }
         if (data.roomCategoryId !== undefined) {
@@ -576,7 +624,13 @@ export class RetreatService {
         if (data.capacity !== undefined) room.capacity = data.capacity ?? null;
         if (data.amenities !== undefined) room.amenities = data.amenities ?? null;
         if (data.status !== undefined) room.status = data.status as RoomStatus;
-        const saved = await this.roomRepo.save(room);
+        const saved = branchChanged
+            ? await this.dataSource.transaction(async (manager) => {
+                const s = await manager.save(room);
+                await this.resyncCatalogPriceBranches(manager, clinicId, { roomId: room.id });
+                return s;
+            })
+            : await this.roomRepo.save(room);
         const cat = saved.roomCategoryId ? await this.categoryRepo.findOne({ where: { id: saved.roomCategoryId } }) : null;
         return { ...saved, roomCategory: cat?.name ?? null };
     }
@@ -628,12 +682,18 @@ export class RetreatService {
         // A legacy NULL-branch package is fixable by org-wide roles only (Q1).
         await this.assertCatalogRowAccess(clinicId, pkg.branchId, user, 'Package not found');
         // ADR-004 D15 — this is also how a legacy NULL-branch row gets resolved.
-        if (data.branchId !== undefined && data.branchId !== pkg.branchId) {
+        const branchChanged = data.branchId !== undefined && data.branchId !== pkg.branchId;
+        if (branchChanged) {
             // Validated branch (an explicit null resolves like any missing branch — R3).
             data = { ...data, branchId: await this.assertBranchOwnership(clinicId, data.branchId, user) } as any;
         }
         Object.assign(pkg, data);
-        return this.packageRepo.save(pkg);
+        if (!branchChanged) return this.packageRepo.save(pkg);
+        return this.dataSource.transaction(async (manager) => {
+            const saved = await manager.save(pkg);
+            await this.resyncCatalogPriceBranches(manager, clinicId, { packageId: pkg.id });
+            return saved;
+        });
     }
 
     async deletePackage(clinicId: string, id: string, user: { userId?: string; role?: string } = {}) {

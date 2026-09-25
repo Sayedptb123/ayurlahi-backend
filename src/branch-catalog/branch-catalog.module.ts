@@ -8,6 +8,7 @@ import { RoomCategoryPricing } from '../retreat/entities/room-category-pricing.e
 import { RoomPricingOverride } from '../retreat/entities/room-pricing-override.entity';
 import { DutyType } from '../duty-types/entities/duty-type.entity';
 import { DutyTemplate } from '../duty-templates/entities/duty-template.entity';
+import { Branch } from '../branches/entities/branch.entity';
 
 @Module({
   imports: [
@@ -18,6 +19,7 @@ import { DutyTemplate } from '../duty-templates/entities/duty-template.entity';
       RoomPricingOverride,
       DutyType,
       DutyTemplate,
+      Branch,
     ]),
   ],
   controllers: [BranchCatalogController],
