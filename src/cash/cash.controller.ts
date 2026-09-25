@@ -1,8 +1,10 @@
-import { Body, Controller, Get, Param, Post, Query, Request, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post, Query, Request, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CashGoLiveService, CashActor } from './cash-go-live.service';
 import { GoLiveDto } from './dto/go-live.dto';
 import { CashBooksService } from './cash-books.service';
+import { CashSetupService } from './cash-setup.service';
+import { CreateLedgerDto, CreatePartnerDto, UpdateLedgerDto, UpdatePartnerDto } from './dto/setup.dto';
 
 // Authorisation lives in CashGoLiveService, from the JWT: clinic organisations
 // only, and OWNER/ADMIN for set-up and go-live. RolesGuard/@Roles is not used
@@ -22,6 +24,7 @@ export class CashController {
   constructor(
     private readonly goLive: CashGoLiveService,
     private readonly books: CashBooksService,
+    private readonly setup: CashSetupService,
   ) {}
 
   // Whether this organisation's cash tracking is live (drives the picker).
@@ -83,5 +86,32 @@ export class CashController {
   @Get('vouchers/:id')
   voucher(@Request() req, @Param('id') id: string) {
     return this.books.voucher(actor(req), id);
+  }
+
+  // ── Set-up (OWNER/ADMIN write; MANAGER read) ────────────────────────────
+
+  @Get('setup')
+  getSetup(@Request() req) {
+    return this.setup.getSetup(actor(req));
+  }
+
+  @Post('accounts')
+  createLedger(@Request() req, @Body() dto: CreateLedgerDto) {
+    return this.setup.createLedger(actor(req), dto);
+  }
+
+  @Patch('accounts/:id')
+  updateLedger(@Request() req, @Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateLedgerDto) {
+    return this.setup.updateLedger(actor(req), id, dto);
+  }
+
+  @Post('partners')
+  createPartner(@Request() req, @Body() dto: CreatePartnerDto) {
+    return this.setup.createPartner(actor(req), dto);
+  }
+
+  @Patch('partners/:id')
+  updatePartner(@Request() req, @Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdatePartnerDto) {
+    return this.setup.updatePartner(actor(req), id, dto);
   }
 }

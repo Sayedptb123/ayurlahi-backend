@@ -192,6 +192,30 @@ export const BRANCH_OWNED_AREAS: BranchOwnedArea[] = [
     routes: { 'GET /cash/ledgers/:id/book': orgWide('cash books are leadership-only; leadership is never branch-restricted') },
   },
   {
+    // Cash Set-up: OWNER/ADMIN write, MANAGER read (CashSetupService); all
+    // leadership, never branch-restricted. Custodians are checked against
+    // the chosen place's branch with scopeFor.
+    prefix: '/cash/setup',
+    anchor: 'own',
+    routes: { 'GET /cash/setup': orgWide('cash set-up is leadership-only; leadership is never branch-restricted') },
+  },
+  {
+    prefix: '/cash/accounts',
+    anchor: 'own',
+    routes: {
+      'POST /cash/accounts': orgWide('owner/admin only; leadership is never branch-restricted'),
+      'PATCH /cash/accounts/:id': orgWide('owner/admin only; leadership is never branch-restricted'),
+    },
+  },
+  {
+    prefix: '/cash/partners',
+    anchor: 'own',
+    routes: {
+      'POST /cash/partners': orgWide('owner/admin only; partners are organisation-wide'),
+      'PATCH /cash/partners/:id': orgWide('owner/admin only; partners are organisation-wide'),
+    },
+  },
+  {
     prefix: '/cash/vouchers',
     anchor: 'own',
     routes: { 'GET /cash/vouchers/:id': orgWide('cash books are leadership-only; leadership is never branch-restricted') },

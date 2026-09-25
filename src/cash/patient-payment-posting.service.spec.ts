@@ -15,7 +15,7 @@ const managerFor = (items: Array<{ item_type: string; total: string }>, account?
   query: jest.fn((sql: string) => {
     if (sql.includes('FROM bill_items')) return Promise.resolve(items);
     if (sql.includes('system_key = ANY')) return Promise.resolve(LEDGERS);
-    if (sql.includes('SELECT kind, name, is_active')) return Promise.resolve(account ? [account] : []);
+    if (sql.includes('a.kind, a.name, a.is_active')) return Promise.resolve(account ? [{ partner_ok: true, ...account }] : []);
     if (sql.includes('timezone')) return Promise.resolve([{ timezone: 'Asia/Kolkata' }]);
     return Promise.resolve([]);
   }),
@@ -63,6 +63,11 @@ describe('CashLedgersService.incomeShares', () => {
     await expect(svc.checkReceivingAccount(managerFor([]) as any, 'org-1', 'acc', 'cash')).rejects.toThrow('not found');
     await expect(svc.checkReceivingAccount(managerFor([], { kind: 'cash', name: 'Old', is_active: false }) as any, 'org-1', 'acc', 'cash'))
       .rejects.toThrow('inactive');
+  });
+
+  it('refuses a new collection by a switched-off partner (Cash Set-up §4b)', async () => {
+    const m = managerFor([], { kind: 'held_by_partner', name: 'Held by Dr Anil', is_active: true, partner_ok: false });
+    await expect(svc.checkReceivingAccount(m as any, 'org-1', 'acc', 'cash', null)).rejects.toThrow('switched off');
   });
 });
 

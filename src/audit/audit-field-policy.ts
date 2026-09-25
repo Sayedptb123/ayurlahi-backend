@@ -101,6 +101,15 @@ export const AUDIT_FIELD_POLICY: Record<
       'diagnosis', 'notes', 'status',
     ],
   },
+  // Cash Set-up (src/cash/cash-setup.service.ts): every field UpdateLedgerDto /
+  // UpdatePartnerDto can change, plus the partner's money in/out ledger state.
+  // Names are labels (bank names carry only a masked number), nothing secret.
+  cash_ledger: {
+    allowed: ['name', 'branchId', 'custodianUserId', 'isActive'],
+  },
+  cash_partner: {
+    allowed: ['name', 'userId', 'isActive', 'moneyLedgerActive'],
+  },
 };
 
 /**

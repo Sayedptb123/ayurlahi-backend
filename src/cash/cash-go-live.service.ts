@@ -83,9 +83,12 @@ export class CashGoLiveService {
     const scope = await this.branchVisibility.scopeFor(actor);
     const rows: Array<{ id: string; name: string; kind: string; branch_id: string | null }> =
       await this.dataSource.manager.query(
-        `SELECT id, name, kind, branch_id FROM accounts
-          WHERE organisation_id = $1 AND is_active AND kind = ANY($2::text[])
-          ORDER BY kind, name`,
+        `SELECT a.id, a.name, a.kind, a.branch_id FROM accounts a
+          WHERE a.organisation_id = $1 AND a.is_active AND a.kind = ANY($2::text[])
+            -- a switched-off partner takes no new collections (Set-up §4b)
+            AND (a.partner_id IS NULL OR EXISTS (
+                  SELECT 1 FROM partners p WHERE p.id = a.partner_id AND p.is_active AND p.deleted_at IS NULL))
+          ORDER BY a.kind, a.name`,
         [actor.organisationId, BALANCE_KINDS],
       );
     const allowed = paymentMethod ? CashLedgersService.receivingKinds(paymentMethod) : BALANCE_KINDS;
@@ -169,6 +172,13 @@ export class CashGoLiveService {
       `SELECT id, system_key FROM accounts WHERE organisation_id = $1 AND system_key IN ('patient_advances','opening_balance') AND is_active`,
       [organisationId],
     );
+    // Every clinic takes cash: at least one switched-on cash place (Set-up §7).
+    const [cashPlaces] = await m.query(
+      `SELECT count(*)::int AS n FROM accounts WHERE organisation_id = $1 AND kind = 'cash' AND is_active`,
+      [organisationId],
+    );
+    if (!cashPlaces?.n) throw new BadRequestException('Add at least one cash place in Cash Set-up before going live');
+
     const advancesAcc = keyed.find((a) => a.system_key === 'patient_advances');
     const openingAcc = keyed.find((a) => a.system_key === 'opening_balance');
     if (!advancesAcc || !openingAcc) {

@@ -8,10 +8,12 @@ describe('CashBooksService', () => {
   const LEDGER = '11111111-1111-4111-8111-111111111111';
 
   // Routes each SQL statement to a canned answer by a fragment of its text.
-  const svcWith = (answers: Array<[RegExp, any[]]>) => {
-    const query = jest.fn((sql: string) => {
+  // An answer can depend on the parameters (e.g. opening vs closing balance).
+  const svcWith = (answers: Array<[RegExp, any[] | ((params: any[]) => any[])]>) => {
+    const query = jest.fn((sql: string, params: any[] = []) => {
       const hit = answers.find(([re]) => re.test(sql));
-      return Promise.resolve(hit ? hit[1] : []);
+      const a = hit?.[1];
+      return Promise.resolve(typeof a === 'function' ? a(params) : a ?? []);
     });
     return { svc: new CashBooksService({ manager: { query } } as any), query };
   };
@@ -55,7 +57,9 @@ describe('CashBooksService', () => {
   it('today: ledger figures and headline totals come back in rupees', async () => {
     const { svc } = svcWith([
       tz, live('2026-09-01'),
-      [/AS opening/, [{ id: 'a1', name: 'Cash drawer', kind: 'cash', branch_id: null, opening: '2000000', day_in: '1550000', day_out: '172000', closing: '3378000' }]],
+      [/AS day_in/, [{ id: 'a1', name: 'Cash drawer', kind: 'cash', branch_id: null, is_active: true, day_in: '1550000', day_out: '172000' }]],
+      // shared ledgerBalances: $3 = before (opening), $4 = upTo (closing)
+      [/GROUP BY l.account_id/, (p) => [{ account_id: 'a1', p: p[2] ? '2000000' : '3378000' }]],
       [/AS received/, [{ received: '1550000', paid_out: '172000' }]],
       [/GROUP BY v.voucher_type/, [{ voucher_type: 'receipt', n: 3 }]],
       [/patient_advances/, [{ held: '500000' }]],
@@ -71,7 +75,7 @@ describe('CashBooksService', () => {
     const { svc } = svcWith([
       tz, live('2026-09-01'),
       [/SELECT id, name, kind, branch_id, is_active FROM accounts/, [{ id: LEDGER, name: 'Cash drawer', kind: 'cash', branch_id: null, is_active: true }]],
-      [/AS p\b/, [{ p: '2000000' }]],
+      [/GROUP BY l.account_id/, [{ account_id: LEDGER, p: '2000000' }]],
       [/l.description,/, [
         { voucher_id: 'v1', voucher_type: 'receipt', voucher_number: 1, fy_start_year: 2026, voucher_date: '2026-09-25', narration: 'Payment for bill', source_type: 'patient_payment', description: null, debit: '1500000', credit: '0' },
         { voucher_id: 'v2', voucher_type: 'payment', voucher_number: 1, fy_start_year: 2026, voucher_date: '2026-09-25', narration: 'Refund', source_type: 'booking_refund', description: null, debit: '0', credit: '120000' },
@@ -103,5 +107,18 @@ describe('CashBooksService', () => {
       expect(sql).toMatch(/organisation_id = \$1/);
       expect(params[0]).toBe('org');
     }
+  });
+
+  it('a switched-off place is listed only while it still holds money', async () => {
+    const { svc } = svcWith([
+      tz, live('2026-09-01'),
+      [/AS day_in/, [
+        { id: 'a1', name: 'Old drawer', kind: 'cash', branch_id: null, is_active: false, day_in: '0', day_out: '0' },
+        { id: 'a2', name: 'Old bank', kind: 'bank', branch_id: null, is_active: false, day_in: '0', day_out: '0' },
+      ]],
+      [/GROUP BY l.account_id/, [{ account_id: 'a2', p: '50000' }]],
+    ]);
+    const r: any = await svc.today(who('OWNER'), '2026-09-25');
+    expect(r.ledgers.map((l: any) => l.name)).toEqual(['Old bank']);
   });
 });

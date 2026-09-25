@@ -113,11 +113,16 @@ export class CashLedgersService {
     recordBranchId: string | null,
   ): Promise<void> {
     const [a] = await manager.query(
-      `SELECT kind, name, is_active, branch_id FROM accounts WHERE id = $1 AND organisation_id = $2`,
+      `SELECT a.kind, a.name, a.is_active, a.branch_id,
+              (a.partner_id IS NULL OR EXISTS (SELECT 1 FROM partners p
+                 WHERE p.id = a.partner_id AND p.is_active AND p.deleted_at IS NULL)) AS partner_ok
+         FROM accounts a WHERE a.id = $1 AND a.organisation_id = $2`,
       [accountId, organisationId],
     );
     if (!a) throw new NotFoundException('Ledger not found in this organisation');
     if (!a.is_active) throw new BadRequestException(`Ledger "${a.name}" is inactive`);
+    // A switched-off partner takes no new collections (Set-up §4b).
+    if (!a.partner_ok) throw new BadRequestException(`"${a.name}" belongs to a partner who is switched off`);
     if (a.branch_id && recordBranchId && a.branch_id !== recordBranchId) {
       throw new BadRequestException(`"${a.name}" belongs to another branch`);
     }

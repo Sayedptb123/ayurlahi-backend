@@ -8,6 +8,7 @@ import { DataSource, EntityManager } from 'typeorm';
 import { organisationBusinessDate } from '../common/business-date';
 import { CashActor } from './cash-go-live.service';
 import { displayVoucherNumber, VoucherType } from './voucher-posting.service';
+import { ledgerBalances } from './ledger-balances';
 
 // Read-only books over the vouchers (scope/Cash_Books_Implementation_2026-09-25.md):
 // Cash Today, Day Book, Cash Book and one voucher. Balances are always summed
@@ -65,25 +66,30 @@ export class CashBooksService {
     const ctx = await this.context(m, actor, date, branchId);
     if (!ctx.liveFrom) return { live: false as const, date: ctx.date };
 
-    // Per ledger: the whole ledger's balance (a bank account has one balance),
-    // but the day's in/out only counts lines of the selected branch.
-    const rows: Array<{ id: string; name: string; kind: string; branch_id: string | null; opening: string; day_in: string; day_out: string; closing: string }> =
+    // Per ledger: the whole ledger's balance (a bank account has one balance,
+    // from the shared ledgerBalances), but the day's in/out only counts lines
+    // of the selected branch.
+    const flows: Array<{ id: string; name: string; kind: string; branch_id: string | null; is_active: boolean; day_in: string; day_out: string }> =
       await m.query(
-        `SELECT a.id, a.name, a.kind, a.branch_id,
-                COALESCE(round(sum(l.debit - l.credit) FILTER (WHERE v.voucher_date < $2) * 100), 0)::bigint AS opening,
+        `SELECT a.id, a.name, a.kind, a.branch_id, a.is_active,
                 COALESCE(round(sum(l.debit)  FILTER (WHERE v.voucher_date = $2 AND ($3::uuid IS NULL OR l.branch_id = $3)) * 100), 0)::bigint AS day_in,
-                COALESCE(round(sum(l.credit) FILTER (WHERE v.voucher_date = $2 AND ($3::uuid IS NULL OR l.branch_id = $3)) * 100), 0)::bigint AS day_out,
-                COALESCE(round(sum(l.debit - l.credit) FILTER (WHERE v.voucher_date <= $2) * 100), 0)::bigint AS closing
+                COALESCE(round(sum(l.credit) FILTER (WHERE v.voucher_date = $2 AND ($3::uuid IS NULL OR l.branch_id = $3)) * 100), 0)::bigint AS day_out
            FROM accounts a
            LEFT JOIN voucher_lines l ON l.account_id = a.id AND l.organisation_id = a.organisation_id
            LEFT JOIN vouchers v ON v.id = l.voucher_id AND v.organisation_id = a.organisation_id
           WHERE a.organisation_id = $1 AND a.kind = ANY($4::text[])
             AND ($3::uuid IS NULL OR a.branch_id IS NULL OR a.branch_id = $3)
           GROUP BY a.id
-         HAVING a.is_active OR COALESCE(sum(l.debit - l.credit) FILTER (WHERE v.voucher_date <= $2), 0) <> 0
           ORDER BY array_position($4::text[], a.kind::text), a.name`,
         [actor.organisationId, ctx.date, ctx.branchId, BALANCE_KINDS],
       );
+    const ids = flows.map((f) => f.id);
+    const opening = await ledgerBalances(m, actor.organisationId, ids, { before: ctx.date });
+    const closing = await ledgerBalances(m, actor.organisationId, ids, { upTo: ctx.date });
+    // A switched-off place is listed only while it still holds money.
+    const rows = flows
+      .filter((f) => f.is_active || closing.get(f.id) !== 0)
+      .map((f) => ({ ...f, opening: opening.get(f.id)!, closing: closing.get(f.id)! }));
 
     // Headline totals: patient/other receipts and payments only. Transfers
     // (contra) and journals (opening, advance moved to a bill) aren't money
@@ -117,11 +123,11 @@ export class CashBooksService {
 
     const ledgers = rows.map((r) => ({
       accountId: r.id, name: r.name, kind: r.kind, branchId: r.branch_id,
-      opening: rupees(paise(r.opening)), in: rupees(paise(r.day_in)),
-      out: rupees(paise(r.day_out)), closing: rupees(paise(r.closing)),
+      opening: rupees(r.opening), in: rupees(paise(r.day_in)),
+      out: rupees(paise(r.day_out)), closing: rupees(r.closing),
     }));
     const sumKind = (kinds: string[]) =>
-      rupees(rows.filter((r) => kinds.includes(r.kind)).reduce((s, r) => s + paise(r.closing), 0));
+      rupees(rows.filter((r) => kinds.includes(r.kind)).reduce((s, r) => s + r.closing, 0));
     return {
       live: true as const,
       liveFrom: ctx.liveFrom,
@@ -180,12 +186,7 @@ export class CashBooksService {
     const ledger = { accountId: acc.id, name: acc.name, kind: acc.kind, branchId: acc.branch_id, isActive: acc.is_active };
     if (!ctx.liveFrom) return { live: false as const, from: fromDate, to: toDate, ledger, opening: '0.00', closing: '0.00', rows: [] };
 
-    const [open] = await m.query(
-      `SELECT COALESCE(round(sum(l.debit - l.credit) * 100), 0)::bigint AS p
-         FROM voucher_lines l JOIN vouchers v ON v.id = l.voucher_id AND v.organisation_id = l.organisation_id
-        WHERE l.organisation_id = $1 AND l.account_id = $2 AND v.voucher_date < $3`,
-      [actor.organisationId, acc.id, fromDate],
-    );
+    const open = (await ledgerBalances(m, actor.organisationId, [acc.id], { before: fromDate })).get(acc.id)!;
     const lines: Array<{ voucher_id: string; voucher_type: VoucherType; voucher_number: number; fy_start_year: number; voucher_date: string; narration: string; source_type: string; description: string | null; debit: string; credit: string }> =
       await m.query(
         `SELECT v.id AS voucher_id, v.voucher_type, v.voucher_number, v.fy_start_year,
@@ -197,7 +198,7 @@ export class CashBooksService {
           ORDER BY v.voucher_date, v.created_at, v.voucher_type, v.voucher_number, l.line_no`,
         [actor.organisationId, acc.id, fromDate, toDate],
       );
-    let running = paise(open?.p);
+    let running = open;
     const rows = lines.map((l) => {
       running += paise(l.debit) - paise(l.credit);
       return {
@@ -212,7 +213,7 @@ export class CashBooksService {
         balance: rupees(running),
       };
     });
-    return { live: true as const, from: fromDate, to: toDate, ledger, opening: rupees(paise(open?.p)), closing: rupees(running), rows };
+    return { live: true as const, from: fromDate, to: toDate, ledger, opening: rupees(open), closing: rupees(running), rows };
   }
 
   async voucher(actor: CashActor, voucherId: string): Promise<BookVoucher> {
