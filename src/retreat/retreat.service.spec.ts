@@ -600,3 +600,66 @@ describe('RetreatService.voidAdvance — advance total read-back', () => {
         await expect(service.voidAdvance('org-1', 'b1', 'r1', 'u-1', role)).resolves.toEqual({ advancePaid: 2000 });
     });
 });
+
+// Dashboard "Free Rooms" (scope/Dashboard_Bookings_Implementation_2026-09-26.md):
+// the count must come from the same availability check as the booking form and
+// board, never from the manual room status.
+describe('RetreatService.getTodaySummary — rooms.freeTonight', () => {
+    const now = new Date();
+    const far = new Date(now.getTime() + 60 * 86_400_000);
+    const past = new Date(now.getTime() - 60 * 86_400_000);
+    const rooms = [
+        // Marked OCCUPIED by hand, but nothing is in it: free.
+        { id: 'r-stale', organisationId: 'org-1', status: RoomStatus.OCCUPIED, isActive: true, roomNumber: '1' },
+        // Active stay with no actual check-out: blocked (even past its expected date).
+        { id: 'r-stay', organisationId: 'org-1', status: RoomStatus.AVAILABLE, isActive: true, roomNumber: '2' },
+        // Confirmed booking spanning tonight: blocked.
+        { id: 'r-booked', organisationId: 'org-1', status: RoomStatus.AVAILABLE, isActive: true, roomNumber: '3' },
+        // Maintenance: blocked.
+        { id: 'r-maint', organisationId: 'org-1', status: RoomStatus.MAINTENANCE, isActive: true, roomNumber: '4' },
+        // Switched off: not counted even though nothing blocks it.
+        { id: 'r-off', organisationId: 'org-1', status: RoomStatus.AVAILABLE, isActive: false, roomNumber: '5' },
+        // Plain free room.
+        { id: 'r-free', organisationId: 'org-1', status: RoomStatus.AVAILABLE, isActive: true, roomNumber: '6' },
+    ];
+    const manager = {
+        find: jest.fn((entity: any, opts: any) => {
+            const roomId = opts?.where?.roomId;
+            if (entity?.name === 'Admission') {
+                return Promise.resolve(roomId === 'r-stay' ? [{ roomId, checkInDate: past, actualCheckOutDate: null, status: AdmissionStatus.ACTIVE }] : []);
+            }
+            if (entity?.name === 'RoomBooking') {
+                return Promise.resolve(roomId === 'r-booked' ? [{ id: 'b1', roomId, checkInDate: past, checkOutDate: far, status: BookingStatus.CONFIRMED }] : []);
+            }
+            return Promise.resolve([]);
+        }),
+    };
+    const roomRepo = {
+        find: jest.fn(() => Promise.resolve(rooms.map((r) => ({ ...r })))),
+        count: jest.fn(() => Promise.resolve(rooms.filter((r) => r.isActive).length)),
+    };
+    const empty = { find: jest.fn(() => Promise.resolve([])) };
+    const branchVisibility = { branchFindCondition: jest.fn(() => undefined) };
+
+    const build = () => {
+        const s = new RetreatService(
+            roomRepo as any, {} as any, empty as any, empty as any, empty as any, {} as any, {} as any, {} as any,
+            {} as any, {} as any, {} as any, {} as any, { manager } as any, {} as any, {} as any, {} as any,
+            branchVisibility as any, {} as any, {} as any,
+        );
+        (s as any).scopeFor = jest.fn(() => Promise.resolve({ kind: 'all' }));
+        return s;
+    };
+
+    it('counts only switched-on rooms that pass the availability check', async () => {
+        const r: any = await build().getTodaySummary('org-1', 'u1', 'OWNER');
+        expect(r.rooms).toEqual({ active: 5, freeTonight: 2 }); // r-stale + r-free
+    });
+
+    it('passes the branch switcher to both counts', async () => {
+        branchVisibility.branchFindCondition.mockReturnValueOnce('br-1' as any).mockReturnValueOnce('br-1' as any);
+        await build().getTodaySummary('org-1', 'u1', 'OWNER', 'br-1');
+        expect(roomRepo.count).toHaveBeenLastCalledWith({ where: { organisationId: 'org-1', isActive: true, branchId: 'br-1' } });
+        expect(roomRepo.find).toHaveBeenLastCalledWith(expect.objectContaining({ where: { organisationId: 'org-1', branchId: 'br-1' } }));
+    });
+});

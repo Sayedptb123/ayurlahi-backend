@@ -503,7 +503,22 @@ export class RetreatService {
             }),
         ]);
 
-        return { arrivals, departures, holds, followUps };
+        // Dashboard "Free Rooms" (scope/Dashboard_Bookings_Implementation_2026-09-26.md):
+        // rooms that could be booked for tonight, by the very check the booking
+        // form and occupancy board use (isRoomBlocked via getAvailableRooms: active
+        // stays, maintenance, HELD/CONFIRMED bookings). Never the manual room status.
+        // Switched-off rooms aren't counted.
+        const today = new Date(Date.UTC(y, m, d)).toISOString().slice(0, 10);
+        const tomorrow = new Date(Date.UTC(y, m, d + 1)).toISOString().slice(0, 10);
+        const [activeRooms, available] = await Promise.all([
+            this.roomRepo.count({
+                where: { organisationId: clinicId, isActive: true, ...(branchWhere !== undefined ? { branchId: branchWhere } : {}) },
+            }),
+            this.getAvailableRooms(clinicId, today, tomorrow, branchId, { userId, role: userRole }),
+        ]);
+        const rooms = { active: activeRooms, freeTonight: available.filter((r) => r.isActive).length };
+
+        return { arrivals, departures, holds, followUps, rooms };
     }
 
     async createRoom(clinicId: string, data: { roomNumber: string; floor?: string; roomCategoryId?: string; capacity?: number; amenities?: string[]; description?: string; branchId?: string }, user: { userId?: string; role?: string } = {}) {
