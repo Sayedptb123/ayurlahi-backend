@@ -8,6 +8,7 @@ import { CashGoLiveService } from './cash-go-live.service';
 import { BookingAdvancePostingService } from './booking-advance-posting.service';
 import { CostPaymentPostingService } from './cost-payment-posting.service';
 import { CashController } from './cash.controller';
+import { CashBooksService } from './cash-books.service';
 
 // Cash MVP (scope/Cash_Management_MVP_Implementation_Plan_2026-09-24.md).
 // Foundation only for now: the posting service other modules call inside
@@ -15,7 +16,7 @@ import { CashController } from './cash.controller';
 @Module({
   imports: [AuditModule, BranchVisibilityModule],
   controllers: [CashController],
-  providers: [VoucherPostingService, CashLedgersService, PatientPaymentPostingService, CashGoLiveService, BookingAdvancePostingService, CostPaymentPostingService],
+  providers: [VoucherPostingService, CashLedgersService, PatientPaymentPostingService, CashGoLiveService, BookingAdvancePostingService, CostPaymentPostingService, CashBooksService],
   exports: [VoucherPostingService, CashLedgersService, PatientPaymentPostingService, BookingAdvancePostingService, CostPaymentPostingService],
 })
 export class CashModule {}

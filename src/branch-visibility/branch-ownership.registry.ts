@@ -175,6 +175,28 @@ export const BRANCH_OWNED_AREAS: BranchOwnedArea[] = [
     routes: { 'GET /cash/receiving-ledgers': covered }, // + posting re-checks drawer vs record branch
   },
   {
+    // Read-only cash books. OWNER/ADMIN/MANAGER only (CashBooksService), and
+    // those roles are never branch-restricted; branchId is just the switcher.
+    prefix: '/cash/today',
+    anchor: 'own',
+    routes: { 'GET /cash/today': orgWide('cash books are leadership-only; leadership is never branch-restricted') },
+  },
+  {
+    prefix: '/cash/day-book',
+    anchor: 'own',
+    routes: { 'GET /cash/day-book': orgWide('cash books are leadership-only; leadership is never branch-restricted') },
+  },
+  {
+    prefix: '/cash/ledgers',
+    anchor: 'own',
+    routes: { 'GET /cash/ledgers/:id/book': orgWide('cash books are leadership-only; leadership is never branch-restricted') },
+  },
+  {
+    prefix: '/cash/vouchers',
+    anchor: 'own',
+    routes: { 'GET /cash/vouchers/:id': orgWide('cash books are leadership-only; leadership is never branch-restricted') },
+  },
+  {
     prefix: '/analytics',
     anchor: 'none',
     routes: {
