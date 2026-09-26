@@ -1,4 +1,4 @@
-import { businessDate, DEFAULT_TIMEZONE, getOrganisationTimezone, isValidTimeZone } from './business-date';
+import { businessDate, DEFAULT_TIMEZONE, endOfBusinessDay, getOrganisationTimezone, isValidTimeZone } from './business-date';
 
 // Instants are given in UTC ('Z') so the result can't depend on the machine's
 // own timezone. IST = UTC+05:30, so IST midnight is 18:30Z the day before.
@@ -50,5 +50,27 @@ describe('getOrganisationTimezone', () => {
   it('defaults when the settings row is missing', async () => {
     const manager: any = { query: jest.fn(() => Promise.resolve([])) };
     await expect(getOrganisationTimezone(manager, 'org-1')).resolves.toBe(DEFAULT_TIMEZONE);
+  });
+});
+
+describe('endOfBusinessDay', () => {
+  it('is 23:59:59.999 IST — 18:29:59.999Z the same UTC day', () => {
+    expect(endOfBusinessDay('2026-06-03', 'Asia/Kolkata').toISOString()).toBe('2026-06-03T18:29:59.999Z');
+  });
+
+  it('is still that business date in the organisation timezone', () => {
+    const end = endOfBusinessDay('2026-12-31', 'Asia/Kolkata');
+    expect(businessDate('Asia/Kolkata', end)).toBe('2026-12-31');
+    expect(businessDate('Asia/Kolkata', new Date(end.getTime() + 1))).toBe('2027-01-01');
+  });
+
+  it('uses the given timezone, including across a DST change', () => {
+    // New York: EDT (UTC-4) on 7 Mar 2027, clocks go forward 14 Mar → EDT; 13 Mar is still EST (UTC-5)
+    expect(endOfBusinessDay('2027-03-13', 'America/New_York').toISOString()).toBe('2027-03-14T04:59:59.999Z');
+    expect(endOfBusinessDay('2027-03-14', 'America/New_York').toISOString()).toBe('2027-03-15T03:59:59.999Z');
+  });
+
+  it.each([undefined, null, '', 'Not/AZone'])('falls back to Asia/Kolkata for %p', (tz) => {
+    expect(endOfBusinessDay('2026-06-03', tz as any).toISOString()).toBe('2026-06-03T18:29:59.999Z');
   });
 });

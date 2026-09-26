@@ -4,6 +4,7 @@ import { BranchVisibilityService } from '../branch-visibility/branch-visibility.
 import { RoomStatus } from './entities/room.entity';
 import { AdmissionStatus } from './entities/admission.entity';
 import { BookingStatus, RefundMethod } from './entities/room-booking.entity';
+import { businessDate } from '../common/business-date';
 
 // Day helper — epoch ms for 2026-06-DD (UTC), so overlap math reads like the docs.
 const day = (d: number) => Date.UTC(2026, 5, d);
@@ -732,5 +733,132 @@ describe('RetreatService — price branch resync on parent branch change', () =>
             expect(q.sql).toContain('IS DISTINCT FROM');
             expect(q.sql).toMatch(/CASE WHEN \w\.branch_id = k\.branch_id THEN \w\.branch_id ELSE NULL END/);
         }
+    });
+});
+
+describe('RetreatService.discharge — actual discharge date and notes', () => {
+    // 11:30 IST on 26 Sep 2026. Business "today" for an IST org is 2026-09-26.
+    const NOW = new Date('2026-09-26T06:00:00Z');
+
+    const makeService = (admission: any, timezone = 'Asia/Kolkata') => {
+        const admissionRepo = {
+            findOne: jest.fn(() => Promise.resolve(admission)),
+            save: jest.fn((a: any) => Promise.resolve(a)),
+        };
+        const roomRepo = { save: jest.fn((r: any) => Promise.resolve(r)) };
+        const orgUserRepo = { find: jest.fn(() => Promise.resolve([])) };
+        const dataSource = { manager: { query: jest.fn(() => Promise.resolve([{ timezone }])) } };
+        const service = new RetreatService(
+            roomRepo as any, {} as any, admissionRepo as any, {} as any, {} as any, orgUserRepo as any,
+            {} as any, {} as any, {} as any, {} as any, {} as any, {} as any,
+            dataSource as any, // dataSource
+            { sendToUsers: jest.fn(() => Promise.resolve()) } as any, // notificationsService
+            {} as any, {} as any, {} as any, {} as any, {} as any,
+        );
+        return { service, admissionRepo, roomRepo };
+    };
+
+    const activeAdmission = (overrides: Partial<any> = {}) => ({
+        id: 'adm-1',
+        organisationId: 'org-1',
+        status: AdmissionStatus.ACTIVE,
+        checkInDate: new Date('2026-05-20T04:30:00Z'), // 10:00 IST, 20 May
+        actualCheckOutDate: null,
+        notes: null,
+        room: { id: 'room-13', roomNumber: '13', status: RoomStatus.OCCUPIED },
+        ...overrides,
+    });
+
+    beforeEach(() => {
+        jest.useFakeTimers({ now: NOW, doNotFake: ['nextTick', 'setImmediate'] });
+    });
+    afterEach(() => jest.useRealTimers());
+
+    it('stores a historical discharge on exactly the chosen day (the stale-stay cleanup case)', async () => {
+        const { service } = makeService(activeAdmission());
+        const saved = await service.discharge('org-1', 'adm-1', { actualCheckOutDate: '2026-06-03' });
+        expect(saved.status).toBe(AdmissionStatus.DISCHARGED);
+        expect(saved.actualCheckOutDate!.toISOString()).toBe('2026-06-03T18:29:59.999Z');
+        expect(businessDate('Asia/Kolkata', saved.actualCheckOutDate!)).toBe('2026-06-03');
+    });
+
+    it('a same-day discharge keeps the real time (counts toward Discharges Today)', async () => {
+        const { service } = makeService(activeAdmission());
+        const saved = await service.discharge('org-1', 'adm-1', { actualCheckOutDate: '2026-09-26' });
+        expect(saved.actualCheckOutDate!.getTime()).toBe(NOW.getTime());
+    });
+
+    it('uses the organisation business day: 01:00 IST on 27 Sep is "today", not a future date', async () => {
+        jest.setSystemTime(new Date('2026-09-26T19:30:00Z')); // 01:00 IST, 27 Sep; UTC is still 26 Sep
+        const { service } = makeService(activeAdmission());
+        const saved = await service.discharge('org-1', 'adm-1', { actualCheckOutDate: '2026-09-27' });
+        expect(saved.actualCheckOutDate!.toISOString()).toBe('2026-09-26T19:30:00.000Z');
+    });
+
+    it('omitted date defaults to now', async () => {
+        const { service } = makeService(activeAdmission());
+        const saved = await service.discharge('org-1', 'adm-1');
+        expect(saved.actualCheckOutDate!.getTime()).toBe(NOW.getTime());
+    });
+
+    it('a discharge on the check-in day is allowed even if check-in was later that day', async () => {
+        const { service } = makeService(activeAdmission({ checkInDate: new Date('2026-06-03T12:00:00Z') })); // 17:30 IST
+        const saved = await service.discharge('org-1', 'adm-1', { actualCheckOutDate: '2026-06-03' });
+        expect(saved.actualCheckOutDate!.getTime()).toBeGreaterThanOrEqual(new Date('2026-06-03T12:00:00Z').getTime());
+    });
+
+    it('rejects a future date and writes nothing', async () => {
+        const { service, admissionRepo, roomRepo } = makeService(activeAdmission());
+        await expect(service.discharge('org-1', 'adm-1', { actualCheckOutDate: '2026-09-27' }))
+            .rejects.toThrow('Discharge date cannot be in the future');
+        expect(admissionRepo.save).not.toHaveBeenCalled();
+        expect(roomRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('rejects a date before the check-in day and writes nothing', async () => {
+        const { service, admissionRepo } = makeService(activeAdmission());
+        await expect(service.discharge('org-1', 'adm-1', { actualCheckOutDate: '2026-05-19' }))
+            .rejects.toThrow('Discharge date cannot be before check-in (2026-05-20)');
+        expect(admissionRepo.save).not.toHaveBeenCalled();
+    });
+
+    it.each(['2026-02-30', '2026-13-01'])('rejects an impossible calendar date %s', async (d) => {
+        const { service, admissionRepo } = makeService(activeAdmission());
+        await expect(service.discharge('org-1', 'adm-1', { actualCheckOutDate: d })).rejects.toThrow('Invalid discharge date');
+        expect(admissionRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('refuses to discharge an admission whose check-in is in the future, with or without a date', async () => {
+        const future = activeAdmission({ checkInDate: new Date('2027-02-01T00:00:00Z') });
+        await expect(makeService(future).service.discharge('org-1', 'adm-1'))
+            .rejects.toThrow('correct the admission dates first');
+        await expect(makeService({ ...future }).service.discharge('org-1', 'adm-1', { actualCheckOutDate: '2026-09-25' }))
+            .rejects.toThrow('before check-in');
+    });
+
+    it('persists discharge notes', async () => {
+        const { service } = makeService(activeAdmission());
+        const saved = await service.discharge('org-1', 'adm-1', { actualCheckOutDate: '2026-06-03', notes: '  Left with family  ' });
+        expect(saved.notes).toBe('Left with family');
+    });
+
+    it('appends discharge notes after existing admission notes instead of overwriting', async () => {
+        const { service } = makeService(activeAdmission({ notes: 'Diabetic diet' }));
+        const saved = await service.discharge('org-1', 'adm-1', { notes: 'Left with family' });
+        expect(saved.notes).toBe('Diabetic diet\n\nDischarge notes: Left with family');
+    });
+
+    it('still rejects a non-ACTIVE admission and still marks the room for cleaning', async () => {
+        await expect(makeService(activeAdmission({ status: AdmissionStatus.DISCHARGED })).service.discharge('org-1', 'adm-1'))
+            .rejects.toThrow('Admission is not active');
+        const { service, roomRepo } = makeService(activeAdmission());
+        await service.discharge('org-1', 'adm-1', { actualCheckOutDate: '2026-06-03' });
+        expect(roomRepo.save).toHaveBeenCalledWith(expect.objectContaining({ id: 'room-13', status: RoomStatus.CLEANING }));
+    });
+
+    it('uses the organisation timezone, not IST, when the org is elsewhere', async () => {
+        const { service } = makeService(activeAdmission(), 'America/New_York');
+        const saved = await service.discharge('org-1', 'adm-1', { actualCheckOutDate: '2026-06-03' });
+        expect(saved.actualCheckOutDate!.toISOString()).toBe('2026-06-04T03:59:59.999Z');
     });
 });

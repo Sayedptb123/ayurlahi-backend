@@ -17,6 +17,7 @@ import { ClinicCapabilities } from '../clinic-capabilities/entities/clinic-capab
 import { PatientBillingService } from '../patient-billing/patient-billing.service';
 import { PatientsService } from '../patients/patients.service';
 import { CreateBookingDto, UpdateBookingDto, CheckAvailabilityDto, RecordRefundDto, RecordAdvanceDto } from './dto/booking.dto';
+import { DischargeAdmissionDto } from './dto/admission.dto';
 import { CreateEnquiryDto, UpdateEnquiryDto, ConvertEnquiryDto } from './dto/enquiry.dto';
 import { BookingFieldDefinition } from './entities/booking-field-definition.entity';
 import { CreateFieldDefinitionDto, UpdateFieldDefinitionDto } from './dto/field-definition.dto';
@@ -24,7 +25,7 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { BranchVisibilityService } from '../branch-visibility/branch-visibility.service';
 import { AuditService } from '../audit/audit.service';
 import { BookingAdvancePostingService } from '../cash/booking-advance-posting.service';
-import { organisationBusinessDate } from '../common/business-date';
+import { businessDate, endOfBusinessDay, getOrganisationTimezone, organisationBusinessDate } from '../common/business-date';
 
 // Phase 0: half-open interval overlap. Two ranges [aStart,aEnd) and [bStart,bEnd)
 // overlap iff aStart < bEnd AND aEnd > bStart. Back-to-back (a ends when b starts)
@@ -970,7 +971,11 @@ export class RetreatService {
         return this.admissionRepo.save(admission);
     }
 
-    async discharge(clinicId: string, admissionId: string) {
+    // Discharge an ACTIVE admission. actualCheckOutDate is the calendar day the
+    // patient actually left, in the organisation's timezone (staff clean up stale
+    // stays with past dates); omitted = now. A past day is stored as the last
+    // moment of that day, today as now. See scope/Discharge_Date_Persistence_Fix_2026-09-26.md.
+    async discharge(clinicId: string, admissionId: string, dto: DischargeAdmissionDto = {}) {
         const admission = await this.admissionRepo.findOne({
             where: { id: admissionId, organisationId: clinicId },
             relations: ['room']
@@ -979,9 +984,30 @@ export class RetreatService {
         if (!admission) throw new NotFoundException('Admission not found');
         if (admission.status !== AdmissionStatus.ACTIVE) throw new BadRequestException('Admission is not active');
 
+        let dischargedAt = new Date();
+        if (dto.actualCheckOutDate) {
+            const day = dto.actualCheckOutDate;
+            const parsed = new Date(`${day}T00:00:00Z`);
+            if (isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== day) {
+                throw new BadRequestException('Invalid discharge date');
+            }
+            const tz = await getOrganisationTimezone(this.dataSource.manager, clinicId);
+            if (day > businessDate(tz)) throw new BadRequestException('Discharge date cannot be in the future');
+            const checkInDay = businessDate(tz, new Date(admission.checkInDate));
+            if (day < checkInDay) throw new BadRequestException(`Discharge date cannot be before check-in (${checkInDay})`);
+            dischargedAt = new Date(Math.min(dischargedAt.getTime(), endOfBusinessDay(day, tz).getTime()));
+        }
+        if (dischargedAt < new Date(admission.checkInDate)) {
+            throw new BadRequestException('Discharge cannot be before check-in — correct the admission dates first');
+        }
+
         // Update Admission
         admission.status = AdmissionStatus.DISCHARGED;
-        admission.actualCheckOutDate = new Date();
+        admission.actualCheckOutDate = dischargedAt;
+        const notes = dto.notes?.trim();
+        if (notes) {
+            admission.notes = admission.notes ? `${admission.notes}\n\nDischarge notes: ${notes}` : notes;
+        }
 
         // Free Room
         if (admission.room) {

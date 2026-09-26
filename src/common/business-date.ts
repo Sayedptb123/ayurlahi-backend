@@ -52,3 +52,32 @@ export async function organisationBusinessDate(
 ): Promise<string> {
   return businessDate(await getOrganisationTimezone(manager, organisationId), now);
 }
+
+// How far the given timezone is ahead of UTC at the given instant, in ms.
+function timeZoneOffsetMs(timeZone: string, at: number): number {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    hourCycle: 'h23',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  }).formatToParts(new Date(at));
+  const get = (type: string) => Number(parts.find((p) => p.type === type)!.value);
+  const wallClockAsUtc = Date.UTC(get('year'), get('month') - 1, get('day'), get('hour'), get('minute'), get('second'));
+  return wallClockAsUtc - (at - (at % 1000));
+}
+
+// The last millisecond of business date 'YYYY-MM-DD' in the given timezone, as
+// an instant. An unknown or empty timezone falls back to DEFAULT_TIMEZONE.
+export function endOfBusinessDay(date: string, timeZone?: string | null): Date {
+  const tz = timeZone && isValidTimeZone(timeZone) ? timeZone : DEFAULT_TIMEZONE;
+  const [y, m, d] = date.slice(0, 10).split('-').map(Number);
+  const nextDayAsUtc = Date.UTC(y, m - 1, d + 1);
+  // Second pass settles a DST change between the guess and the real midnight.
+  let nextMidnight = nextDayAsUtc - timeZoneOffsetMs(tz, nextDayAsUtc);
+  nextMidnight = nextDayAsUtc - timeZoneOffsetMs(tz, nextMidnight);
+  return new Date(nextMidnight - 1);
+}

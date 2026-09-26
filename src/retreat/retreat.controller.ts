@@ -24,6 +24,7 @@ import { CreateRoomCategoryDto, UpdateRoomCategoryDto, GetRoomCategoriesDto } fr
 import { CreatePackageDto, UpdatePackageDto, GetPackagesDto } from './dto/package.dto';
 import { SetPricingMatrixDto, GetPricingMatrixDto } from './dto/pricing-matrix.dto';
 import { SetRoomPricingOverrideDto, GetRoomPricingOverridesDto } from './dto/room-pricing-override.dto';
+import { DischargeAdmissionDto } from './dto/admission.dto';
 import { BookingStatus } from './entities/room-booking.entity';
 import { EnquiryStatus } from './entities/booking-enquiry.entity';
 
@@ -220,10 +221,10 @@ export class RetreatController {
     }
 
     @Post('admissions/:id/discharge')
-    async discharge(@Request() req, @Param('id') id: string) {
+    async discharge(@Request() req, @Param('id') id: string, @Body() dto: DischargeAdmissionDto) {
         const clinicId = req.user.organisationId;
         await this.retreatService.assertAdmissionAccess(clinicId, id, req.user);
-        return this.retreatService.discharge(clinicId, id);
+        return this.retreatService.discharge(clinicId, id, dto);
     }
 
     // Mark Delivery Occurred — set/clear the admission's actual delivery date.
